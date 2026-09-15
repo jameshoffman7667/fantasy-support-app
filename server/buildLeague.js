@@ -4,6 +4,11 @@ import { buildFpIndex, lookupFp } from "./matching.js";
 
 const FLEX_ELIGIBLE = { FLEX: ["RB", "WR", "TE"], SUPERFLEX: ["QB", "RB", "WR", "TE"] };
 const OUT_LIKE = ["Out", "Doubtful", "IR", "Suspended", "NA"];
+// The four positions the app actually needs ranked (roster/waiver/trade
+// logic only reasons about these). FantasyPros' consensus-rankings has
+// no "all positions" option — confirmed via a live 400 — so this gets
+// called once per position and merged, not once total.
+const ECR_POSITIONS = ["QB", "RB", "WR", "TE"];
 
 function scoringLabel(settings) {
   const rec = settings?.rec ?? 0;
@@ -111,16 +116,25 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const leagueId = leagueSummary.league_id;
   const season = leagueSummary.season;
 
-  const [league, rosters, sleeperPlayers, fpProjections, fpConsensus] = await Promise.all([
+  const scoring = fpScoringParam(leagueSummary.scoring_settings);
+  const [league, rosters, sleeperPlayers, fpProjections, ...ecrByPosition] = await Promise.all([
     sleeper.getLeague(leagueId),
     sleeper.getRosters(leagueId),
     sleeper.getPlayers(),
-    fp.getProjections(season, week, { scoring: fpScoringParam(leagueSummary.scoring_settings) }),
-    fp.getConsensusRankings(season, { scoring: fpScoringParam(leagueSummary.scoring_settings), week }),
+    fp.getProjections(season, week, { scoring }),
+    ...ECR_POSITIONS.map((position) => fp.getConsensusRankings(season, { position, scoring, week })),
   ]);
 
   const projIndex = buildFpIndex(fpProjections.players || fpProjections.data || []);
-  const ecrIndex = buildFpIndex(fpConsensus.players || fpConsensus.data || []);
+  // Confirmed response shape for consensus-rankings is
+  // { rank_ecr, player_name, player_team_id, tier } — no per-player
+  // position field, because you already told it which position you
+  // wanted. Tag each batch with that known position before indexing,
+  // rather than relying on buildFpIndex to find a field that isn't there.
+  const fpConsensusPlayers = ecrByPosition.flatMap((r, i) =>
+    (r.players || r.data || []).map((p) => ({ ...p, position_id: p.position_id || p.player_position_id || ECR_POSITIONS[i] }))
+  );
+  const ecrIndex = buildFpIndex(fpConsensusPlayers);
 
   const myRoster = rosters.find((r) => r.owner_id === userId);
   if (!myRoster) throw new Error(`Couldn't find your roster in ${league.name}.`);

@@ -9,7 +9,19 @@ const FP_BASE = process.env.FANTASYPROS_BASE_URL || "https://api.fantasypros.com
  * a URL that could show up in server logs (it's a header, not a query
  * param, on purpose).
  */
+// FantasyPros' free/personal tier has a modest daily request quota, and
+// ECR/projections are identical regardless of which of your leagues is
+// asking. Without this, tracking a few leagues could burn most of a
+// day's quota in one refresh (4 positions x N leagues for rankings
+// alone). A short cache means the same data within this window is
+// reused instead of re-fetched — real API calls, just not redundant ones.
+const _cache = new Map(); // path -> { data, expiresAt }
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min: long enough to matter for quota, short enough that news during the day still shows up within a reasonable window
+
 async function fpFetch(path, { retries = 2 } = {}) {
+  const cached = _cache.get(path);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
   const key = process.env.FANTASYPROS_API_KEY;
   if (!key || key === "your_key_here") {
     throw new Error(
@@ -32,7 +44,9 @@ async function fpFetch(path, { retries = 2 } = {}) {
         const body = await res.text().catch(() => "");
         throw new Error(`FantasyPros API error ${res.status} on ${path}: ${body.slice(0, 200)}`);
       }
-      return await res.json();
+      const data = await res.json();
+      _cache.set(path, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+      return data;
     } catch (err) {
       lastErr = err;
       if (attempt === retries) throw lastErr;
@@ -58,8 +72,13 @@ export async function getProjections(season, week, { scoring = "PPR" } = {}) {
 }
 
 export async function getConsensusRankings(season, { position, scoring = "PPR", week } = {}) {
-  const params = new URLSearchParams({ scoring });
-  if (position) params.set("position", position);
+  // Confirmed via a live 400 response: this endpoint has no "all
+  // positions" option, unlike /projections. It must be called once per
+  // position and the results merged — see ECR_POSITIONS in buildLeague.js.
+  if (!position) {
+    throw new Error("getConsensusRankings requires a position — FantasyPros has no all-positions option for consensus-rankings.");
+  }
+  const params = new URLSearchParams({ scoring, position });
   if (week) params.set("week", String(week));
   return fpFetch(`/nfl/${season}/consensus-rankings?${params}`);
 }
