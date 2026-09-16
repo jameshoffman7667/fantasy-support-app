@@ -47,14 +47,21 @@ app.get("/api/connect", async (req, res) => {
   }
 });
 
-// Step 2: build (or rebuild, on refresh) the selected leagues with real
-// Sleeper + real FantasyPros data merged in.
+// Step 2: build (or rebuild, on refresh, or on a week change) the
+// selected leagues with real Sleeper + real FantasyPros data merged in.
 app.post("/api/leagues/build", async (req, res) => {
-  const { sessionId, leagueIds } = req.body || {};
+  const { sessionId, leagueIds, week } = req.body || {};
   const session = sessions.get(sessionId);
   if (!session) return res.status(400).json({ error: "Unknown session — connect again." });
   if (!Array.isArray(leagueIds) || leagueIds.length === 0) {
     return res.status(400).json({ error: "leagueIds must be a non-empty array." });
+  }
+
+  // A week explicitly sent by the client (the header dropdown) overrides
+  // the session's current week and is remembered for subsequent
+  // refreshes, until changed again.
+  if (Number.isInteger(week) && week >= 1 && week <= 22) {
+    session.week = week;
   }
 
   try {

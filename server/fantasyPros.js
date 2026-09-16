@@ -66,6 +66,11 @@ async function fpFetch(path, { retries = 2 } = {}) {
  * truth, not this file.
  */
 
+// NOTE: buildLeague.js no longer calls this — it uses
+// fantasyProsScrape.js instead, since this endpoint caps at ~10
+// players/position on the free tier. Left here (still correct, still
+// works) in case a paid tier without that cap ever makes it worth
+// switching back, or for anyone using this file standalone.
 export async function getProjections(season, week, { scoring = "PPR" } = {}) {
   const params = new URLSearchParams({ week: String(week), scoring });
   return fpFetch(`/nfl/${season}/projections?${params}`);

@@ -1,5 +1,7 @@
 import * as sleeper from "./sleeper.js";
 import * as fp from "./fantasyPros.js";
+import * as fpScrape from "./fantasyProsScrape.js";
+import * as schedule from "./schedule.js";
 import { buildFpIndex, lookupFp } from "./matching.js";
 
 const FLEX_ELIGIBLE = { FLEX: ["RB", "WR", "TE"], SUPERFLEX: ["QB", "RB", "WR", "TE"] };
@@ -68,9 +70,7 @@ function diffInjuryEvents(prevSnapshot, league) {
 /**
  * A greedy (not globally-optimal via ILP, but strong in practice) lineup
  * solver: fill strict positional slots first with the highest-projected
- * eligible player, then fill FLEX/SUPERFLEX slots from what's left. Good
- * enough for real fantasy rosters, where there's rarely a case where a
- * greedy assignment loses meaningfully to a true optimum.
+ * eligible player, then fill FLEX/SUPERFLEX slots from what's left.
  */
 function solveOptimalLineup(startingSlotLabels, pool) {
   const remaining = pool.map((p) => ({ ...p }));
@@ -108,24 +108,39 @@ function rankThreshold(pos, superflex) {
 
 /**
  * Builds one fully-populated league object — real Sleeper roster data,
- * real FantasyPros projections and ECR, real trending-add waivers, a
- * greedy-optimal lineup, and a heuristic (not a true valuation-engine)
- * trade radar based on positional ECR depth across the league.
+ * real FantasyPros projections and ECR, real trending-add waivers, real
+ * kickoff times / bye weeks from ESPN, a greedy-optimal lineup, and a
+ * heuristic (not a true valuation-engine) trade radar based on
+ * positional ECR depth across the league.
  */
 export async function buildFullLeague(userId, leagueSummary, week, trending, prevLeagues = []) {
   const leagueId = leagueSummary.league_id;
   const season = leagueSummary.season;
 
-  const scoring = fpScoringParam(leagueSummary.scoring_settings);
-  const [league, rosters, sleeperPlayers, fpProjections, ...ecrByPosition] = await Promise.all([
+  // League settings (including scoring_settings) come from the full
+  // league-detail fetch, not the abbreviated summary from the user's
+  // leagues list — that summary doesn't reliably carry scoring_settings,
+  // which would silently default every league to Standard scoring for
+  // FantasyPros purposes. Fetched first since the projections/rankings
+  // calls below need the real value.
+  const [league, rosters, sleeperPlayers, weekSchedule] = await Promise.all([
     sleeper.getLeague(leagueId),
     sleeper.getRosters(leagueId),
     sleeper.getPlayers(),
-    fp.getProjections(season, week, { scoring }),
+    schedule.getWeekSchedule(season, week).catch(() => null), // unofficial endpoint — degrade to "kickoff unknown" rather than fail the whole build
+  ]);
+
+  const scoring = fpScoringParam(league.scoring_settings);
+  const [scrapedProjections, ...ecrByPosition] = await Promise.all([
+    // Scraped instead of the API's /projections endpoint, which caps at
+    // ~10 players/position on the free tier — see fantasyProsScrape.js
+    // for what's confirmed vs. best-effort about this. /consensus-rankings
+    // isn't capped the same way, so it stays on the API below.
+    fpScrape.getAllProjections(season, week, scoring, ECR_POSITIONS),
     ...ECR_POSITIONS.map((position) => fp.getConsensusRankings(season, { position, scoring, week })),
   ]);
 
-  const projIndex = buildFpIndex(fpProjections.players || fpProjections.data || []);
+  const projIndex = buildFpIndex(scrapedProjections);
   // Confirmed response shape for consensus-rankings is
   // { rank_ecr, player_name, player_team_id, tier } — no per-player
   // position field, because you already told it which position you
@@ -146,6 +161,18 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const irIdSet = new Set(irIds);
   const benchIds = (myRoster.players || []).filter((id) => !starterIdSet.has(id) && !irIdSet.has(id));
 
+  const kickoffFor = (teamAbbr) => {
+    if (!weekSchedule || !teamAbbr) return { kickoff: null, kickoffLabel: "Kickoff time unavailable", onBye: false };
+    const normalized = schedule.normalizeTeam(teamAbbr);
+    const game = weekSchedule.byTeam[normalized];
+    if (game) return { kickoff: game.kickoffMillis, kickoffLabel: game.kickoffLabel, onBye: false };
+    // Team not in this week's slate at all -> bye, but only if we can
+    // confirm it's a real, currently-active NFL team (guards against a
+    // free-agent/no-team placeholder being mislabeled as "on bye").
+    const onBye = schedule.ALL_NFL_TEAMS.includes(normalized);
+    return { kickoff: null, kickoffLabel: onBye ? "On bye" : "Kickoff time unavailable", onBye };
+  };
+
   const enrich = (id) => {
     if (!id || id === "0") return null;
     const meta = sleeperPlayers[id];
@@ -153,14 +180,15 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     const pos = meta?.position || "?";
     const projRec = lookupFp(projIndex, name, pos);
     const ecrRec = lookupFp(ecrIndex, name, pos);
+    const { kickoff, kickoffLabel, onBye } = kickoffFor(meta?.team);
     return {
       name,
       pos,
       team: meta?.team || "FA",
-      status: mapPlayerStatus(meta),
-      kickoff: null, // still not exposed by either API without a schedule/odds feed
-      kickoffLabel: "Kickoff time needs a schedule feed",
-      proj: projRec ? Number(projRec.stats?.points ?? projRec.stats?.points_ppr ?? projRec.points ?? null) : null,
+      status: onBye && (!meta?.injury_status || meta.injury_status === "Healthy") ? "Bye" : mapPlayerStatus(meta),
+      kickoff,
+      kickoffLabel,
+      proj: projRec && projRec.fpts != null ? Number(projRec.fpts) : null,
       ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null,
       irEligible: meta?.injury_status === "IR" || meta?.injury_status === "PUP",
       note: meta?.injury_status && meta?.injury_body_part ? `${meta.injury_status} — ${meta.injury_body_part}` : undefined,
@@ -171,14 +199,18 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const bench = benchIds.map(enrich).filter(Boolean);
   const ir = irIds.map(enrich).filter(Boolean);
 
+  // Every player rostered by ANY team in the league — not just yours.
+  // A trending player already on someone else's roster is not a free
+  // agent, no matter how hot the trend is.
+  const allRosteredIds = new Set(rosters.flatMap((r) => r.players || []));
+
   // --- Lineup Advice: real optimal lineup from current roster + real waiver pool ---
-  const ownedIds = new Set(myRoster.players || []);
   const rosterPool = [
     ...starters.filter((s) => s.player).map((s) => ({ ...s.player, origin: "roster" })),
     ...bench.map((p) => ({ ...p, origin: "roster" })),
   ];
   const trendingFreeAgents = (trending || [])
-    .filter((t) => !ownedIds.has(t.player_id))
+    .filter((t) => !allRosteredIds.has(t.player_id))
     .map((t) => {
       const meta = sleeperPlayers[t.player_id];
       const name = playerName(meta, t.player_id);
@@ -188,7 +220,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       return {
         name,
         pos,
-        proj: projRec ? Number(projRec.stats?.points ?? projRec.stats?.points_ppr ?? projRec.points ?? null) : null,
+        proj: projRec && projRec.fpts != null ? Number(projRec.fpts) : null,
         ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null,
         trending: true,
         origin: "waiver",
@@ -215,10 +247,13 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   // roster shows real surplus (3+ rostered, strong average ECR) at that
   // same position. This is a real signal, not a placeholder — but it's
   // a depth/rank heuristic, not a dedicated trade-value model, since
-  // FantasyPros doesn't publish one via this API.
+  // FantasyPros doesn't publish one via this API. Its quality depends
+  // entirely on ECR coverage: if most of the league's rosters are full
+  // of players outside FantasyPros' matched set, there won't be enough
+  // ecrOf() hits to clear the count>=3 threshold and nothing will surface
+  // — that's a data-coverage limit, not a bug in this logic.
   const tradeSuggestions = [];
   try {
-    const users = await sleeper.getRosters(leagueId); // already fetched above as `rosters`; kept for clarity
     const posGroups = ["QB", "RB", "WR", "TE"];
     const ecrOf = (id) => {
       const meta = sleeperPlayers[id];
@@ -257,7 +292,6 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
         if (other.roster_id === myRoster.roster_id) continue;
         const theirAvg = avgEcrByPos(other);
         const theirSurplusHere = theirAvg[myWeak];
-        const theirNeed = theirAvg[mySurplus];
         if (theirSurplusHere?.count >= 3 && theirSurplusHere.avgEcr < myAvg[myWeak].avgEcr - 10) {
           const gap = myAvg[myWeak].avgEcr - theirSurplusHere.avgEcr;
           tradeSuggestions.push({
@@ -281,7 +315,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     week,
     scoring: scoringLabel(league.scoring_settings),
     superflex,
-    lockLabel: "Live from Sleeper",
+    lockLabel: weekSchedule ? `Week ${week} — live kickoff times from ESPN` : "Live from Sleeper",
     dataSource: "live",
     starters,
     bench,
@@ -303,9 +337,15 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     .filter((p) => p.name && p.proj == null)
     .map((p) => p.name);
   const unmatched = [...new Set([...unmatchedStarters, ...unmatchedOptimal])];
-  const dataWarnings = unmatched.length
-    ? [`Couldn't match to FantasyPros by name, so proj is unknown: ${unmatched.join(", ")}`]
-    : [];
+  const dataWarnings = [];
+  if (unmatched.length) {
+    dataWarnings.push(`Couldn't match to FantasyPros by name, so proj is unknown: ${unmatched.join(", ")}`);
+    if (unmatched.length >= 3) {
+      dataWarnings.push(
+        "Projections now come from scraping FantasyPros' full player list, not the API's truncated endpoint, so this many missing at once more likely means a real name mismatch (a very recent trade, an unusual suffix, or a genuine scrape-parsing issue) than a data-coverage gap — worth checking server logs if it persists."
+      );
+    }
+  }
 
   const prev = prevLeagues.find((p) => p.id === leagueId);
   const injuryEvents = prev ? diffInjuryEvents(injurySnapshots.get(leagueId) || {}, built) : initialInjuryEvents(built);

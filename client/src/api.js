@@ -12,10 +12,10 @@ export function connect(username) {
   return request(`/api/connect?username=${encodeURIComponent(username)}`);
 }
 
-export function buildLeagues(sessionId, leagueIds) {
+export function buildLeagues(sessionId, leagueIds, week) {
   return request(`/api/leagues/build`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, leagueIds }),
+    body: JSON.stringify({ sessionId, leagueIds, week }),
   });
 }
