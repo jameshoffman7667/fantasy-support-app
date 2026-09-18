@@ -15,6 +15,13 @@ services:
       - PORT=4000
     ports:
       - "${SERVER_PORT:-4000}:4000"
+    volumes:
+      # Named volume, not a bind mount — survives image rebuilds and
+      # container recreation (a plain restart already would; this also
+      # covers `docker compose up --build` / a Portainer redeploy, which
+      # recreate the container). Without this, the SQLite cache/injury
+      # history/session would reset on every redeploy, defeating the point.
+      - fantasy-manager-data:/app/data
     restart: unless-stopped
 
   client:
@@ -27,3 +34,6 @@ services:
     ports:
       - "${CLIENT_PORT:-8080}:80"
     restart: unless-stopped
+
+volumes:
+  fantasy-manager-data:

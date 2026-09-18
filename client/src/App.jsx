@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   XCircle,
   HelpCircle,
-  ChevronLeft,
   ChevronRight,
   RefreshCw,
   ListChecks,
@@ -17,6 +16,7 @@ import {
   Loader2,
   LogOut,
   Settings2,
+  DollarSign,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -50,12 +50,7 @@ const RANK = { ok: 0, minor: 1, major: 2 };
 const worst = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
 
 /* ------------------------------------------------------------------ */
-/*  PERSISTENCE                                                        */
-/*  This is a real deployed app (not a sandboxed preview), so           */
-/*  localStorage is safe to use here. Only username + which leagues     */
-/*  are tracked are persisted — never the FantasyPros key, which never  */
-/*  reaches the browser at all, and never the session ID, since that's  */
-/*  server-memory-only and would just be dead weight after a restart.   */
+/*  PERSISTENCE (localStorage — safe here, this is a real deployed app) */
 /* ------------------------------------------------------------------ */
 const STORAGE_KEY = "fantasyManager.v1";
 function loadPersisted() {
@@ -70,22 +65,19 @@ function savePersisted(data) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch {
-    // Private browsing / storage disabled — the app still works, it just
-    // won't remember you next visit. Not worth surfacing as an error.
+    // Private browsing / storage disabled — app still works, just won't remember next visit.
   }
 }
 function clearPersisted() {
   try {
     localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // see above
-  }
+  } catch {}
 }
 
 /* ------------------------------------------------------------------ */
 /*  VARIANCE CALCULATIONS                                             */
 /* ------------------------------------------------------------------ */
-const FLEX_ELIGIBLE = { FLEX: ["RB", "WR", "TE"], SUPERFLEX: ["QB", "RB", "WR", "TE"] };
+const FLEX_ELIGIBLE = { FLEX: ["RB", "WR", "TE"], SFLX: ["QB", "RB", "WR", "TE"] };
 const OUT_LIKE = ["Out", "Doubtful", "IR", "Suspended", "NA"];
 
 function computeRoster(league) {
@@ -119,14 +111,17 @@ function computeRoster(league) {
     if (p.irEligible) return { slot: "BN", label: p.name, severity: "minor", reasons: ["IR-eligible — move to an empty IR slot"] };
     return { slot: "BN", label: p.name, severity: "ok", reasons: [] };
   });
+  const irRows = (league.ir || []).map((p) => ({ slot: "IR", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
+  const taxiRows = (league.taxi || []).map((p) => ({ slot: "TAXI", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
 
   const rows = [...starterRows, ...benchRows].map((r) => ({ ...r, reason: r.reasons.join(" ") || null }));
-  return { rows, status: worst(rows.map((r) => r.severity)) };
+  return { rows, irRows, taxiRows, status: worst(rows.map((r) => r.severity)) };
 }
 
 function computeLineup(league) {
-  const currentTotal = league.starters.reduce((sum, s) => sum + (s.player?.proj ?? 0), 0);
-  const optimalTotal = (league.optimalLineup || []).reduce((sum, p) => sum + (p.proj ?? 0), 0);
+  const rows = league.lineupComparison || [];
+  const currentTotal = rows.reduce((sum, c) => sum + (c.current?.proj ?? 0), 0);
+  const optimalTotal = rows.reduce((sum, c) => sum + (c.optimal?.proj ?? 0), 0);
   const delta = Math.max(0, optimalTotal - currentTotal);
   const status = delta === 0 ? "ok" : delta < 5 ? "minor" : "major";
   return { currentTotal, optimalTotal, delta, status };
@@ -158,10 +153,14 @@ function computeTrade(league) {
   return { rows, status: rows.length ? worst(rows.map((t) => t.severity)) : "ok" };
 }
 
+// Injury Watch now persists: every currently-injured player shows up
+// every time, Minor once you've seen that exact status before, Major
+// the first time. Rows come pre-computed this way from the server
+// (db.js tracks "seen" per player+status in SQLite) — this just derives
+// the tab's overall status from what the server already decided.
 function computeInjury(league) {
   const rows = league.injuryEvents || [];
-  const active = rows.filter((e) => !e.seen);
-  const status = active.length === 0 ? "ok" : active.some((e) => ["Out", "Doubtful", "IR", "Suspended"].includes(e.to)) ? "major" : "minor";
+  const status = rows.length === 0 ? "ok" : rows.some((r) => !r.seen) ? "major" : "minor";
   return { rows, status };
 }
 
@@ -183,6 +182,15 @@ function StatusBadge({ status, label, onClick, compact }) {
   );
 }
 
+function SourceTag({ source }) {
+  if (!source) return null;
+  return (
+    <span style={{ color: C.textFaint }} className="absolute bottom-1 right-1.5 text-[9px] font-medium tracking-wide">
+      {source}
+    </span>
+  );
+}
+
 function WeekPicker({ week, onChange, disabled }) {
   if (week == null) return null;
   return (
@@ -201,23 +209,36 @@ function WeekPicker({ week, onChange, disabled }) {
   );
 }
 
-function TopBar({ title, subtitle, onBack, onRefresh, refreshing, syncedLabel, week, onWeekChange, showWeek }) {
+function Breadcrumb({ crumbs }) {
+  return (
+    <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
+      {crumbs.map((c, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <ChevronRight size={13} style={{ color: C.textFaint }} className="shrink-0" />}
+          {c.onClick ? (
+            <button
+              onClick={c.onClick}
+              style={{ color: C.textMuted, fontFamily: "Oswald, sans-serif" }}
+              className="text-[15px] truncate shrink-0 max-w-[38%]"
+            >
+              {c.label}
+            </button>
+          ) : (
+            <span style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-[15px] truncate">
+              {c.label}
+            </span>
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function TopBar({ crumbs, onRefresh, refreshing, syncedLabel, week, onWeekChange, showWeek }) {
   return (
     <div className="sticky top-0 z-10" style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
       <div className="flex items-center justify-between gap-2 px-4 py-3">
-        <div className="flex items-center gap-2 min-w-0">
-          {onBack && (
-            <button onClick={onBack} style={{ color: C.textMuted }} className="shrink-0 -ml-1 p-1">
-              <ChevronLeft size={22} />
-            </button>
-          )}
-          <div className="min-w-0">
-            <div className="truncate text-lg leading-tight" style={{ fontFamily: "Oswald, sans-serif", fontWeight: 600, letterSpacing: 0.2, color: C.text }}>
-              {title}
-            </div>
-            {subtitle && <div className="truncate text-xs" style={{ color: C.textMuted }}>{subtitle}</div>}
-          </div>
-        </div>
+        <Breadcrumb crumbs={crumbs} />
         <div className="flex items-center gap-1.5 shrink-0">
           {showWeek && <WeekPicker week={week} onChange={onWeekChange} disabled={refreshing} />}
           <button
@@ -249,10 +270,7 @@ const TAB_META = {
 function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, sleeperUser }) {
   return (
     <div className="px-4 py-3">
-      <div className="flex items-center justify-between pb-3">
-        <div style={{ color: C.textMuted }} className="text-xs truncate">
-          {sleeperUser?.display_name ? `Signed in as ${sleeperUser.display_name}` : null}
-        </div>
+      <div className="flex items-center justify-end pb-3">
         <div className="flex items-center gap-3 shrink-0">
           <button onClick={onEditLeagues} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
             <Settings2 size={13} />
@@ -270,8 +288,8 @@ function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues,
             <button onClick={() => onOpenLeague(lg.id)} className="w-full flex items-center justify-between px-4 py-3">
               <div className="text-left min-w-0">
                 <div style={{ fontFamily: "Oswald, sans-serif", fontWeight: 600, color: C.text }} className="text-[15px] truncate">{lg.name}</div>
-                <div className="text-xs" style={{ color: C.textMuted }}>
-                  {lg.error ? "Failed to load" : `Week ${lg.week ?? "?"} · ${lg.scoring}`}
+                <div className="text-xs truncate" style={{ color: C.textMuted }}>
+                  {lg.error ? "Failed to load" : lg.teamName || "—"}
                 </div>
               </div>
               <ChevronRight size={18} style={{ color: C.textFaint }} className="shrink-0" />
@@ -312,12 +330,19 @@ function LeagueOverview({ league, onOpenTab }) {
     waiver: `${league.waiver.rows.filter((r) => r.severity !== "ok").length} worth a look this week`,
     trade: league.trade.rows.length ? league.trade.rows[0].note : "No standout trade opportunities",
     injury: league.injury.rows.filter((r) => !r.seen).length
-      ? `${league.injury.rows.filter((r) => !r.seen).length} new status change(s)`
-      : "No new news since last sync",
+      ? `${league.injury.rows.filter((r) => !r.seen).length} new injury flag(s)`
+      : league.injury.rows.length
+      ? `${league.injury.rows.length} tracked, none new`
+      : "No injuries on this roster",
   };
 
   return (
     <div className="px-4 py-3 space-y-2.5">
+      {league.stale && (
+        <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2">
+          Showing cached data — a live refresh just failed. Try refreshing again shortly.
+        </div>
+      )}
       {league.dataWarnings?.length > 0 && (
         <div style={{ background: C.surfaceRaised, border: `1px solid ${C.border}`, color: C.textMuted }} className="text-xs rounded-md px-3 py-2 space-y-1">
           {league.dataWarnings.map((w, i) => <div key={i}>{w}</div>)}
@@ -357,27 +382,46 @@ function RosterTab({ league }) {
         <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs w-14 pt-0.5 shrink-0">{r.slot}</div>
         <div className="min-w-0 flex-1">
           <div style={{ color: C.text }} className="text-sm font-medium truncate">{r.label}</div>
+          {r.kickoffLabel && <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{r.kickoffLabel}</div>}
           {r.reason && <div style={{ color: s.color }} className="text-xs mt-0.5">{r.reason}</div>}
         </div>
         <s.Icon size={16} style={{ color: s.color }} className="shrink-0 mt-0.5" />
       </div>
     );
   };
+  // starterRows is index-aligned with league.starters (both built from the
+  // same array with no filtering in between), so kickoff time can just be
+  // zipped in by position rather than re-matched by label/slot text.
+  const starterRowsWithKickoff = starterRows.map((r, i) => ({ ...r, kickoffLabel: league.starters[i]?.player?.kickoffLabel }));
+
   return (
     <div className="px-4 py-3">
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Injury/IR/bye checks and flex lock-order all use live data now — kickoff times and byes come from ESPN's public schedule feed.
+        Injury/IR/bye checks and flex lock-order all use live data — kickoff times and byes come from ESPN's schedule feed.
       </div>
       <SectionLabel>Starting Lineup</SectionLabel>
-      <div className="space-y-1.5">{starterRows.map((r, i) => <Row key={i} r={r} />)}</div>
+      <div className="space-y-1.5">{starterRowsWithKickoff.map((r, i) => <Row key={i} r={r} />)}</div>
       <SectionLabel>Bench</SectionLabel>
       <div className="space-y-1.5">{benchRows.map((r, i) => <Row key={i} r={r} />)}</div>
+      {league.roster.irRows.length > 0 && (
+        <>
+          <SectionLabel>IR</SectionLabel>
+          <div className="space-y-1.5">{league.roster.irRows.map((r, i) => <Row key={i} r={r} />)}</div>
+        </>
+      )}
+      {league.roster.taxiRows.length > 0 && (
+        <>
+          <SectionLabel>Taxi Squad</SectionLabel>
+          <div className="space-y-1.5">{league.roster.taxiRows.map((r, i) => <Row key={i} r={r} />)}</div>
+        </>
+      )}
     </div>
   );
 }
 
 function LineupTab({ league }) {
   const { currentTotal, optimalTotal, delta } = league.lineup;
+  const rows = league.lineupComparison || [];
   return (
     <div className="px-4 py-3">
       {league.dataWarnings?.length > 0 && (
@@ -398,16 +442,36 @@ function LineupTab({ league }) {
           <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-2xl font-semibold">{optimalTotal.toFixed(1)}</div>
         </div>
       </div>
-      <SectionLabel>Optimal Lineup</SectionLabel>
+
+      <div className="grid grid-cols-2 gap-2 px-1 pb-1">
+        <div style={{ color: C.textFaint }} className="text-[11px] font-medium tracking-wide">CURRENT</div>
+        <div style={{ color: C.textFaint }} className="text-[11px] font-medium tracking-wide">OPTIMAL</div>
+      </div>
       <div className="space-y-1.5">
-        {(league.optimalLineup || []).map((p, i) => (
-          <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2.5 flex items-center gap-3">
-            <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs w-14 shrink-0">{p.slot}</div>
-            <div className="min-w-0 flex-1">
-              <div style={{ color: C.text }} className="text-sm font-medium truncate">{p.name ?? "(none available)"}</div>
-              {p.note && <div style={{ color: C.brand }} className="text-xs mt-0.5">{p.note}</div>}
+        {rows.map((c, i) => (
+          <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md overflow-hidden">
+            <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif", borderBottom: `1px solid ${C.border}` }} className="text-[10px] px-3 py-1 flex items-center justify-between">
+              <span>{c.slot}</span>
+              {c.changed && c.delta !== 0 && (
+                <span style={{ color: c.delta > 0 ? C.minor : C.ok }}>{c.delta > 0 ? "+" : ""}{c.delta.toFixed(1)} pts</span>
+              )}
             </div>
-            <div style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-sm shrink-0">{p.proj != null ? p.proj.toFixed(1) : "—"}</div>
+            <div className="grid grid-cols-2">
+              <div
+                style={{ background: c.changed ? C.majorBg : "transparent", borderRight: `1px solid ${C.border}` }}
+                className="relative px-3 py-2.5 pb-4"
+              >
+                <div style={{ color: c.changed ? C.major : C.text }} className="text-sm font-medium truncate">{c.current?.name ?? "(empty)"}</div>
+                <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{c.current?.proj != null ? c.current.proj.toFixed(1) : "—"}</div>
+                <SourceTag source={c.current?.projSource} />
+              </div>
+              <div style={{ background: c.changed ? C.okBg : "transparent" }} className="relative px-3 py-2.5 pb-4">
+                <div style={{ color: c.changed ? C.ok : C.text }} className="text-sm font-medium truncate">{c.optimal?.name ?? "(none available)"}</div>
+                <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{c.optimal?.proj != null ? c.optimal.proj.toFixed(1) : "—"}</div>
+                {c.optimal?.note && <div style={{ color: C.brand }} className="text-[10px] mt-0.5">{c.optimal.note}</div>}
+                <SourceTag source={c.optimal?.projSource} />
+              </div>
+            </div>
           </div>
         ))}
       </div>
@@ -415,18 +479,66 @@ function LineupTab({ league }) {
   );
 }
 
-function WaiverTab({ league }) {
+function FaabPanel({ sessionId, leagueId }) {
+  const [state, setState] = useState({ loading: false, result: null, error: null });
+  const run = async () => {
+    setState({ loading: true, result: null, error: null });
+    try {
+      const result = await api.getFaabSuggestions(sessionId, leagueId);
+      setState({ loading: false, result, error: null });
+    } catch (err) {
+      setState({ loading: false, result: null, error: err.message });
+    }
+  };
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg px-3.5 py-3 mb-3">
+      <div className="flex items-center justify-between mb-1">
+        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm flex items-center gap-1.5">
+          <DollarSign size={14} style={{ color: C.brand }} />
+          FAAB Suggestions
+        </div>
+        <button onClick={run} disabled={state.loading} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
+          {state.loading ? <Loader2 size={12} className="animate-spin" /> : null}
+          {state.loading ? "Calculating…" : "Get suggestions"}
+        </button>
+      </div>
+      <div style={{ color: C.textMuted }} className="text-[11px] mb-2">
+        Based on winning waiver bids in your tracked leagues only since last Tuesday — not platform-wide (Sleeper's API doesn't expose that). With a small league sample, treat this as a directional guide, not a real confidence interval.
+      </div>
+      {state.error && <div style={{ color: C.major }} className="text-xs">{state.error}</div>}
+      {state.result && state.result.note && <div style={{ color: C.textMuted }} className="text-xs">{state.result.note}</div>}
+      {state.result?.players?.length > 0 && (
+        <div className="space-y-1.5 mt-1">
+          {state.result.players.map((p, i) => (
+            <div key={i} className="flex items-center justify-between text-xs">
+              <span style={{ color: C.text }} className="truncate">{p.name} <span style={{ color: C.textFaint }}>({p.pos})</span></span>
+              <span style={{ color: C.textMuted }} className="shrink-0 ml-2 text-right">
+                70%: {state.result.budget ? `$${Math.round((state.result.budget * p.suggestion70Pct) / 100)}` : `${p.suggestion70Pct?.toFixed(0)}%`}
+                {" · "}
+                95%: {state.result.budget ? `$${Math.round((state.result.budget * p.suggestion95Pct) / 100)}` : `${p.suggestion95Pct?.toFixed(0)}%`}
+                {" "}<span style={{ color: C.textFaint }}>(n={p.sampleSize})</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WaiverTab({ league, sessionId }) {
   return (
     <div className="px-4 py-3">
+      <FaabPanel sessionId={sessionId} leagueId={league.id} />
       <SectionLabel>Available Players</SectionLabel>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Filtered against every roster in your league, not just yours — a player owned by another team never shows up here.
+        Filtered against every roster in your league, not just yours.
       </div>
       <div className="space-y-1.5">
         {league.waiver.rows.map((p, i) => {
           const s = STATUS[p.severity];
           return (
-            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-3 py-2.5">
+            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="relative rounded-md px-3 py-2.5 pb-4">
               <div className="flex items-center gap-3">
                 <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs w-9 shrink-0">{p.pos}</div>
                 <div className="min-w-0 flex-1">
@@ -442,6 +554,7 @@ function WaiverTab({ league }) {
               {p.crossLeagues.length > 0 && (
                 <div style={{ color: C.brand }} className="text-xs mt-1.5 pl-12">Also available in: {p.crossLeagues.join(", ")}</div>
               )}
+              <SourceTag source={p.projSource} />
             </div>
           );
         })}
@@ -454,7 +567,7 @@ function TradeTab({ league }) {
   return (
     <div className="px-4 py-3">
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Heuristic, based on positional ECR depth across your league — not a dedicated trade-value model (FantasyPros doesn't publish one via this API). Needs at least 3 ECR-matched players at a position on both sides to surface anything.
+        Heuristic, based on positional ECR depth across your league — not a dedicated trade-value model. Needs at least 3 ECR-matched players at a position on both sides to surface anything.
       </div>
       <SectionLabel>Trade Suggestions</SectionLabel>
       {league.trade.rows.length === 0 ? (
@@ -482,25 +595,25 @@ function TradeTab({ league }) {
 function InjuryTab({ league }) {
   return (
     <div className="px-4 py-3">
-      <SectionLabel>Status Changes</SectionLabel>
+      <SectionLabel>Currently Tracked</SectionLabel>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Updates on refresh (manual, or automatic every 30 minutes while the app is open) — compared against the last time this league was refreshed.
+        Persists as long as a player carries a designation. Minor once you've seen this exact status before, Major the first time it appears.
       </div>
       {league.injury.rows.length === 0 ? (
-        <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No injury news for this roster.</div>
+        <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No injury designations on this roster right now.</div>
       ) : (
         <div className="space-y-1.5">
           {league.injury.rows.map((e) => {
-            const sev = !e.seen && ["Out", "Doubtful", "IR", "Suspended"].includes(e.to) ? "major" : !e.seen ? "minor" : "ok";
+            const sev = e.seen ? "minor" : "major";
             const s = STATUS[sev];
             return (
               <div key={e.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-3.5 py-3 flex items-center gap-3">
                 <s.Icon size={16} style={{ color: s.color }} className="shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div style={{ color: C.text }} className="text-sm font-medium">{e.player}</div>
-                  <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{e.from} → {e.to}</div>
+                  <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{e.status}{e.note ? ` — ${e.note}` : ""}</div>
                 </div>
-                <div style={{ color: C.textFaint }} className="text-xs flex items-center gap-1 shrink-0"><Clock size={12} />{e.time}</div>
+                <div style={{ color: C.textFaint }} className="text-xs shrink-0">{e.seen ? "Seen before" : "New"}</div>
               </div>
             );
           })}
@@ -518,7 +631,7 @@ function ConnectScreen({ username, setUsername, onSubmit, connecting, error }) {
       <div style={{ background: C.surfaceRaised, color: C.brand }} className="p-3 rounded-full"><Link2 size={22} /></div>
       <div>
         <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-lg mb-1">Connect your Sleeper account</div>
-        <div style={{ color: C.textMuted }} className="text-sm max-w-xs">Enter your Sleeper username. Your username and tracked leagues are remembered on this device — you won't need to do this again unless you log out.</div>
+        <div style={{ color: C.textMuted }} className="text-sm max-w-xs">Enter your Sleeper username. Your username and tracked leagues are remembered on this device.</div>
       </div>
       <input
         value={username}
@@ -593,7 +706,7 @@ function BootstrapScreen() {
 /* ------------------------------------------------------------------ */
 /*  ROOT APP                                                           */
 /* ------------------------------------------------------------------ */
-const AUTO_REFRESH_MS = 30 * 60 * 1000; // matches the functional spec's normal-cadence refresh interval
+const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 export default function App() {
   const [view, setView] = useState({ screen: "bootstrapping" });
@@ -610,6 +723,22 @@ export default function App() {
   const [loadingLeagues, setLoadingLeagues] = useState(false);
   const [liveLeagues, setLiveLeagues] = useState([]);
   const [week, setWeek] = useState(null);
+
+  // Browser back/forward support: every real navigation pushes a history
+  // entry carrying the view state; popstate restores it directly without
+  // pushing again (that's what "going back" means — undoing the push).
+  const navigate = useCallback((newView, opts = {}) => {
+    setView(newView);
+    if (opts.replace) window.history.replaceState(newView, "");
+    else window.history.pushState(newView, "");
+  }, []);
+
+  useEffect(() => {
+    const onPopState = (e) => setView(e.state || { screen: "dashboard" });
+    window.addEventListener("popstate", onPopState);
+    window.history.replaceState({ screen: "bootstrapping" }, "");
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const computed = useMemo(
     () =>
@@ -630,14 +759,10 @@ export default function App() {
 
   const activeLeague = useMemo(() => computed.find((l) => l.id === (view.leagueId || null)), [computed, view.leagueId]);
 
-  // Auto-reconnect on load if a username + tracked leagues were saved
-  // from a previous visit. Falls back to the connect screen on any
-  // failure (bad/renamed username, server unreachable, etc.) rather than
-  // getting stuck on a loading screen.
   useEffect(() => {
     const persisted = loadPersisted();
     if (!persisted?.username) {
-      setView({ screen: "connect" });
+      navigate({ screen: "connect" }, { replace: true });
       return;
     }
     setUsername(persisted.username);
@@ -651,8 +776,7 @@ export default function App() {
         const restoredIds = (persisted.selectedLeagueIds || []).filter((id) => validIds.includes(id));
         setSelectedIds(restoredIds.length ? restoredIds : validIds);
         if (restoredIds.length === 0) {
-          // Nothing from last time still exists — let the person pick again.
-          setView({ screen: "select" });
+          navigate({ screen: "select" }, { replace: true });
           return;
         }
         setLoadingLeagues(true);
@@ -660,15 +784,14 @@ export default function App() {
         setLiveLeagues(built);
         setWeek(builtWeek ?? currentWeek);
         setSyncedAt("just now");
-        setView({ screen: "dashboard" });
+        navigate({ screen: "dashboard" }, { replace: true });
       } catch (err) {
         setConnectError(err.message || "Couldn't reconnect automatically — try again.");
-        setView({ screen: "connect" });
+        navigate({ screen: "connect" }, { replace: true });
       } finally {
         setLoadingLeagues(false);
       }
     })();
-    // Intentionally run once on mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -682,13 +805,13 @@ export default function App() {
       setAvailableLeagues(leagues);
       setSelectedIds(leagues.map((l) => l.league_id));
       setWeek(currentWeek);
-      setView({ screen: "select" });
+      navigate({ screen: "select" });
     } catch (err) {
       setConnectError(err.message || "Couldn't reach the server. Is it running?");
     } finally {
       setConnecting(false);
     }
-  }, [username]);
+  }, [username, navigate]);
 
   const handleToggleLeague = useCallback((id) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -703,13 +826,13 @@ export default function App() {
       setWeek(builtWeek);
       setSyncedAt("just now");
       savePersisted({ username: username.trim(), selectedLeagueIds: selectedIds });
-      setView({ screen: "dashboard" });
+      navigate({ screen: "dashboard" });
     } catch (err) {
       setConnectError(err.message || "Couldn't load those leagues — try again.");
     } finally {
       setLoadingLeagues(false);
     }
-  }, [sessionId, selectedIds, week, username]);
+  }, [sessionId, selectedIds, week, username, navigate]);
 
   const handleRefresh = useCallback(async () => {
     if (!sessionId || selectedIds.length === 0) return;
@@ -747,9 +870,6 @@ export default function App() {
     [sessionId, selectedIds]
   );
 
-  // Matches the functional spec's normal-cadence auto-refresh, on top of
-  // the manual refresh button. Only runs once there's an active session
-  // and tracked leagues; cleared and re-created if those change.
   const refreshRef = useRef(handleRefresh);
   refreshRef.current = handleRefresh;
   useEffect(() => {
@@ -768,24 +888,17 @@ export default function App() {
     setWeek(null);
     setUsername("");
     setConnectError(null);
-    setView({ screen: "connect" });
-  }, []);
+    navigate({ screen: "connect" });
+  }, [navigate]);
 
   const handleEditLeagues = useCallback(async () => {
     if (!username) {
-      // Shouldn't normally happen (bootstrap and manual connect both set
-      // this), but if it ever does, sending them to reconnect properly
-      // beats silently trying a lookup with the wrong value.
-      setView({ screen: "connect" });
+      navigate({ screen: "connect" });
       return;
     }
     setConnectError(null);
     setConnecting(true);
     try {
-      // Re-connect to get a fresh session + current league list — cheap,
-      // and handles the case where the server restarted since last visit
-      // (in-memory sessions don't survive that) without the person
-      // needing to know that's why "edit" suddenly needed their username again.
       const { sessionId: freshSessionId, user, leagues } = await api.connect(username);
       setSessionId(freshSessionId);
       setSleeperUser(user);
@@ -793,36 +906,26 @@ export default function App() {
       const validIds = leagues.map((l) => l.league_id);
       const currentIds = liveLeagues.map((l) => l.id).filter((id) => validIds.includes(id));
       setSelectedIds(currentIds.length ? currentIds : validIds);
-      setView({ screen: "select" });
+      navigate({ screen: "select" });
     } catch (err) {
       setConnectError(err.message || "Couldn't refresh your league list — try again.");
     } finally {
       setConnecting(false);
     }
-  }, [username, liveLeagues]);
+  }, [username, liveLeagues, navigate]);
 
-  let title = "Your Leagues";
-  let subtitle = `${liveLeagues.length} tracked`;
-  let onBack = null;
-  if (view.screen === "bootstrapping") {
-    title = "Fantasy Manager";
-    subtitle = null;
-  } else if (view.screen === "connect") {
-    title = "Connect Sleeper";
-    subtitle = null;
-  } else if (view.screen === "select") {
-    title = "Choose Leagues";
-    subtitle = sleeperUser?.display_name ? `Signed in as ${sleeperUser.display_name}` : null;
-    onBack = liveLeagues.length ? () => setView({ screen: "dashboard" }) : null;
-  } else if (view.screen === "league" && activeLeague) {
-    title = activeLeague.name;
-    subtitle = activeLeague.error ? null : `Week ${activeLeague.week ?? "?"} · ${activeLeague.scoring} · ${activeLeague.lockLabel}`;
-    onBack = () => setView({ screen: "dashboard" });
-  } else if (view.screen === "tab" && activeLeague) {
-    title = TAB_META[view.tab].label;
-    subtitle = activeLeague.name;
-    onBack = () => setView({ screen: "league", leagueId: activeLeague.id });
-  }
+  // Breadcrumb trail: username > League Name > Sub tab name. Every level
+  // but the current one is clickable.
+  const crumbs = useMemo(() => {
+    const root = { label: sleeperUser?.display_name || "Fantasy Manager", onClick: liveLeagues.length ? () => navigate({ screen: "dashboard" }) : undefined };
+    if (view.screen === "bootstrapping") return [{ label: "Fantasy Manager" }];
+    if (view.screen === "connect") return [{ label: "Connect Sleeper" }];
+    if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
+    if (view.screen === "dashboard") return [{ label: root.label }];
+    if (view.screen === "league" && activeLeague) return [root, { label: activeLeague.name }];
+    if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, onClick: () => navigate({ screen: "league", leagueId: activeLeague.id }) }, { label: TAB_META[view.tab].label }];
+    return [root];
+  }, [view, sleeperUser, liveLeagues.length, activeLeague, navigate]);
 
   const showRefresh = view.screen === "dashboard" || view.screen === "league" || view.screen === "tab";
   const showWeek = showRefresh && week != null;
@@ -830,12 +933,10 @@ export default function App() {
   return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="max-w-lg mx-auto">
       <TopBar
-        title={title}
-        subtitle={subtitle}
-        onBack={onBack}
+        crumbs={crumbs}
         onRefresh={showRefresh ? handleRefresh : undefined}
         refreshing={refreshing}
-        syncedLabel={showRefresh ? `Synced ${syncedAt} · Sleeper + FantasyPros (live)` : null}
+        syncedLabel={showRefresh ? `Synced ${syncedAt} · Sleeper + FantasyPros/ESPN (live)` : null}
         week={week}
         onWeekChange={handleWeekChange}
         showWeek={showWeek}
@@ -844,8 +945,8 @@ export default function App() {
       {view.screen === "dashboard" && (
         <Dashboard
           computed={computed}
-          onOpenLeague={(id) => setView({ screen: "league", leagueId: id })}
-          onOpenTab={(id, tab) => setView({ screen: "tab", leagueId: id, tab })}
+          onOpenLeague={(id) => navigate({ screen: "league", leagueId: id })}
+          onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })}
           onLogout={handleLogout}
           onEditLeagues={handleEditLeagues}
           sleeperUser={sleeperUser}
@@ -858,12 +959,12 @@ export default function App() {
         <SelectLeaguesScreen leagues={availableLeagues} selectedIds={selectedIds} onToggle={handleToggleLeague} onConfirm={handleConfirmSelection} loading={loadingLeagues || connecting} error={connectError} />
       )}
       {view.screen === "league" && activeLeague && (
-        <LeagueOverview league={activeLeague} onOpenTab={(tab) => setView({ screen: "tab", leagueId: activeLeague.id, tab })} />
+        <LeagueOverview league={activeLeague} onOpenTab={(tab) => navigate({ screen: "tab", leagueId: activeLeague.id, tab })} />
       )}
       {view.screen === "tab" && activeLeague && (() => {
         if (activeLeague.error) return <ErrorScreen message={activeLeague.error} />;
         const Comp = TAB_COMPONENTS[view.tab];
-        return <Comp league={activeLeague} />;
+        return <Comp league={activeLeague} sessionId={sessionId} />;
       })()}
     </div>
   );

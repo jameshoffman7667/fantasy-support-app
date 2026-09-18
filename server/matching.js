@@ -1,15 +1,15 @@
 /**
- * Sleeper and FantasyPros are two independent data sources with no shared
- * player ID (FantasyPros' /players endpoint advertises "external-ID
- * cross-references" but the exact field name isn't visible without a
- * live key — check a real response and wire it in below if it includes
- * a sleeper_id or similar; that would be strictly more reliable than
- * name matching). Until then, this matches on normalized name + position,
- * with team as a tiebreaker. This is a real limitation, not a rounding
- * error: name collisions (rare) or a recent trade (team mismatch) can
- * cause a missed match. When that happens, proj/ecr just come back null
- * for that player and the UI already handles null gracefully — it won't
- * silently show a wrong number.
+ * Sleeper and FantasyPros are joined two ways now: primarily via
+ * normalized name + position (below), and — where available — an extra
+ * candidate name pulled from the ffb_ids crosswalk (playerIdMap.js),
+ * which sometimes spells a player's name slightly differently than
+ * Sleeper's first_name+last_name concatenation does. FantasyPros'
+ * scraped pages and the consensus-rankings API don't expose an ID field
+ * this app has confirmed, so a true ID join for FantasyPros specifically
+ * isn't wired up — only the name-based approach. (ESPN, by contrast,
+ * does get a real ID join now — see espnProjections.js.) When a name
+ * match still fails, proj/ecr come back null and the UI shows that
+ * explicitly rather than a silently wrong number.
  */
 export function normalizeName(name) {
   if (!name) return "";
@@ -44,4 +44,14 @@ export function buildFpIndex(fpPlayers) {
 export function lookupFp(index, name, pos) {
   if (!index || !name || !pos) return null;
   return index.get(`${normalizeName(name)}|${pos}`) || null;
+}
+
+/** Tries each candidate name in order (e.g. Sleeper's name, then the
+ * ffb_ids crosswalk's name) and returns the first match. */
+export function lookupFpMulti(index, names, pos) {
+  for (const name of names) {
+    const hit = lookupFp(index, name, pos);
+    if (hit) return hit;
+  }
+  return null;
 }

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { cacheGet, cacheSet } from "./db.js";
 
 const FP_BASE = process.env.FANTASYPROS_BASE_URL || "https://api.fantasypros.com/public/v2/json";
 
@@ -11,16 +12,15 @@ const FP_BASE = process.env.FANTASYPROS_BASE_URL || "https://api.fantasypros.com
  */
 // FantasyPros' free/personal tier has a modest daily request quota, and
 // ECR/projections are identical regardless of which of your leagues is
-// asking. Without this, tracking a few leagues could burn most of a
-// day's quota in one refresh (4 positions x N leagues for rankings
-// alone). A short cache means the same data within this window is
-// reused instead of re-fetched — real API calls, just not redundant ones.
-const _cache = new Map(); // path -> { data, expiresAt }
+// asking. Cached in SQLite (via db.js), not just in memory, so a
+// container restart doesn't immediately re-spend quota re-fetching
+// something it already had five minutes ago.
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min: long enough to matter for quota, short enough that news during the day still shows up within a reasonable window
 
 async function fpFetch(path, { retries = 2 } = {}) {
-  const cached = _cache.get(path);
-  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  const cacheKey = `fp:${path}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== null) return cached;
 
   const key = process.env.FANTASYPROS_API_KEY;
   if (!key || key === "your_key_here") {
@@ -45,7 +45,7 @@ async function fpFetch(path, { retries = 2 } = {}) {
         throw new Error(`FantasyPros API error ${res.status} on ${path}: ${body.slice(0, 200)}`);
       }
       const data = await res.json();
-      _cache.set(path, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+      cacheSet(cacheKey, data, CACHE_TTL_MS);
       return data;
     } catch (err) {
       lastErr = err;

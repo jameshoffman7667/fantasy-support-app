@@ -19,3 +19,11 @@ export function buildLeagues(sessionId, leagueIds, week) {
     body: JSON.stringify({ sessionId, leagueIds, week }),
   });
 }
+
+export function getFaabSuggestions(sessionId, leagueId) {
+  return request(`/api/faab`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, leagueId }),
+  });
+}

@@ -14,6 +14,64 @@ once it's pushed), plain `docker compose` locally, or running each side
 with Node/Vite directly for active development. All three are covered
 below.
 
+## What's new in this round
+
+A large batch of changes, roughly in order of how much they change the architecture:
+
+- **A real local database.** `server/db.js` (SQLite via `better-sqlite3`)
+  replaces the in-memory-only caches from earlier rounds. It survives
+  container restarts/redeploys (backed by a named Docker volume — see
+  `docker-compose.yml`), and adds three things that weren't possible
+  before: an **hourly background refresh** (`server/scheduler.js`) that
+  keeps your last-connected leagues warm even if nobody has the app
+  open, a **stale-data fallback** (if a live rebuild fails, the last
+  good cached version is served instead of an error, clearly marked as
+  stale), and **persistent Injury Watch** (see below).
+- **Injury Watch now persists.** Previously it only showed a change
+  since the last refresh, then forgot it. Now a currently-injured player
+  shows up every time — Minor once you've seen that exact status before,
+  Major the first time — using SQLite to remember what's been seen, not
+  an in-memory diff.
+- **A real player-ID crosswalk.** `server/playerIdMap.js` pulls the
+  [ffb_ids](https://github.com/mayscopeland/ffb_ids) community dataset
+  (Sleeper/ESPN/FantasyPros/Yahoo/CBS/NFL.com IDs) and uses it for a real
+  ID join between Sleeper and ESPN — replacing fuzzy name-matching for
+  any player in the crosswalk. FantasyPros still goes through name
+  matching (see the caveats section — no confirmed ID field to join on
+  there), but the crosswalk's canonical name is tried as a second
+  candidate alongside Sleeper's name.
+- **ESPN as a projections fallback.** Where FantasyPros has nothing for
+  a player (scrape miss, free-tier gap, name mismatch), `server/espnProjections.js`
+  now tries ESPN's public per-athlete projections endpoint before giving
+  up. Lineup Advice and Waivers show a small `FP`/`E` tag in the bottom
+  corner of each player card indicating which source it came from.
+- **Taxi squad support**, shown as its own section on the Roster tab,
+  alongside a similarly new IR section (previously IR players were
+  fetched but never actually displayed anywhere).
+- **`SUPER_FLEX` now displays as `SFLX`** everywhere a slot label shows up.
+- **Lineup Advice is now a real side-by-side comparison** — current
+  lineup and optimal lineup shown together per slot, changed players
+  highlighted (red = drop, green = the suggested replacement), with the
+  point swing shown per slot, not just as one lump total.
+- **Kickoff time now shows on every Roster tab player card**, not just
+  used internally for the lock-order check.
+- **Browser back/forward now works.** Real `history.pushState`/`popstate`
+  integration — previously every "back" action was an in-app button with
+  no relationship to the browser's own history stack.
+- **Breadcrumb navigation replaces the back button** — `username >
+  League Name > Sub-tab name` in the header, every level but the current
+  one clickable.
+- **Accounts stay logged in across visits** (this was actually already
+  true from the previous round — see below for what's genuinely new
+  here): **Log out** and **Edit tracked leagues** are both on the
+  dashboard now.
+- **Dashboard cards show your team name** in that league instead of week
+  number/scoring format (which are still visible on the league-overview
+  screen, just not repeated on every card).
+- **FAAB bid suggestions** — a new panel on the Waivers tab. Read the
+  caveats section below before trusting these; the honest short version
+  is "directional guide from a small sample," not "confidence interval."
+
 ## Why a backend at all?
 
 1. **Your FantasyPros key can't live in client-side code.** Anyone who
@@ -123,7 +181,7 @@ say the word if you want one added.
 | Trade Radar | Real, but a heuristic: flags a position where your average rostered ECR is weak and a league-mate shows real depth there — not a dedicated trade-value model (FantasyPros doesn't publish one via this API). Needs at least 3 ECR-matched players at a position on both sides of a comparison to surface anything, so it depends on ECR coverage being decent. |
 | Injury Watch | Real. Diffs each refresh against the previous snapshot (held in server memory) so it only flags genuine status changes. Refreshes on the manual button **and automatically every 30 minutes** while the app is open in a tab, matching the functional spec's normal-cadence interval. |
 
-### New in this round: accounts remember you, and a week selector
+### Accounts remember you, and a week selector (from a previous round)
 
 - **Persistence**: your Sleeper username and which leagues you're tracking are saved in the browser (`localStorage`) after you connect. Reopening the app reconnects automatically — no re-entering anything. This is safe here specifically because this is a real deployed app, not a sandboxed preview; nothing sensitive (no API key, no session token) is stored this way.
 - **Log out** (on the dashboard) clears that saved state and returns you to the connect screen.
@@ -199,17 +257,96 @@ or wrong.
   wouldn't. One position failing to parse doesn't take down the other
   three, but it's worth spot-checking output occasionally.
 
-### The one data-quality caveat worth understanding
+### Player-ID matching: a real crosswalk now, not just name-guessing
 
-Sleeper and FantasyPros share no player ID through either the API or
-the scraped pages. Players are matched by **normalized name + position**
-(`server/matching.js`). A rare name collision, a very recent trade, or —
-now — a scrape-parsing edge case can miss a match; when that happens
-`proj`/`ecr` come back `null` and the UI shows an explicit warning
-naming the player, rather than silently showing a wrong number.
+`server/playerIdMap.js` pulls a community-maintained CSV
+([ffb_ids](https://github.com/mayscopeland/ffb_ids)) mapping Sleeper,
+ESPN, FantasyPros, Yahoo, CBS, and NFL.com IDs for the same players. Two
+honest caveats about it:
+
+- **The exact CSV column headers were never directly verified.** GitHub's
+  raw-file path was robots-disallowed for the tool used to research this,
+  so the header row was never actually read while writing the parser. It
+  discovers columns dynamically at runtime instead (fuzzy-matches header
+  text containing "sleeper"/"espn"/"fantasypros"/"name") and logs what it
+  found on first load — check the server console if the crosswalk seems
+  to be returning nothing.
+- **It gives a real ID join for ESPN, not for FantasyPros.** The
+  crosswalk has a `fantasyprosId` column, but neither FantasyPros' scraped
+  projections pages nor the `/consensus-rankings` API response (confirmed
+  shape: `rank_ecr`, `player_name`, `player_team_id`, `tier`) expose an ID
+  field to join it against. So FantasyPros matching is still name-based —
+  the crosswalk just adds its canonical name as a second candidate
+  alongside Sleeper's, which helps with some spelling differences but
+  isn't a full fix. ESPN, by contrast, gets looked up by the crosswalk's
+  `espnId` directly wherever it's available, which is meaningfully more
+  reliable than the 20,000-athlete name index it falls back to otherwise.
+
+### ESPN as a projections fallback — least-verified piece in the app
+
+`server/espnProjections.js` is called only when FantasyPros has nothing
+for a player. The endpoint (`sports.core.api.espn.com/.../athletes/{id}/projections`)
+is confirmed to exist and need no auth, cross-referenced across multiple
+independent community API-documentation sources — but the exact JSON
+field names for a fantasy-points total were **not** directly confirmed
+(no tool available while building this could return raw JSON from it).
+The parser tries several plausible shapes based on ESPN's general API
+conventions and returns `null` — not a guess — if none match. It logs
+the raw response's top-level keys to the server console on first use
+specifically so a shape mismatch is obvious immediately. If projections
+tagged `E` look wrong or are always absent, that log line is the place
+to start.
+
+### FAAB suggestions — read this before trusting the numbers
+
+The original idea was bid data "across all 2026 Sleeper leagues." That's
+not achievable: Sleeper's API (confirmed against their own docs and five
+independent third-party wrappers) has no way to browse or search leagues
+platform-wide — every endpoint needs a league ID you already have.
+`server/faab.js` only ever sees bids in the leagues *this app is
+tracking*, which is a real, meaningful scope reduction from what was
+originally asked for.
+
+That has a statistical consequence worth being direct about: with maybe
+a few dozen winning bids total across a couple of tracked leagues,
+there's usually zero or one data point for any *specific* player —
+nowhere near enough for genuine "70%/95% confidence of winning this
+exact player." What's actually computed is the 70th/95th percentile of
+**all recent winning bids as a % of budget**, grouped by position when
+there's a big enough sample (10+) and falling back to the overall
+distribution otherwise. Read a suggestion as "bids around this level
+tend to win, for players like this one" — a directional reference point,
+not a confidence interval on one player. The panel's own copy says this
+too, not just this README.
+
+### Persistent Injury Watch and the local database
+
+Previously, Injury Watch only showed a status *change* since the last
+refresh, then forgot about it. Now `server/db.js` (SQLite) remembers
+which player+status combinations have already been shown, so a
+currently-injured player appears on every refresh — Minor once seen
+before, Major the first time — until they're healthy again, at which
+point their record clears so a *future* re-injury with the same status
+is correctly treated as new. This, the generic response cache, and the
+hourly background refresh (`server/scheduler.js`) all live in the same
+SQLite file, mounted as a named Docker volume so it survives redeploys,
+not just restarts.
 
 ### Other things to know
 
+- **SQLite needs native compilation.** `better-sqlite3` isn't a pure-JS
+  package, so `server/Dockerfile` is now multi-stage: a build stage with
+  `python3`/`make`/`g++` compiles it, and the final image doesn't carry
+  that toolchain. If a Portainer build fails at the `npm install` step,
+  a Node/Alpine ABI mismatch here is the most likely cause — check the
+  build log for node-gyp errors specifically.
+- **The hourly background refresh only tracks one user** — whoever most
+  recently ran `/api/leagues/build` (recorded in SQLite's `last_session`
+  table). That matches what was actually asked for ("the last logged-in
+  user's team-specific data"), not a general multi-user warm-cache
+  system. If multiple people use the same deployment, only the most
+  recent one's leagues get proactively refreshed in the background;
+  everyone still gets on-demand builds when they open the app.
 - **Session storage is in-memory**, per running `server` container.
   Restarting/redeploying it forgets active sessions — the client's
   auto-reconnect (see above) papers over this from the user's side, but
@@ -225,14 +362,12 @@ naming the player, rather than silently showing a wrong number.
   `buildLeague.js` expects, that explorer is the source of truth to
   check — not this README.
 - **Rate limits**: FantasyPros' free/personal API tier is roughly **50
-  requests/day**. Now that projections are scraped instead of pulled
-  through the API, each league build only costs 4 API calls (one
-  `/consensus-rankings` per position) rather than 5 — a little more
-  headroom than before, though `/consensus-rankings` itself isn't
-  affected by the scraping change. `server/fantasyPros.js` still caches
-  every API response for 10 minutes, shared across all your tracked
-  leagues. A 429 gets one automatic retry with backoff before it
-  surfaces as an error.
+  requests/day**. Each league build costs 4 API calls (one
+  `/consensus-rankings` per position) — projections are scraped, not
+  API calls, so they don't count against this. `server/fantasyPros.js`
+  caches every API response for 10 minutes via SQLite, shared across all
+  your tracked leagues. A 429 gets one automatic retry with backoff
+  before it surfaces as an error.
 - **`/consensus-rankings` has no "all positions" option** — confirmed
   via a live 400 response, which is also how the exact valid position
   values got confirmed (`QB, RB, WR, TE, K, OP, FLX, DST, IDP, DL, LB,
@@ -246,21 +381,26 @@ naming the player, rather than silently showing a wrong number.
 ## Project layout
 
 ```
-docker-compose.yml    Both services; reads FANTASYPROS_API_KEY from
-                       Portainer's env vars or a root .env
+docker-compose.yml    Both services + a named volume for the SQLite DB;
+                       reads FANTASYPROS_API_KEY from Portainer's env vars or a root .env
 .env.example           Template for local `docker compose up` (skip if using Portainer)
 server/
-  server.js             Express app + routes
+  server.js             Express app + routes (+ FAAB endpoint)
   sleeper.js             Sleeper API client (no auth needed)
   fantasyPros.js          FantasyPros API client (uses your key, server-only) — now just consensus-rankings
   fantasyProsScrape.js     FantasyPros projections scraper (robots.txt-compliant, replaces the truncated API endpoint)
+  espnProjections.js       ESPN projections fallback for players FantasyPros has nothing for
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)
+  playerIdMap.js          ffb_ids ID crosswalk (Sleeper/ESPN/FantasyPros/etc)
   matching.js             Name-based cross-source player matching
   buildLeague.js          Merges everything into the shape the UI renders
-  Dockerfile              Builds the server image
+  db.js                   SQLite: generic cache, persistent injury tracking, session/build cache
+  scheduler.js             Hourly background refresh for the last-active user's leagues
+  faab.js                  FAAB bid-percentile suggestions (tracked leagues only — see caveats)
+  Dockerfile              Multi-stage: compiles better-sqlite3, final image has no compiler toolchain
   .env.example            Template for native `npm run dev` (Option C)
 client/
-  src/App.jsx            The UI (dashboard, league overview, 5 tabs)
+  src/App.jsx            The UI (breadcrumb nav, dashboard, league overview, 5 tabs)
   src/api.js              Calls our own backend, never external APIs directly
   Dockerfile              Multi-stage: vite build -> nginx serves it
   nginx.conf               Proxies /api to the server container by service name
@@ -271,25 +411,32 @@ client/
 
 I don't have a Docker daemon, a Portainer instance, or network access in
 the sandbox I write code in — so nothing here has actually been built,
-deployed, or run against a live network. What I did check: both
-Dockerfiles follow standard patterns (non-root user on the server,
-multi-stage build on the client), the nginx proxy target matches the
-compose service name exactly (`server`, not `localhost`), and every
-JS/JSX file parses cleanly. The realistic failure modes on a first real
-deploy: a Node/Alpine version quirk with a dependency, or Portainer's
-compose parser being stricter/older than what's used here (the syntax
-is intentionally plain — no newer Compose spec features — to minimize
-that risk). If the build fails, paste me the Portainer build log and
-I'll fix it.
+deployed, or run against a live network. What I did do: every JS/JSX
+file parses cleanly (checked with both `node --check` and a `tsc` JSX
+pass), and — specifically because syntax checks can't catch a function
+that's called but never defined — I cross-referenced every cross-module
+function call against that module's actual exports by hand. That caught
+a real bug: `buildLeague.js` called `sleeper.getLeagueUsers()` (needed
+for team names) but that function had been dropped from `sleeper.js` in
+an earlier rewrite and never re-added. It's fixed now, but it's a good
+illustration of this project's actual test ceiling — logical/runtime
+correctness beyond "does it parse" is unverified until it runs for real.
+If something throws on first deploy, the server console log is the
+fastest path to a fix; paste it here.
 
-**The FantasyPros scraper specifically** (`fantasyProsScrape.js`) is the
-least-verified piece in the whole project — I confirmed the URL
-pattern, query params, and that a real FPTS-column table exists on
-those pages via page-reading tools that render cleaned text rather than
-raw HTML, so the actual parsing selectors are best-effort, not
-confirmed against real markup. It logs a sample parsed row to the
-server console on first run specifically so a mismatch is visible
-immediately rather than silently returning nothing. If projections come
-back empty or obviously wrong after a real deploy, that log line plus
-the actual page HTML (browser dev tools) is exactly what I'd need to
-fix it correctly instead of guessing again.
+**Newest, least-verified pieces**, roughly in order of how much I'd
+double-check first:
+1. **`espnProjections.js`** — the endpoint's existence is confirmed, the
+   exact JSON field names for a fantasy-points value are not. Logs raw
+   response keys on first use.
+2. **`playerIdMap.js`** — the CSV's column headers were never directly
+   read (GitHub's raw-file path was robots-blocked for my research
+   tools specifically); columns are discovered by fuzzy-matching header
+   text at runtime instead, and logged on first load.
+3. **`fantasyProsScrape.js`** (from a previous round, still the same
+   caveat) — table markup targeted heuristically, not against confirmed
+   raw HTML. Logs a sample parsed row on first run.
+
+All three fail soft: a wrong guess returns `null`/empty rather than a
+plausible-looking wrong number, and the app degrades (that player just
+shows "no projection") rather than breaking.

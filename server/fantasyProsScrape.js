@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { cacheGet, cacheSet } from "./db.js";
 
 /**
  * Scrapes FantasyPros' public projections pages instead of using their
@@ -48,7 +49,6 @@ async function throttledFetch(url) {
   return res.text();
 }
 
-const _cache = new Map(); // `${pos}-${week}-${scoring}` -> { data, expiresAt }
 let _loggedSample = false;
 
 function parseProjectionsPage(html, pos) {
@@ -98,14 +98,14 @@ function parseProjectionsPage(html, pos) {
 }
 
 async function getPositionProjections(pos, season, week, scoring) {
-  const cacheKey = `${pos}-${week}-${scoring}`;
-  const cached = _cache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  const cacheKey = `fpscrape:${pos}-${week}-${scoring}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== null) return cached;
 
   const url = `${BASE}/${pos}.php?week=${week}&scoring=${scoring}`;
   const html = await throttledFetch(url);
   const data = parseProjectionsPage(html, pos);
-  _cache.set(cacheKey, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+  cacheSet(cacheKey, data, CACHE_TTL_MS);
   return data;
 }
 

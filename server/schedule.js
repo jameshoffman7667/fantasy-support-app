@@ -10,6 +10,7 @@
  * here degrades to "kickoff time unknown" rather than breaking the build.
  */
 const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+import { cacheGet, cacheSet } from "./db.js";
 
 // A handful of teams where Sleeper's abbreviation and ESPN's don't always
 // agree. Not exhaustive by construction — anything not listed here is
@@ -25,13 +26,12 @@ function normalizeTeam(abbr) {
   return TEAM_ALIASES[upper] || upper;
 }
 
-const _cache = new Map(); // `${season}-${week}` -> { data, expiresAt }
 const CACHE_TTL_MS = 15 * 60 * 1000; // schedules don't change once the week is set, but flex/TNF flexes and weather delays do get reflected here over time
 
 export async function getWeekSchedule(season, week) {
-  const cacheKey = `${season}-${week}`;
-  const cached = _cache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  const cacheKey = `espn-schedule:${season}-${week}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== null) return cached;
 
   const url = `${ESPN_BASE}?week=${week}&seasontype=2&year=${season}`;
   const res = await fetch(url);
@@ -64,8 +64,8 @@ export async function getWeekSchedule(season, week) {
     }
   }
 
-  const data = { byTeam, teamsPlaying, weekNumber: json.week?.number ?? week };
-  _cache.set(cacheKey, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+  const data = { byTeam, teamsPlaying: [...teamsPlaying], weekNumber: json.week?.number ?? week };
+  cacheSet(cacheKey, data, CACHE_TTL_MS);
   return data;
 }
 
