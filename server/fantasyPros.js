@@ -66,11 +66,12 @@ async function fpFetch(path, { retries = 2 } = {}) {
  * truth, not this file.
  */
 
-// NOTE: buildLeague.js no longer calls this — it uses
-// fantasyProsScrape.js instead, since this endpoint caps at ~10
-// players/position on the free tier. Left here (still correct, still
-// works) in case a paid tier without that cap ever makes it worth
-// switching back, or for anyone using this file standalone.
+// TIER 1 of the projection pipeline (see buildLeague.js). Capped at
+// ~10 players/position on the free tier, but its response carries a
+// real `fpid` per player — a genuine ID join against the ffb_ids
+// crosswalk's fantasyprosId column, more reliable than anything
+// name-based. Tiers 2 (scrape) and 3 (ESPN) fill whatever this cap
+// leaves out.
 export async function getProjections(season, week, { scoring = "PPR" } = {}) {
   const params = new URLSearchParams({ week: String(week), scoring });
   return fpFetch(`/nfl/${season}/projections?${params}`);

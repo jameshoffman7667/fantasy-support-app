@@ -14,7 +14,70 @@ once it's pushed), plain `docker compose` locally, or running each side
 with Node/Vite directly for active development. All three are covered
 below.
 
-## What's new in this round
+## What's new in this round (projection pipeline fix + Docker Hub packaging)
+
+- **Projection pipeline corrected to a proper 3-tier waterfall**, per
+  direct correction: (1) FantasyPros **API** `/projections` first,
+  matched via a real ID join (crosswalk `sleeper_id`/`fantasyprosId` →
+  API's own `fpid` field) — capped at ~10 players/position on the free
+  tier, but real IDs where it has data; (2) FantasyPros **scraped
+  pages**, name-fuzzy-matched, filling whatever tier 1's cap left out —
+  confirmed scraped rows carry no usable ID, so the speculative
+  data-attribute extraction added last round (which never had that
+  confirmation) has been removed rather than left as false hope; (3)
+  **ESPN**, ID-joined via the crosswalk's `espnId` column, only for
+  whatever both FantasyPros tiers still miss. Previously tiers 1 and 2
+  were reversed in priority and tier 1 wasn't ID-joined at all.
+- **Docker Hub image packaging.** `docker-compose.yml` is now the
+  prebuilt-image version (no `build:` key at all — Portainer just pulls),
+  with the old build-from-source file preserved as
+  `docker-compose.local-build.yml` for local dev. A new GitHub Actions
+  workflow (`.github/workflows/docker-publish.yml`) builds and pushes
+  both images, multi-arch (amd64 + arm64), on every push to `main`.
+
+## What's new from the previous round
+
+- **Real root cause found for missing K/DST projections**: those two
+  positions were never even fetched (only QB/RB/WR/TE were requested at
+  all). Fixed, plus a `DEF`→`DST` position-name translator (Sleeper and
+  FantasyPros spell defenses differently) and a team-abbreviation
+  fallback match for defenses specifically, since name-matching a
+  defense is inherently less reliable than a skill player.
+- **Real ID join added for ESPN** via the ffb_ids crosswalk's `espnId`
+  column — replaces fuzzy name-matching for any player the crosswalk
+  covers. Attempted (best-effort, unconfirmed) for FantasyPros too, by
+  trying to extract a row ID from the scraped page's markup — logs
+  whether it actually found one.
+- **ESPN kickoff-time bug fixed**: the season-year query param was
+  wrong (`year=` instead of the confirmed-correct `dates=`), and even
+  after fixing that, a live test still showed the endpoint returning a
+  different week than requested — strongly suggesting a caching layer
+  in front of it. Added a cache-busting param and explicit
+  request-vs-response week validation, logged loudly if it's ever still
+  wrong, since this couldn't be fully re-verified from here.
+- **Lineup Advice no longer flags non-consequential swaps.** Previously,
+  two interchangeable players with equal projections could get flagged
+  as a "recommended change" just because the solver's internal fill
+  order assigned them to each other's slots — same total score, no real
+  difference. Now a player is only shown as changed if they're actually
+  entering or leaving the starting lineup.
+- **Waivers filters out K/DST for leagues that don't start those
+  positions.**
+- **Trade Radar rebuilt** to show every team's strengths/weaknesses (not
+  just yours), with suggested trades grouped under each opposing team —
+  matching the intended design of "identify weaknesses per team, then
+  suggest a mutually beneficial swap." Uses average ECR by position as
+  the "team strength" signal (rest-of-season-oriented by nature) rather
+  than literal rest-of-season point totals, which aren't currently
+  fetched — see the Trade Radar section below for the honest scope note.
+- **PWA installability**: real manifest, generated icons, and a
+  stale-while-revalidate service worker that deliberately never caches
+  `/api/*`.
+- **`ANDROID_APK.md`**: step-by-step guide to packaging this as a
+  side-loadable Android APK via a Trusted Web Activity (PWABuilder or
+  Google's Bubblewrap CLI) — no native rewrite needed.
+
+## What's new from two rounds ago (bug fixes + PWA/Android)
 
 A large batch of changes, roughly in order of how much they change the architecture:
 
@@ -72,6 +135,39 @@ A large batch of changes, roughly in order of how much they change the architect
   caveats section below before trusting these; the honest short version
   is "directional guide from a small sample," not "confidence interval."
 
+## Publishing images to Docker Hub
+
+Do this once before deploying via Option A below.
+
+**Automatic (recommended)** — `.github/workflows/docker-publish.yml`
+builds and pushes both images (multi-arch: `linux/amd64` +
+`linux/arm64`, so this covers both typical VPS/desktop hosts and
+Raspberry-Pi-class home servers) on every push to `main`. One-time
+setup: push this repo to GitHub, then under **Settings → Secrets and
+variables → Actions**, add:
+- `DOCKERHUB_USERNAME` — your Docker Hub username
+- `DOCKERHUB_TOKEN` — a Docker Hub **access token**, not your password
+  (create one at hub.docker.com → Account Settings → Security → New
+  Access Token, Read & Write scope)
+
+Push to `main` and check the Actions tab — a few minutes later,
+`docker.io/<your-username>/fantasy-manager-server:latest` and
+`fantasy-manager-client:latest` exist and are ready to pull.
+
+**Manual** (no GitHub Actions, just your own machine):
+```bash
+docker login
+docker build -t <your-dockerhub-username>/fantasy-manager-server:latest ./server
+docker push <your-dockerhub-username>/fantasy-manager-server:latest
+docker build -t <your-dockerhub-username>/fantasy-manager-client:latest ./client
+docker push <your-dockerhub-username>/fantasy-manager-client:latest
+```
+For multi-arch manually, use `docker buildx build --platform
+linux/amd64,linux/arm64 -t ... --push ./server` (and same for `./client`)
+instead of the plain `docker build`/`docker push` pair.
+
+---
+
 ## Why a backend at all?
 
 1. **Your FantasyPros key can't live in client-side code.** Anyone who
@@ -89,53 +185,56 @@ see the security note near the bottom.
 
 ---
 
-## Option A — Deploy via Portainer from GitHub (no terminal)
+## Option A — Deploy via Portainer, pulling prebuilt images (recommended)
 
-**1. Push this folder to a GitHub repo** — `docker-compose.yml` needs to
-sit at the repo root, alongside the `server/` and `client/` folders,
-exactly as it's structured here. `.gitignore` already excludes
-`node_modules`, `.env`, and `dist` — you don't need to touch those.
+No repo checkout needed on the Portainer host at all — this pulls
+already-built images from Docker Hub rather than building from source,
+which is faster and sidesteps needing a compiler toolchain (for
+`better-sqlite3`'s native module) on the deployment host.
 
-**2. In Portainer:** Stacks → **Add stack** → **Repository** build
-method.
-- Repository URL: your repo's URL
-- Repository reference: `refs/heads/main` (or whichever branch)
-- Compose path: `docker-compose.yml` (default, since it's at the root)
-- If the repo is private, Portainer needs Git credentials configured
-  under Settings → Registries or entered directly on this form,
-  depending on your Portainer version.
+**1. Publish the images first** — see the section above, if you haven't.
+
+**2. In Portainer:** Stacks → **Add stack**. Either:
+- **Web editor**: paste the contents of this repo's `docker-compose.yml`
+  directly in, or
+- **Repository**: point at your GitHub repo with Compose path
+  `docker-compose.yml` — Portainer will read the file (which has no
+  `build:` key) and pull the named images rather than building anything.
 
 **3. Environment variables section (same form):** add
 ```
 FANTASYPROS_API_KEY = <your real key>
+DOCKERHUB_USER      = <your Docker Hub username>
 ```
-This is the key step that replaces the `.env` file — Portainer stores it
-and injects it at deploy time. Optionally also set `SERVER_PORT` /
-`CLIENT_PORT` if the defaults (4000 / 8080) collide with something else
-already running on that host.
+Optionally also `SERVER_PORT` / `CLIENT_PORT` if the defaults (4000 /
+8080) collide with something else already running on that host, or
+`IMAGE_TAG` to pin a specific build instead of always tracking `:latest`.
 
-**4. Deploy the stack.** Portainer clones the repo and builds both
-images. First build takes a couple minutes (pulling `node:20-alpine` and
-`nginx:alpine`, running `npm install` in each); rebuilds after that are
-faster.
+**4. Deploy the stack.** Portainer pulls both images and starts them —
+no build step on this host at all.
 
 **5. Open `http://<your-server-host>:8080`** (or whatever `CLIENT_PORT`
 you set). That's the app.
 
-**To update after pushing new commits:** Portainer's stack page has a
-"Pull and redeploy" action (exact wording varies by version) — no need
-to re-enter the environment variables, Portainer keeps them.
+**To update:** push new commits (which re-triggers the GitHub Actions
+build, publishing fresh `:latest` images), then use Portainer's "Pull
+and redeploy" action on the stack — it re-pulls the images and restarts
+the containers. No rebuild happens on the Portainer host either way.
 
 ---
 
-## Option B — `docker compose` locally, no Portainer
+## Option B — Build from source instead of pulling (local dev, or if you'd rather build on the host)
 
 ```bash
 cp .env.example .env
 # open .env and paste your real key in place of "your_key_here"
-docker compose up --build
+docker compose -f docker-compose.local-build.yml up --build
 ```
-Open `http://localhost:8080`. Stop with `Ctrl+C`, or `docker compose down`.
+Open `http://localhost:8080`. Stop with `Ctrl+C`, or `docker compose -f
+docker-compose.local-build.yml down`. This is also what Portainer would
+use if you point it at `docker-compose.local-build.yml` instead of the
+default `docker-compose.yml` — same setup as before this round's change,
+kept around for anyone who prefers building over pulling.
 
 ---
 
@@ -175,11 +274,11 @@ say the word if you want one added.
 
 | Tab | Status |
 |---|---|
-| Roster Optimization | Fully real now, including flex lock-order and bye-week checks — kickoff times and byes come from ESPN's public (unofficial) scoreboard endpoint, cross-referenced by team. See the ESPN caveat below. |
-| Lineup Advice | Real. Server computes an optimal lineup from your actual roster + real FantasyPros projections, via a greedy slot-filling algorithm (strict positions first, then FLEX/SUPERFLEX from what's left). A strong heuristic, not a proven-optimal solver. |
-| Waiver Management | Real. Sleeper trending-adds, filtered against every roster in the league (not just yours), cross-referenced with real FantasyPros ECR for the rank-threshold half of the severity rule. |
-| Trade Radar | Real, but a heuristic: flags a position where your average rostered ECR is weak and a league-mate shows real depth there — not a dedicated trade-value model (FantasyPros doesn't publish one via this API). Needs at least 3 ECR-matched players at a position on both sides of a comparison to surface anything, so it depends on ECR coverage being decent. |
-| Injury Watch | Real. Diffs each refresh against the previous snapshot (held in server memory) so it only flags genuine status changes. Refreshes on the manual button **and automatically every 30 minutes** while the app is open in a tab, matching the functional spec's normal-cadence interval. |
+| Roster Optimization | Fully real, including flex lock-order and bye-week checks, IR/taxi sections, and kickoff times on every card. Kickoff/bye accuracy depends on the ESPN schedule endpoint behaving — see the caveat below, since this round found (and partially fixed) a real bug there. |
+| Lineup Advice | Real side-by-side current-vs-optimal comparison. A player is only flagged as changed if they're actually entering or leaving the lineup — an earlier version could flag a meaningless reshuffle between two equal-projection players at the same position, which is fixed now. Kickoff-passed players lock to their actual score and can't be re-suggested away. |
+| Waiver Management | Real. Sleeper trending-adds, filtered against every roster in the league (not just yours) and against each league's actual starting positions (no K/DST suggestions for leagues that don't start them), cross-referenced with real FantasyPros ECR. Includes on-demand FAAB bid suggestions — see the caveats section for what those numbers actually mean statistically. |
+| Trade Radar | Rebuilt this round: shows every team's strengths/weaknesses (not just yours), with suggested trades grouped under each opposing team. Uses average ECR by position as the "team strength" signal — a rest-of-season-oriented signal by nature, but not literal rest-of-season point totals, which aren't fetched anywhere in this app yet. |
+| Injury Watch | Persists: a currently-injured player shows up every refresh (not just when the status first changed), Minor once you've seen that exact status before, Major the first time — tracked in SQLite, survives restarts. |
 
 ### Accounts remember you, and a week selector (from a previous round)
 
@@ -203,17 +302,61 @@ Washington) — it isn't exhaustive by construction, so a genuine new
 mismatch just results in "kickoff time unavailable" for that team's
 players, not a crash.
 
-### Projections: scraped, not pulled from the API (as of this round)
+**A real, only-partially-resolved bug found this round:** game times
+were coming back wrong for many players. Root cause #1, fixed with
+confidence: the season-year query param was `year=YYYY`, which the
+endpoint silently ignores — the confirmed-correct param (cross-checked
+against multiple independent sources) is `dates=YYYY`. Root cause #2,
+fixed but **not fully verified**: even after correcting the param, a
+live test still returned a different week's games than requested,
+pointing at a caching layer sitting in front of ESPN's endpoint (several
+third-party projects reference this exact issue, with "append a
+cache-busting value" as the known workaround). Both fixes are applied —
+a cache-busting nonce on every request, and explicit validation that
+compares the response's own `week.number` against what was actually
+requested, logged loudly if they don't match. **If kickoff times still
+look wrong after deploying this, check the server logs for that warning
+first** — it'll say plainly if ESPN is still returning the wrong week,
+which is the fastest way to tell "still broken" from "actually fixed."
 
-`/consensus-rankings` (ECR) still goes through FantasyPros' API — it's
-not capped the way `/projections` is. But `/projections` was capped at
-roughly the top 10 players per position on the free tier, which is why
-most bench/waiver players had no projection at all. `server/fantasyProsScrape.js`
-now scrapes FantasyPros' public projections pages
-(`fantasypros.com/nfl/projections/{qb,rb,wr,te}.php`) instead, which show
-the full list.
+### Player ID matching / projection pipeline (Sleeper ↔ FantasyPros ↔ ESPN)
 
-**What I checked before building this, not after:**
+Corrected this round to a proper 3-tier waterfall, cheapest/most-reliable
+first — **this replaces an earlier, wrongly-ordered version** that tried
+scraping before the API and attempted an ID join against scraped data
+that turned out not to carry one:
+
+1. **FantasyPros API `/projections`** — one call covers every position
+   at once. Capped at roughly the top 10 players/position on the free
+   tier, but its response carries a real `fpid` per player (confirmed
+   field), which is a genuine ID join against the ffb_ids crosswalk's
+   `fantasyprosId` column — confirmed to exist by direct inspection of
+   that CSV, not guessed at. Whoever the free tier actually covers gets
+   matched this way, reliably.
+2. **FantasyPros scraped pages** (`server/fantasyProsScrape.js`) — fills
+   whatever tier 1's cap left out, via **name-fuzzy-matching only**.
+   Confirmed that scraped rows carry no usable ID to join against the
+   crosswalk with (a speculative attempt at extracting one from a
+   `data-*` attribute was added last round without that confirmation,
+   and has been removed now that it's confirmed not to apply — no
+   point leaving dead-end code that looks like it might be doing
+   something it isn't). `/consensus-rankings` (ECR) has no equivalent
+   cap and stays entirely on the API, unaffected by any of this.
+3. **ESPN** (`server/espnProjections.js`) — real ID join via the
+   crosswalk's `espnId` column, tried only for whatever both
+   FantasyPros tiers still miss.
+4. **Team-abbreviation matching**, defenses only, layered into tiers 1
+   and 2 as a fallback before falling through to the next tier — more
+   reliable than name-matching a defense, which is a genuinely
+   different kind of "name" (a city/mascot pair, formatted differently
+   across sources) than a person's name.
+
+If a player still shows no projection after all tiers, that's either a
+genuine data gap (not enough of a season yet, or a very recent roster
+move no source has caught up on) or a real mismatch worth checking the
+server logs for — not a silent, unexplained miss.
+
+**What I checked before building this scraper tier, not after:**
 - `fantasypros.com/robots.txt` explicitly *allows* crawling
   `/nfl/projections/` (it only disallows `/ranker/`, `/ajax/`, `/api/`,
   `/json/`, `/xml/`), with a `Crawl-delay: 5` — enforced in code, not
@@ -237,19 +380,20 @@ restrict automated access even to pages `robots.txt` permits crawling
 wasn't glossed over; it's a real tradeoff, and part of why the ECR data
 stays on the official API rather than also being scraped.
 
-**What's best-effort, not confirmed:** the exact table markup. The
-tools used to research this render pages as cleaned text, not raw HTML,
-so the parser targets the table containing an "FPTS" header and pulls
-name/team/points heuristically rather than against verified CSS
-selectors. It logs one sample parsed row to the server console on first
-real run — check that against what's actually on
-`fantasypros.com/nfl/projections/qb.php` if projections come back empty
-or wrong.
+**What's best-effort, not confirmed:** the exact table markup for tier
+2. The tools used to research this render pages as cleaned text, not
+raw HTML, so the parser targets the table containing an "FPTS" header
+and pulls name/team/points heuristically rather than against verified
+CSS selectors. It logs one sample parsed row to the server console on
+first real run — check that against what's actually on
+`fantasypros.com/nfl/projections/qb.php` if tier-2 projections come
+back empty or wrong.
 
-**Practical tradeoffs of scraping vs. the API:**
+**Practical tradeoffs of the scrape tier specifically vs. a pure API
+approach:**
 - **Slower on a cold cache.** With the 5-second crawl delay honestly
-  enforced, the first projections fetch after the hourly cache expires
-  takes 20+ seconds (4 positions × 5s, plus page-load time) before that
+  enforced, the first tier-2 fetch after the hourly cache expires takes
+  20+ seconds (4 positions × 5s, plus page-load time) before that
   league build response comes back. Cached requests within the hour are
   instant, same as before.
 - **More brittle.** A page-layout change on FantasyPros' end breaks this
@@ -257,30 +401,14 @@ or wrong.
   wouldn't. One position failing to parse doesn't take down the other
   three, but it's worth spot-checking output occasionally.
 
-### Player-ID matching: a real crosswalk now, not just name-guessing
-
-`server/playerIdMap.js` pulls a community-maintained CSV
-([ffb_ids](https://github.com/mayscopeland/ffb_ids)) mapping Sleeper,
-ESPN, FantasyPros, Yahoo, CBS, and NFL.com IDs for the same players. Two
-honest caveats about it:
-
-- **The exact CSV column headers were never directly verified.** GitHub's
-  raw-file path was robots-disallowed for the tool used to research this,
-  so the header row was never actually read while writing the parser. It
-  discovers columns dynamically at runtime instead (fuzzy-matches header
-  text containing "sleeper"/"espn"/"fantasypros"/"name") and logs what it
-  found on first load — check the server console if the crosswalk seems
-  to be returning nothing.
-- **It gives a real ID join for ESPN, not for FantasyPros.** The
-  crosswalk has a `fantasyprosId` column, but neither FantasyPros' scraped
-  projections pages nor the `/consensus-rankings` API response (confirmed
-  shape: `rank_ecr`, `player_name`, `player_team_id`, `tier`) expose an ID
-  field to join it against. So FantasyPros matching is still name-based —
-  the crosswalk just adds its canonical name as a second candidate
-  alongside Sleeper's, which helps with some spelling differences but
-  isn't a full fix. ESPN, by contrast, gets looked up by the crosswalk's
-  `espnId` directly wherever it's available, which is meaningfully more
-  reliable than the 20,000-athlete name index it falls back to otherwise.
+**On the crosswalk's column headers specifically:** never directly
+verified either — GitHub's raw-file path was robots-disallowed for the
+research tools used here, so the header row was never actually read
+while writing the parser. It discovers columns dynamically at runtime
+instead (fuzzy-matches header text containing
+"sleeper"/"espn"/"fantasypros"/"name") and logs what it found on first
+load — check the server console if the crosswalk seems to be returning
+nothing.
 
 ### ESPN as a projections fallback — least-verified piece in the app
 
@@ -318,6 +446,28 @@ distribution otherwise. Read a suggestion as "bids around this level
 tend to win, for players like this one" — a directional reference point,
 not a confidence interval on one player. The panel's own copy says this
 too, not just this README.
+
+### Persistent Injury Watch and the local database
+
+### Trade Radar: what "team strength" actually means here
+
+Rebuilt this round to show every team's strengths/weaknesses, not just
+yours, with suggestions grouped under each opposing team — matching the
+requested design of "identify weaknesses per team, then suggest a swap
+that helps both sides." One thing worth being precise about: "strength"
+and "weakness" are computed from **average FantasyPros ECR by
+position** across each roster (lower rank number = stronger), not from
+literal rest-of-season point projections. ECR is a reasonable
+rest-of-season-oriented proxy — it's a consensus of expert rankings,
+not a single week's snapshot — but it's not the same thing as summing
+projected points across the rest of the season, which this app doesn't
+fetch anywhere today. A dedicated ROS-points fetch would be a real,
+separate addition if that distinction matters for how you use this tab.
+
+A team's strengths/weaknesses list only includes positions with at
+least one ECR-matched player — a team with poor matching coverage at a
+position (see the player-ID matching section above) will show fewer
+entries there, not zero-value ones.
 
 ### Persistent Injury Watch and the local database
 
@@ -362,9 +512,11 @@ not just restarts.
   `buildLeague.js` expects, that explorer is the source of truth to
   check — not this README.
 - **Rate limits**: FantasyPros' free/personal API tier is roughly **50
-  requests/day**. Each league build costs 4 API calls (one
-  `/consensus-rankings` per position) — projections are scraped, not
-  API calls, so they don't count against this. `server/fantasyPros.js`
+  requests/day**. Each league build now costs 5 API calls again (4x
+  `/consensus-rankings`, one per position, plus 1x `/projections` — back
+  up from 4 after this round's fix restored `/projections` to the
+  pipeline as tier 1, for the real ID join it enables). Scraping (tier 2)
+  doesn't count against this quota at all. `server/fantasyPros.js`
   caches every API response for 10 minutes via SQLite, shared across all
   your tracked leagues. A 429 gets one automatic retry with backoff
   before it surfaces as an error.
@@ -381,18 +533,20 @@ not just restarts.
 ## Project layout
 
 ```
-docker-compose.yml    Both services + a named volume for the SQLite DB;
-                       reads FANTASYPROS_API_KEY from Portainer's env vars or a root .env
+.github/workflows/
+  docker-publish.yml    Builds + pushes both images to Docker Hub (multi-arch) on push to main
+docker-compose.yml      PRIMARY: pulls prebuilt Docker Hub images, no build context — Portainer just pulls
+docker-compose.local-build.yml  Builds from source instead — local dev, or build-on-host if preferred
 .env.example           Template for local `docker compose up` (skip if using Portainer)
 server/
   server.js             Express app + routes (+ FAAB endpoint)
   sleeper.js             Sleeper API client (no auth needed)
-  fantasyPros.js          FantasyPros API client (uses your key, server-only) — now just consensus-rankings
-  fantasyProsScrape.js     FantasyPros projections scraper (robots.txt-compliant, replaces the truncated API endpoint)
-  espnProjections.js       ESPN projections fallback for players FantasyPros has nothing for
+  fantasyPros.js          FantasyPros API client (uses your key, server-only) — tier 1 projections + consensus-rankings
+  fantasyProsScrape.js     FantasyPros projections scraper — tier 2, fills the API's per-position cap
+  espnProjections.js       ESPN projections fallback — tier 3, last resort
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)
   playerIdMap.js          ffb_ids ID crosswalk (Sleeper/ESPN/FantasyPros/etc)
-  matching.js             Name-based cross-source player matching
+  matching.js             Name-based cross-source player matching (tiers 2 and the ECR pipeline)
   buildLeague.js          Merges everything into the shape the UI renders
   db.js                   SQLite: generic cache, persistent injury tracking, session/build cache
   scheduler.js             Hourly background refresh for the last-active user's leagues
@@ -402,9 +556,14 @@ server/
 client/
   src/App.jsx            The UI (breadcrumb nav, dashboard, league overview, 5 tabs)
   src/api.js              Calls our own backend, never external APIs directly
+  public/manifest.webmanifest  PWA manifest (installable in Chrome)
+  public/sw.js             Service worker (app-shell caching; never caches /api/*)
+  public/icons/            Generated app icons (192/512/maskable/apple-touch)
+  public/.well-known/      Placeholder for Android's assetlinks.json — see ANDROID_APK.md
   Dockerfile              Multi-stage: vite build -> nginx serves it
-  nginx.conf               Proxies /api to the server container by service name
+  nginx.conf               Proxies /api to the server container by service name; correct manifest content-type
   vite.config.js           Proxies /api to localhost:4000 (dev only, Option C)
+ANDROID_APK.md          Step-by-step: package this as a side-loadable Android APK (TWA, no native rewrite)
 ```
 
 ## A note on how far this was actually tested
@@ -426,16 +585,34 @@ fastest path to a fix; paste it here.
 
 **Newest, least-verified pieces**, roughly in order of how much I'd
 double-check first:
-1. **`espnProjections.js`** — the endpoint's existence is confirmed, the
+1. **The ESPN schedule cache-busting fix** — the actual root cause (a
+   caching layer, most likely) was inferred from a live test result and
+   third-party bug reports referencing the same symptom, not directly
+   confirmed. This is the one most likely to still need another pass —
+   the server log warning it now prints if the response week doesn't
+   match the request is the fastest way to know either way.
+2. **`espnProjections.js`** — the endpoint's existence is confirmed, the
    exact JSON field names for a fantasy-points value are not. Logs raw
    response keys on first use.
-2. **`playerIdMap.js`** — the CSV's column headers were never directly
+3. **The FantasyPros row-ID extraction** (`fantasyProsScrape.js`) — added
+   this round to try a real ID join against the crosswalk's confirmed
+   `fantasyprosId` column, but whether the scraped page's markup
+   actually carries an ID to extract was never confirmed. Logs whether
+   it found one on the first row.
+4. **`playerIdMap.js`** — the CSV's column headers were never directly
    read (GitHub's raw-file path was robots-blocked for my research
    tools specifically); columns are discovered by fuzzy-matching header
-   text at runtime instead, and logged on first load.
-3. **`fantasyProsScrape.js`** (from a previous round, still the same
-   caveat) — table markup targeted heuristically, not against confirmed
-   raw HTML. Logs a sample parsed row on first run.
+   text at runtime instead, and logged on first load. (The
+   `fantasyprosId` column's *existence* was confirmed by direct
+   inspection this round — just not its exact header spelling.)
+5. **`fantasyProsScrape.js`**'s table markup generally — targeted
+   heuristically, not against confirmed raw HTML. Logs a sample parsed
+   row on first run.
+
+This round's cross-module export re-check (same method that caught the
+`getLeagueUsers` bug last time) came back clean — every function called
+across `buildLeague.js`, `server.js`, `scheduler.js`, and `faab.js`
+matches a real export this time.
 
 All three fail soft: a wrong guess returns `null`/empty rather than a
 plausible-looking wrong number, and the app degrades (that player just

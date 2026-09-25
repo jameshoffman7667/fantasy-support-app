@@ -31,6 +31,16 @@ export function getTrendingAdds(limit = 60, lookbackHours = 24) {
 export function getTransactions(leagueId, round) {
   return sleeperFetch(`/league/${leagueId}/transactions/${round}`);
 }
+// Sleeper's own docs only show a per-team `points` total in this
+// response, but the real payload is widely reported (community wrappers,
+// not confirmed by a live fetch of my own) to also include
+// `players_points` (player_id -> points) and `starters_points` (parallel
+// to `starters`) once stats start coming in for a game. Used for "lock
+// in actual score once played" — see buildLeague.js, which checks for
+// this field's actual presence rather than assuming it's there.
+export function getMatchups(leagueId, week) {
+  return sleeperFetch(`/league/${leagueId}/matchups/${week}`);
+}
 
 // ~5MB dictionary of every NFL player. Sleeper's own docs ask integrators
 // not to poll this more than once a day. Now persisted via db.js so a

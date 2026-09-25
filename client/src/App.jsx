@@ -184,6 +184,13 @@ function StatusBadge({ status, label, onClick, compact }) {
 
 function SourceTag({ source }) {
   if (!source) return null;
+  if (source === "actual") {
+    return (
+      <span style={{ color: C.brand }} className="absolute bottom-1 right-1.5 text-[9px] font-semibold tracking-wide">
+        FINAL
+      </span>
+    );
+  }
   return (
     <span style={{ color: C.textFaint }} className="absolute bottom-1 right-1.5 text-[9px] font-medium tracking-wide">
       {source}
@@ -451,7 +458,7 @@ function LineupTab({ league }) {
         {rows.map((c, i) => (
           <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md overflow-hidden">
             <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif", borderBottom: `1px solid ${C.border}` }} className="text-[10px] px-3 py-1 flex items-center justify-between">
-              <span>{c.slot}</span>
+              <span>{c.slot}{c.locked ? " · Played" : ""}</span>
               {c.changed && c.delta !== 0 && (
                 <span style={{ color: c.delta > 0 ? C.minor : C.ok }}>{c.delta > 0 ? "+" : ""}{c.delta.toFixed(1)} pts</span>
               )}
@@ -563,26 +570,72 @@ function WaiverTab({ league, sessionId }) {
   );
 }
 
+function StrengthWeaknessRow({ label, items, color }) {
+  if (!items?.length) return null;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <span style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">{label}:</span>
+      {items.map((it, i) => (
+        <span key={i} style={{ background: `${color}22`, color }} className="text-[11px] rounded px-1.5 py-0.5">
+          {it.pos} <span style={{ opacity: 0.7 }}>(~{it.avgEcr})</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function TradeTab({ league }) {
+  const teams = league.leagueTeams || [];
+  const me = teams.find((t) => t.isMe);
+  const others = teams.filter((t) => !t.isMe);
+  const suggestionsByTeam = {};
+  (league.trade.rows || []).forEach((t) => {
+    (suggestionsByTeam[t.theirTeam] = suggestionsByTeam[t.theirTeam] || []).push(t);
+  });
+
   return (
     <div className="px-4 py-3">
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Heuristic, based on positional ECR depth across your league — not a dedicated trade-value model. Needs at least 3 ECR-matched players at a position on both sides to surface anything.
+        Based on average ECR by position across every roster in the league (a rest-of-season-oriented signal, not a single week's projection) — not a dedicated trade-value model.
       </div>
-      <SectionLabel>Trade Suggestions</SectionLabel>
-      {league.trade.rows.length === 0 ? (
-        <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No standout trade opportunities right now.</div>
+
+      {me && (
+        <div style={{ background: C.surfaceRaised, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 mb-3 space-y-1.5">
+          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm mb-1">Your Team</div>
+          <StrengthWeaknessRow label="Strong" items={me.strengths} color={C.ok} />
+          <StrengthWeaknessRow label="Weak" items={me.weaknesses} color={C.major} />
+        </div>
+      )}
+
+      <SectionLabel>League Teams &amp; Trade Ideas</SectionLabel>
+      {others.length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No other teams' data available yet.</div>
       ) : (
-        <div className="space-y-2">
-          {league.trade.rows.map((t, i) => {
-            const s = STATUS[t.severity];
+        <div className="space-y-2.5">
+          {others.map((t, i) => {
+            const suggestions = suggestionsByTeam[t.team] || [];
             return (
-              <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-3.5 py-3">
-                <div style={{ color: C.textMuted }} className="text-xs mb-1.5">vs. {t.theirTeam}</div>
-                <div style={{ color: C.text }} className="text-sm mb-1.5">
-                  <span style={{ color: C.textMuted }}>Give </span>{t.give}<span style={{ color: C.textMuted }}> · Get </span>{t.get}
-                </div>
-                <div style={{ color: s.color }} className="text-xs">{t.note}</div>
+              <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-1.5">
+                <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm">{t.team}</div>
+                <StrengthWeaknessRow label="Strong" items={t.strengths} color={C.ok} />
+                <StrengthWeaknessRow label="Weak" items={t.weaknesses} color={C.major} />
+                {suggestions.length > 0 ? (
+                  <div className="space-y-1.5 pt-1.5" style={{ borderTop: `1px solid ${C.border}` }}>
+                    {suggestions.map((s, j) => {
+                      const sc = STATUS[s.severity];
+                      return (
+                        <div key={j}>
+                          <div style={{ color: C.text }} className="text-xs">
+                            <span style={{ color: C.textMuted }}>Give </span>{s.give}<span style={{ color: C.textMuted }}> · Get </span>{s.get}
+                          </div>
+                          <div style={{ color: sc.color }} className="text-[11px] mt-0.5">{s.note}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ color: C.textFaint }} className="text-[11px] pt-1">No mutually beneficial swap found with this team right now.</div>
+                )}
               </div>
             );
           })}

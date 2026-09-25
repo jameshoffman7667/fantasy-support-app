@@ -1,32 +1,49 @@
+# Primary deployment file: pulls prebuilt images from Docker Hub — no
+# build context anywhere in this file, so Portainer (or any host) just
+# pulls and runs, never builds. That sidesteps needing a compiler
+# toolchain on the deployment host entirely (better-sqlite3's native
+# build happens once, in CI, not on every deploy — see
+# .github/workflows/docker-publish.yml) and makes redeploys fast.
+#
+# Set DOCKERHUB_USER to whoever actually published the images — either
+# export it in your shell, put it in a root .env next to this file (see
+# .env.example), or fill it in via Portainer's "Environment variables"
+# field when deploying this as a stack. The placeholder default below
+# will 404 on pull until you do.
+#
+# Want to build from source instead of pulling? Use
+# docker-compose.local-build.yml instead of this file.
 services:
   server:
-    build:
-      context: ./server
+    image: ${DOCKERHUB_USER:-yourdockerhubusername}/fantasy-manager-server:${IMAGE_TAG:-latest}
     container_name: fantasy-manager-server
     environment:
       # ${FANTASYPROS_API_KEY} is resolved at deploy time from either:
       #  - Portainer's "Environment variables" field when deploying this
-      #    stack from Git (nothing to upload or commit), or
+      #    stack (nothing to upload or commit), or
       #  - a .env file next to this compose file, if you're running
-      #    `docker compose up` locally instead of through Portainer.
-      # Either way, the real key is never written into this file or into
-      # the built image.
+      #    `docker compose up` locally.
+      # Either way, the real key is never written into this file or
+      # baked into the image.
       - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY}
       - PORT=4000
     ports:
       - "${SERVER_PORT:-4000}:4000"
     volumes:
-      # Named volume, not a bind mount — survives image rebuilds and
-      # container recreation (a plain restart already would; this also
-      # covers `docker compose up --build` / a Portainer redeploy, which
-      # recreate the container). Without this, the SQLite cache/injury
-      # history/session would reset on every redeploy, defeating the point.
+      # Named volume, not a bind mount — survives image pulls/updates
+      # and container recreation. Without this, the SQLite cache/injury
+      # history/session would reset every time you pull a new image tag.
       - fantasy-manager-data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
 
   client:
-    build:
-      context: ./client
+    image: ${DOCKERHUB_USER:-yourdockerhubusername}/fantasy-manager-client:${IMAGE_TAG:-latest}
     container_name: fantasy-manager-client
     depends_on:
       server:

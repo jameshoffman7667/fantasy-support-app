@@ -1,0 +1,44 @@
+# Local-build variant: builds both images from source instead of pulling
+# from Docker Hub. Use this for local development/testing before pushing
+# images, or if you'd rather build on the deployment host than use
+# prebuilt images. For Portainer/production, docker-compose.yml (the
+# Docker Hub image-based version) is the recommended path — see README.
+services:
+  server:
+    build:
+      context: ./server
+    container_name: fantasy-manager-server
+    environment:
+      # ${FANTASYPROS_API_KEY} is resolved at deploy time from either:
+      #  - Portainer's "Environment variables" field when deploying this
+      #    stack from Git (nothing to upload or commit), or
+      #  - a .env file next to this compose file, if you're running
+      #    `docker compose up` locally instead of through Portainer.
+      # Either way, the real key is never written into this file or into
+      # the built image.
+      - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY}
+      - PORT=4000
+    ports:
+      - "${SERVER_PORT:-4000}:4000"
+    volumes:
+      # Named volume, not a bind mount — survives image rebuilds and
+      # container recreation (a plain restart already would; this also
+      # covers `docker compose up --build` / a Portainer redeploy, which
+      # recreate the container). Without this, the SQLite cache/injury
+      # history/session would reset on every redeploy, defeating the point.
+      - fantasy-manager-data:/app/data
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ./client
+    container_name: fantasy-manager-client
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${CLIENT_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  fantasy-manager-data:

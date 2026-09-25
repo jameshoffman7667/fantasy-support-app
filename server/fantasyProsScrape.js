@@ -2,11 +2,15 @@ import * as cheerio from "cheerio";
 import { cacheGet, cacheSet } from "./db.js";
 
 /**
- * Scrapes FantasyPros' public projections pages instead of using their
- * API's /projections endpoint, which is capped at ~10 players/position
- * on the free tier. /consensus-rankings (server/fantasyPros.js) is NOT
- * capped the same way and stays on the API — this module only replaces
- * the one endpoint that was actually the problem.
+ * Scrapes FantasyPros' public projections pages as TIER 2 of a 3-tier
+ * projection pipeline (see buildLeague.js): the API's /projections
+ * endpoint (tier 1, real ID join) is capped at ~10 players/position on
+ * the free tier, so this fills whatever that cap left out, via name
+ * matching — confirmed that scraped rows carry no usable player ID to
+ * join against the ffb_ids crosswalk with, so name-fuzzy-matching is
+ * the deliberate, correct approach here, not a fallback-of-convenience.
+ * /consensus-rankings (server/fantasyPros.js) is NOT capped the same
+ * way and stays entirely on the API.
  *
  * Confirmed before writing this:
  *  - robots.txt (fantasypros.com/robots.txt) explicitly allows crawling

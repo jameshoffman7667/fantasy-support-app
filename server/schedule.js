@@ -33,12 +33,28 @@ export async function getWeekSchedule(season, week) {
   const cached = cacheGet(cacheKey);
   if (cached !== null) return cached;
 
-  const url = `${ESPN_BASE}?week=${week}&seasontype=2&year=${season}`;
-  const res = await fetch(url);
+  // Confirmed working format via multiple independent sources:
+  // ?dates=YYYY&seasontype={type}&week={n} — NOT year=YYYY, which this
+  // used before. BUT: even with the correct params, a live test still
+  // came back with a different week's data than requested — several
+  // sources reference this exact endpoint silently caching/ignoring
+  // query params, with "append a cache-busting value" as the known
+  // workaround. Both applied here: a nonce param, and explicit
+  // validation that the response's own week number matches what was
+  // asked for, logged loudly rather than silently trusted if it doesn't.
+  const cacheBuster = Date.now();
+  const url = `${ESPN_BASE}?dates=${season}&seasontype=2&week=${week}&_=${cacheBuster}`;
+  const res = await fetch(url, { headers: { "Cache-Control": "no-cache", Pragma: "no-cache" } });
   if (!res.ok) {
     throw new Error(`ESPN scoreboard error ${res.status} for week ${week}`);
   }
   const json = await res.json();
+
+  if (json.week?.number != null && json.week.number !== week) {
+    console.warn(
+      `[schedule] Requested week ${week} but ESPN returned week ${json.week.number} — game times below are for the WRONG week. This endpoint is known to sometimes ignore query params; if this keeps happening, kickoff times/byes should be treated as unreliable until ESPN's behavior is re-verified.`
+    );
+  }
 
   const byTeam = {}; // normalized team abbr -> { kickoffISO, kickoffLabel, opponent }
   const teamsPlaying = new Set();
