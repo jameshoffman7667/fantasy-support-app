@@ -1,6 +1,6 @@
 # Fantasy Manager — real Sleeper + FantasyPros app
 
-*Current version: v7 — see [CHANGELOG.md](./CHANGELOG.md) for what
+*Current version: v8 — see [CHANGELOG.md](./CHANGELOG.md) for what
 changed in this and every prior version.*
 
 A running (not preview-sandboxed) multi-league fantasy manager, packaged
@@ -208,6 +208,15 @@ already-built images from Docker Hub rather than building from source,
 which is faster and sidesteps needing a compiler toolchain (for
 `better-sqlite3`'s native module) on the deployment host.
 
+**Prerequisite as of this version:** `docker-compose.yml` attaches
+`client` to an external Docker network named `caddy_net` (see the Caddy
+section above) — that network must already exist on the host before
+this stack deploys, or the deploy fails outright rather than silently
+skipping it. If you're not using the Caddy setup yet but still want to
+deploy this file as-is, create an empty network of the same name first:
+`docker network create caddy_net` — it's a harmless no-op without a
+Caddy container actually attached to it.
+
 **1. Publish the images first** — see the section above, if you haven't.
 
 **2. In Portainer:** Stacks → **Add stack**. Either:
@@ -280,12 +289,62 @@ server proxies `/api` to `http://localhost:4000` — see
 **There's no login screen.** Anyone who can reach the client's port can
 type in any Sleeper username and pull data through your FantasyPros key
 and quota — there's nothing here stopping them. That's a fine tradeoff
-for "runs on my home server, on my LAN, for me" (the situation this
-Portainer setup is built for), but if you're port-forwarding this to the
-open internet, put it behind something with auth first — a reverse
-proxy with basic auth (Caddy, Traefik, nginx) or a VPN like Tailscale
-are both reasonable, low-effort options. I haven't built either in —
-say the word if you want one added.
+for "runs on my home server, on my LAN, for me," but once it's reachable
+from the open internet (see the Caddy section right below), put it
+behind something with auth first — the Caddy section covers `basic_auth`
+specifically, a couple of lines in your Caddyfile. A VPN like Tailscale
+is a reasonable alternative if you'd rather not add auth at the reverse
+proxy.
+
+## Deploying behind an existing Caddy reverse proxy
+
+If you already run Caddy for other self-hosted services, `client`
+(the only container anything external ever needs to reach — its own
+nginx already proxies `/api/*` to `server` internally, same as always)
+joins a **pre-existing external Docker network** called `caddy_net`
+that your Caddy container is also on, so Caddy can reach it by container
+name instead of a published host port.
+
+**1. This network must already exist** — if you don't already have one
+from your Caddy setup, create it once: `docker network create caddy_net`,
+and make sure your Caddy container is also attached to it. `docker-compose.yml`
+references it as `external: true`, meaning Compose looks it up rather
+than creating it — deploying without it existing first will fail
+loudly at startup rather than silently create a second, disconnected
+network of the same name.
+
+**2. Caddyfile:**
+```
+fantasy.yourdomain.com {
+    reverse_proxy client:80
+}
+```
+`client:80` — the container's internal nginx port on the shared Docker
+network, not the externally-published `${CLIENT_PORT}`, which Caddy
+doesn't need at all here.
+
+**3. Add auth**, given this is now genuinely internet-facing (see the
+security note above):
+```
+fantasy.yourdomain.com {
+    basic_auth {
+        yourusername <bcrypt-hash>
+    }
+    reverse_proxy client:80
+}
+```
+Generate the hash with `caddy hash-password` (or `docker exec -it
+<your-caddy-container> caddy hash-password` if Caddy's dockerized too)
+— it prompts for a password and prints the bcrypt hash to paste in.
+
+**Running Caddy elsewhere** (natively on the host, or on a different
+machine on your network) instead of in Docker? Skip the `caddy_net`
+network entirely and just point Caddy at the published port instead:
+`reverse_proxy localhost:5000` (or the Docker host's LAN IP).
+
+**Side benefit:** a real HTTPS domain is exactly what `ANDROID_APK.md`
+needed as a prerequisite for the Trusted Web Activity path — this
+unlocks that too, if you want a side-loadable APK later.
 
 ## What's actually real vs. a known gap
 
@@ -552,7 +611,7 @@ not just restarts.
 ```
 .github/workflows/
   docker-publish.yml    Builds + pushes both images to Docker Hub (multi-arch) on push to main
-docker-compose.yml      PRIMARY: pulls prebuilt Docker Hub images, no build context — Portainer just pulls
+docker-compose.yml      PRIMARY: pulls prebuilt Docker Hub images, no build context — Portainer just pulls. Requires an external `caddy_net` Docker network to already exist (see Caddy section).
 docker-compose.local-build.yml  Builds from source instead — local dev, or build-on-host if preferred
 .env.example           Template for local `docker compose up` (skip if using Portainer)
 server/

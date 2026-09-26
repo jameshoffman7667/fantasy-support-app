@@ -50,7 +50,26 @@ services:
         condition: service_healthy
     ports:
       - "${CLIENT_PORT:-5000}:80"
+    networks:
+      # "default" keeps it able to reach `server` (nginx proxies /api/*
+      # there internally) exactly as before. "caddy_net" is new: an
+      # existing external network your Caddy reverse proxy is already
+      # on, so Caddy can reach this container by name (`client:80`)
+      # without needing the published ${CLIENT_PORT} at all. `server`
+      # deliberately isn't added here — nothing external ever talks to
+      # it directly, only `client`'s own nginx does.
+      - default
+      - caddy_net
     restart: unless-stopped
 
 volumes:
   fantasy-manager-data:
+
+networks:
+  # Must already exist on this host (`docker network create caddy_net`,
+  # or however your Caddy stack created it) — `external: true` means
+  # Compose looks it up rather than creating it, and will error out at
+  # startup if it doesn't exist yet, rather than silently making a new,
+  # disconnected network of the same name.
+  caddy_net:
+    external: true

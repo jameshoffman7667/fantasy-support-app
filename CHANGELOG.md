@@ -16,6 +16,35 @@ exactly one delivered zip.
 
 ---
 
+## v8 — Wired into an existing Caddy reverse proxy
+
+**Commit message:** `feat(deploy): attach client to external caddy_net network for reverse-proxy access by container name; docs: Caddyfile + basic_auth guide`
+
+- `client` now joins an external Docker network named `caddy_net`
+  (alongside its existing internal `default` network for talking to
+  `server`), so a Caddy container already on that network can reverse-proxy
+  to it by container name (`client:80`) instead of needing the
+  published `${CLIENT_PORT}`. `server` deliberately isn't added to
+  `caddy_net` — nothing external ever needs to reach it directly.
+- **Real behavioral consequence, not just an addition**: `caddy_net` is
+  referenced as `external: true`, so `docker-compose.yml` now fails to
+  deploy if that network doesn't already exist on the host, rather than
+  silently creating a disconnected network of the same name. Documented
+  in README's Option A with the one-line workaround
+  (`docker network create caddy_net`) for deploying without Caddy.
+- `docker-compose.local-build.yml` (the local-dev/build variant)
+  deliberately left unchanged — no `caddy_net` dependency there, so
+  local development doesn't require having Caddy set up at all.
+- README: new "Deploying behind an existing Caddy reverse proxy"
+  section with a working Caddyfile, `basic_auth` setup (confirmed
+  current directive name/syntax — `basicauth` was renamed to
+  `basic_auth` as of Caddy v2.8.0), and the alternative path for a
+  non-dockerized Caddy install.
+- Updated the "no login screen" security note now that internet-facing
+  deployment is a real, documented path rather than a hypothetical.
+
+---
+
 ## v7 — Fixed server container failing its healthcheck (never starting)
 
 **Commit message:** `fix(docker): force better-sqlite3 to build from source for musl/Alpine, fix volume ownership at container start via entrypoint script`
