@@ -5,17 +5,17 @@
 # build happens once, in CI, not on every deploy — see
 # .github/workflows/docker-publish.yml) and makes redeploys fast.
 #
-# Set DOCKERHUB_USER to whoever actually published the images — either
-# export it in your shell, put it in a root .env next to this file (see
-# .env.example), or fill it in via Portainer's "Environment variables"
-# field when deploying this as a stack. The placeholder default below
-# will 404 on pull until you do.
+# DOCKERHUB_USER defaults to mybadreligon's own published images below,
+# so this works as-is with no env var needed. Only override it (export
+# in your shell, a root .env next to this file — see .env.example — or
+# Portainer's "Environment variables" field) if you've forked this and
+# published your own images instead.
 #
 # Want to build from source instead of pulling? Use
 # docker-compose.local-build.yml instead of this file.
 services:
   server:
-    image: mybadreligon/fantasy-manager-server:${IMAGE_TAG:-latest}
+    image: ${DOCKERHUB_USER:-mybadreligon}/fantasy-manager-server:${IMAGE_TAG:-latest}
     container_name: fantasy-manager-server
     environment:
       # ${FANTASYPROS_API_KEY} is resolved at deploy time from either:
@@ -26,7 +26,7 @@ services:
       # Either way, the real key is never written into this file or
       # baked into the image.
       - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY}
-      - PORT=5000
+      - PORT=4000
     ports:
       - "${SERVER_PORT:-4000}:4000"
     volumes:
@@ -43,7 +43,7 @@ services:
       retries: 3
 
   client:
-    image: mybadreligon/fantasy-manager-client:${IMAGE_TAG:-latest}
+    image: ${DOCKERHUB_USER:-mybadreligon}/fantasy-manager-client:${IMAGE_TAG:-latest}
     container_name: fantasy-manager-client
     depends_on:
       server:

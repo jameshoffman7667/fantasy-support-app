@@ -5,9 +5,30 @@ import fs from "fs";
 // Mounted as a volume in docker-compose.yml so data survives container
 // recreation, not just restarts within the same container.
 const DATA_DIR = process.env.DATA_DIR || "./data";
-fs.mkdirSync(DATA_DIR, { recursive: true });
-const db = new Database(path.join(DATA_DIR, "fantasy-manager.db"));
-db.pragma("journal_mode = WAL");
+
+let db;
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  db = new Database(path.join(DATA_DIR, "fantasy-manager.db"));
+  db.pragma("journal_mode = WAL");
+} catch (err) {
+  // This runs at import time, before server.js ever binds to a port —
+  // a failure here crashes the whole process before /api/health can
+  // respond, which looks like "container unhealthy, never starts" from
+  // the outside with no other clue. Naming the two known causes
+  // explicitly turns a cryptic native-module stack trace into something
+  // actionable straight from `docker logs`.
+  console.error("[db] Failed to open the SQLite database — the server cannot start. Common causes:");
+  console.error("  1. better-sqlite3's native binary doesn't match this container's platform (e.g. a glibc");
+  console.error("     prebuilt binary on Alpine's musl libc). Rebuild the image with the Dockerfile's");
+  console.error("     `npm install --build-from-source` step actually applied — this is fixed as of the");
+  console.error("     Dockerfile shipped alongside this file, but an image built before that fix will still hit this.");
+  console.error(`  2. ${DATA_DIR} isn't writable by the container's user — often a named Docker volume that`);
+  console.error("     got created with the wrong ownership on first mount. entrypoint.sh fixes this at");
+  console.error("     container start as of this version; an older image won't have that entrypoint.");
+  console.error("Original error:", err.message);
+  throw err;
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS cache (

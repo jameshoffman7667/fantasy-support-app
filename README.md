@@ -1,5 +1,8 @@
 # Fantasy Manager — real Sleeper + FantasyPros app
 
+*Current version: v7 — see [CHANGELOG.md](./CHANGELOG.md) for what
+changed in this and every prior version.*
+
 A running (not preview-sandboxed) multi-league fantasy manager, packaged
 as two containers:
 
@@ -135,32 +138,45 @@ A large batch of changes, roughly in order of how much they change the architect
   caveats section below before trusting these; the honest short version
   is "directional guide from a small sample," not "confidence interval."
 
-## Publishing images to Docker Hub
+## Publishing images to Docker Hub (GitHub → Docker Hub, end to end)
 
-Do this once before deploying via Option A below.
+Do this once before deploying via Option A below. Docker Hub account
+for this project: **mybadreligon** — already the default in
+`docker-compose.yml`, so nothing to fill in for a normal deploy; this
+section is about *publishing* new images, not consuming them.
 
-**Automatic (recommended)** — `.github/workflows/docker-publish.yml`
-builds and pushes both images (multi-arch: `linux/amd64` +
-`linux/arm64`, so this covers both typical VPS/desktop hosts and
-Raspberry-Pi-class home servers) on every push to `main`. One-time
-setup: push this repo to GitHub, then under **Settings → Secrets and
-variables → Actions**, add:
-- `DOCKERHUB_USERNAME` — your Docker Hub username
-- `DOCKERHUB_TOKEN` — a Docker Hub **access token**, not your password
-  (create one at hub.docker.com → Account Settings → Security → New
-  Access Token, Read & Write scope)
+**1. Push the repo to GitHub**, if it isn't already — `docker-compose.yml`
+needs to sit at the repo root, alongside `server/` and `client/`, exactly
+as this package is structured.
 
-Push to `main` and check the Actions tab — a few minutes later,
-`docker.io/<your-username>/fantasy-manager-server:latest` and
+**2. One-time GitHub setup** — in the repo's **Settings → Secrets and
+variables → Actions**, add two repository secrets:
+- `DOCKERHUB_USERNAME` = `mybadreligon`
+- `DOCKERHUB_TOKEN` — a Docker Hub **access token**, not the account
+  password (create one at hub.docker.com → Account Settings → Security
+  → New Access Token, **Read & Write** scope, then paste it here)
+
+**3. Push to `main`.** `.github/workflows/docker-publish.yml` picks it
+up automatically and builds + pushes both images, multi-arch
+(`linux/amd64` + `linux/arm64`, covering both typical VPS/desktop hosts
+and Raspberry-Pi-class home servers). Watch the **Actions** tab for
+progress — a few minutes later,
+`docker.io/mybadreligon/fantasy-manager-server:latest` and
 `fantasy-manager-client:latest` exist and are ready to pull.
 
-**Manual** (no GitHub Actions, just your own machine):
+**4. Deploy** — that's Option A below: point Portainer at
+`docker-compose.yml` and it pulls those two images directly. No build
+step happens on the Portainer host at all; all the building already
+happened in GitHub Actions at step 3.
+
+**Manual publish** (skip GitHub Actions, push from your own machine
+instead):
 ```bash
 docker login
-docker build -t <your-dockerhub-username>/fantasy-manager-server:latest ./server
-docker push <your-dockerhub-username>/fantasy-manager-server:latest
-docker build -t <your-dockerhub-username>/fantasy-manager-client:latest ./client
-docker push <your-dockerhub-username>/fantasy-manager-client:latest
+docker build -t mybadreligon/fantasy-manager-server:latest ./server
+docker push mybadreligon/fantasy-manager-server:latest
+docker build -t mybadreligon/fantasy-manager-client:latest ./client
+docker push mybadreligon/fantasy-manager-client:latest
 ```
 For multi-arch manually, use `docker buildx build --platform
 linux/amd64,linux/arm64 -t ... --push ./server` (and same for `./client`)
@@ -204,16 +220,17 @@ which is faster and sidesteps needing a compiler toolchain (for
 **3. Environment variables section (same form):** add
 ```
 FANTASYPROS_API_KEY = <your real key>
-DOCKERHUB_USER      = <your Docker Hub username>
 ```
-Optionally also `SERVER_PORT` / `CLIENT_PORT` if the defaults (4000 /
-8080) collide with something else already running on that host, or
-`IMAGE_TAG` to pin a specific build instead of always tracking `:latest`.
+That's the only one you actually need to set — `DOCKERHUB_USER` already
+defaults to `mybadreligon` in the compose file itself. Optionally also
+set `SERVER_PORT` / `CLIENT_PORT` if the defaults (4000 / 5000) collide
+with something else already running on that host, or `IMAGE_TAG` to pin
+a specific build instead of always tracking `:latest`.
 
 **4. Deploy the stack.** Portainer pulls both images and starts them —
 no build step on this host at all.
 
-**5. Open `http://<your-server-host>:8080`** (or whatever `CLIENT_PORT`
+**5. Open `http://<your-server-host>:5000`** (or whatever `CLIENT_PORT`
 you set). That's the app.
 
 **To update:** push new commits (which re-triggers the GitHub Actions
@@ -230,7 +247,7 @@ cp .env.example .env
 # open .env and paste your real key in place of "your_key_here"
 docker compose -f docker-compose.local-build.yml up --build
 ```
-Open `http://localhost:8080`. Stop with `Ctrl+C`, or `docker compose -f
+Open `http://localhost:5000`. Stop with `Ctrl+C`, or `docker compose -f
 docker-compose.local-build.yml down`. This is also what Portainer would
 use if you point it at `docker-compose.local-build.yml` instead of the
 default `docker-compose.yml` — same setup as before this round's change,
