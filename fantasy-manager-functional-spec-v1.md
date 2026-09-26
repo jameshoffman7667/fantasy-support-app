@@ -1,7 +1,7 @@
 # Functional Specification: Multi-League Fantasy Manager
 
-*See CHANGELOG.md (in the app package) for version-by-version
-history — this document itself is versioned via git, not a filename suffix.*
+*Current version: v1 — see CHANGELOG.md (in the app package) for
+version-by-version history.*
 
 *This document describes the app as actually built, not just as
 originally planned — it's been updated after every major round of
