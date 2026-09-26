@@ -17,6 +17,9 @@ services:
       # Either way, the real key is never written into this file or into
       # the built image.
       - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY}
+      # Shared login password for the in-app login screen — see
+      # docker-compose.yml for the full explanation.
+      - APP_PASSWORD=${APP_PASSWORD}
       - PORT=4000
     ports:
       - "${SERVER_PORT:-4000}:4000"
@@ -37,7 +40,7 @@ services:
       server:
         condition: service_healthy
     ports:
-      - "${CLIENT_PORT:-5000}:80"
+      - "${CLIENT_PORT:-5000}:5000"
     restart: unless-stopped
 
 volumes:

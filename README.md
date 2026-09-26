@@ -1,6 +1,6 @@
 # Fantasy Manager — real Sleeper + FantasyPros app
 
-*Current version: v8 — see [CHANGELOG.md](./CHANGELOG.md) for what
+*Current version: v1 — see [CHANGELOG.md](./CHANGELOG.md) for what
 changed in this and every prior version.*
 
 A running (not preview-sandboxed) multi-league fantasy manager, packaged
@@ -229,12 +229,15 @@ Caddy container actually attached to it.
 **3. Environment variables section (same form):** add
 ```
 FANTASYPROS_API_KEY = <your real key>
+APP_PASSWORD = <pick a password for logging into the app>
 ```
-That's the only one you actually need to set — `DOCKERHUB_USER` already
-defaults to `mybadreligon` in the compose file itself. Optionally also
-set `SERVER_PORT` / `CLIENT_PORT` if the defaults (4000 / 5000) collide
-with something else already running on that host, or `IMAGE_TAG` to pin
-a specific build instead of always tracking `:latest`.
+Both of those are the ones you actually need to set — `DOCKERHUB_USER`
+already defaults to `mybadreligon` in the compose file itself. Skipping
+`APP_PASSWORD` doesn't leave the app open; it fails closed instead, so
+nobody (including you) can log in until it's set. Optionally also set
+`SERVER_PORT` / `CLIENT_PORT` if the defaults (4000 / 5000) collide with
+something else already running on that host, or `IMAGE_TAG` to pin a
+specific build instead of always tracking `:latest`.
 
 **4. Deploy the stack.** Portainer pulls both images and starts them —
 no build step on this host at all.
@@ -286,15 +289,27 @@ server proxies `/api` to `http://localhost:4000` — see
 
 ## Security note before you expose this beyond localhost
 
-**There's no login screen.** Anyone who can reach the client's port can
-type in any Sleeper username and pull data through your FantasyPros key
-and quota — there's nothing here stopping them. That's a fine tradeoff
-for "runs on my home server, on my LAN, for me," but once it's reachable
-from the open internet (see the Caddy section right below), put it
-behind something with auth first — the Caddy section covers `basic_auth`
-specifically, a couple of lines in your Caddyfile. A VPN like Tailscale
-is a reasonable alternative if you'd rather not add auth at the reverse
-proxy.
+**There's a real login screen.** The app is gated behind a single shared
+password (`APP_PASSWORD` — see `.env.example`), checked server-side with
+a timing-safe comparison, backed by an opaque session cookie stored in
+SQLite (so logout actually revokes it, not just a client-side forget).
+There's still no per-user accounts — it's one password for the whole
+household, not a multi-tenant login — but nobody can pull data through
+your FantasyPros key without it. **Set `APP_PASSWORD` before you deploy**;
+if it's unset, the server logs a warning at startup and every login
+attempt fails closed (nobody gets in, rather than the check silently
+passing).
+
+That's already enough to put this on the open internet. Two more layers
+are still worth knowing about if you want them:
+- **Caddy `basic_auth`** in front of the app as well — a second gate
+  before a request even reaches the login screen. Now optional/redundant
+  given the in-app login, but still a reasonable belt-and-suspenders
+  choice if you're already comfortable managing Caddy auth. Covered
+  below.
+- **A VPN like Tailscale** instead of public exposure at all — the
+  simplest option if you'd rather not expose a port to the internet in
+  the first place.
 
 ## Deploying behind an existing Caddy reverse proxy
 
@@ -316,21 +331,22 @@ network of the same name.
 **2. Caddyfile:**
 ```
 fantasy.yourdomain.com {
-    reverse_proxy client:80
+    reverse_proxy client:5000
 }
 ```
-`client:80` — the container's internal nginx port on the shared Docker
-network, not the externally-published `${CLIENT_PORT}`, which Caddy
-doesn't need at all here.
+`client:5000` — the container's internal nginx port on the shared Docker
+network (matches the externally-published `${CLIENT_PORT}` too, as of
+this version, but Caddy talks to it by container name here regardless).
 
-**3. Add auth**, given this is now genuinely internet-facing (see the
-security note above):
+**3. Optional extra layer** — the app already has its own login screen
+(see the security note above), but if you'd rather also gate it at the
+reverse proxy:
 ```
 fantasy.yourdomain.com {
     basic_auth {
         yourusername <bcrypt-hash>
     }
-    reverse_proxy client:80
+    reverse_proxy client:5000
 }
 ```
 Generate the hash with `caddy hash-password` (or `docker exec -it
@@ -356,11 +372,12 @@ unlocks that too, if you want a side-loadable APK later.
 | Trade Radar | Rebuilt this round: shows every team's strengths/weaknesses (not just yours), with suggested trades grouped under each opposing team. Uses average ECR by position as the "team strength" signal — a rest-of-season-oriented signal by nature, but not literal rest-of-season point totals, which aren't fetched anywhere in this app yet. |
 | Injury Watch | Persists: a currently-injured player shows up every refresh (not just when the status first changed), Minor once you've seen that exact status before, Major the first time — tracked in SQLite, survives restarts. |
 
-### Accounts remember you, and a week selector (from a previous round)
+### Login, cross-device persistence, and a week selector
 
-- **Persistence**: your Sleeper username and which leagues you're tracking are saved in the browser (`localStorage`) after you connect. Reopening the app reconnects automatically — no re-entering anything. This is safe here specifically because this is a real deployed app, not a sandboxed preview; nothing sensitive (no API key, no session token) is stored this way.
-- **Log out** (on the dashboard) clears that saved state and returns you to the connect screen.
-- **Edit tracked leagues** (also on the dashboard) re-pulls your current Sleeper league list and lets you change your selection without logging out — handles the case where the server restarted and forgot your session, transparently.
+- **Login**: a single shared password (`APP_PASSWORD`) gates the whole app — see the security note above. Logging in sets an HttpOnly session cookie backed by a SQLite-stored token, valid for 30 days.
+- **Persistence**: your Sleeper username and which leagues you're tracking are saved **server-side**, tied to being logged in rather than to one browser. Log in from any device and it reconnects automatically to the same leagues, right where you left off — no re-entering anything, and no per-device setup.
+- **Log out** (on the dashboard) revokes the session cookie server-side and returns you to the login screen.
+- **Edit tracked leagues** (also on the dashboard) re-pulls your current Sleeper league list and lets you change your selection without logging out — handles the case where the server restarted and forgot your in-memory session, transparently.
 - **Week dropdown** in the header, available on the dashboard, league overview, and every tab — changing it rebuilds every tracked league for that week (fresh Sleeper roster-for-week + FantasyPros projections/ECR for that week).
 
 ### ESPN schedule integration (kickoff times + bye weeks)

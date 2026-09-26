@@ -17,6 +17,7 @@ import {
   LogOut,
   Settings2,
   DollarSign,
+  Lock,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -48,31 +49,6 @@ const STATUS = {
 };
 const RANK = { ok: 0, minor: 1, major: 2 };
 const worst = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
-
-/* ------------------------------------------------------------------ */
-/*  PERSISTENCE (localStorage — safe here, this is a real deployed app) */
-/* ------------------------------------------------------------------ */
-const STORAGE_KEY = "fantasyManager.v1";
-function loadPersisted() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-function savePersisted(data) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Private browsing / storage disabled — app still works, just won't remember next visit.
-  }
-}
-function clearPersisted() {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {}
-}
 
 /* ------------------------------------------------------------------ */
 /*  VARIANCE CALCULATIONS                                             */
@@ -678,13 +654,45 @@ function InjuryTab({ league }) {
 
 const TAB_COMPONENTS = { roster: RosterTab, lineup: LineupTab, waiver: WaiverTab, trade: TradeTab, injury: InjuryTab };
 
+function LoginScreen({ password, setPassword, onSubmit, loading, error }) {
+  return (
+    <div className="px-5 py-8 flex flex-col items-center text-center gap-4">
+      <div style={{ background: C.surfaceRaised, color: C.brand }} className="p-3 rounded-full"><Lock size={22} /></div>
+      <div>
+        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-lg mb-1">Log in</div>
+        <div style={{ color: C.textMuted }} className="text-sm max-w-xs">This app is shared across your devices with one password.</div>
+      </div>
+      <input
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && !loading && password && onSubmit()}
+        placeholder="Password"
+        autoFocus
+        style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}
+        className="w-full max-w-xs rounded-md px-3.5 py-2.5 text-sm outline-none"
+      />
+      {error && <div style={{ color: C.major }} className="text-xs max-w-xs">{error}</div>}
+      <button
+        onClick={onSubmit}
+        disabled={loading || !password}
+        style={{ background: loading || !password ? C.surfaceRaised : C.brand, color: C.text }}
+        className="w-full max-w-xs rounded-md py-2.5 text-sm font-medium flex items-center justify-center gap-2"
+      >
+        {loading ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
+        {loading ? "Logging in…" : "Log in"}
+      </button>
+    </div>
+  );
+}
+
 function ConnectScreen({ username, setUsername, onSubmit, connecting, error }) {
   return (
     <div className="px-5 py-8 flex flex-col items-center text-center gap-4">
       <div style={{ background: C.surfaceRaised, color: C.brand }} className="p-3 rounded-full"><Link2 size={22} /></div>
       <div>
         <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-lg mb-1">Connect your Sleeper account</div>
-        <div style={{ color: C.textMuted }} className="text-sm max-w-xs">Enter your Sleeper username. Your username and tracked leagues are remembered on this device.</div>
+        <div style={{ color: C.textMuted }} className="text-sm max-w-xs">Enter your Sleeper username. This and your tracked leagues are remembered on the server — logging in from any device picks up right where you left off.</div>
       </div>
       <input
         value={username}
@@ -777,6 +785,10 @@ export default function App() {
   const [liveLeagues, setLiveLeagues] = useState([]);
   const [week, setWeek] = useState(null);
 
+  const [password, setPassword] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState(null);
+
   // Browser back/forward support: every real navigation pushes a history
   // entry carrying the view state; popstate restores it directly without
   // pushing again (that's what "going back" means — undoing the push).
@@ -812,28 +824,32 @@ export default function App() {
 
   const activeLeague = useMemo(() => computed.find((l) => l.id === (view.leagueId || null)), [computed, view.leagueId]);
 
-  useEffect(() => {
-    const persisted = loadPersisted();
-    if (!persisted?.username) {
-      navigate({ screen: "connect" }, { replace: true });
-      return;
-    }
-    setUsername(persisted.username);
-    (async () => {
+  // Shared by both the bootstrap effect and the post-login handler: given
+  // the server's last-session record (username + tracked leagues + week),
+  // reconnect to Sleeper and rebuild the dashboard. This is what replaces
+  // localStorage — the record lives in SQLite, tied to the login, not the
+  // browser, so it follows the person across devices.
+  const reconnectFromLastSession = useCallback(
+    async (last) => {
+      if (!last?.username) {
+        navigate({ screen: "connect" }, { replace: true });
+        return;
+      }
+      setUsername(last.username);
       try {
-        const { sessionId, user, week: currentWeek, leagues } = await api.connect(persisted.username);
+        const { sessionId, user, week: currentWeek, leagues } = await api.connect(last.username);
         setSessionId(sessionId);
         setSleeperUser(user);
         setAvailableLeagues(leagues);
         const validIds = leagues.map((l) => l.league_id);
-        const restoredIds = (persisted.selectedLeagueIds || []).filter((id) => validIds.includes(id));
+        const restoredIds = (last.leagueIds || []).filter((id) => validIds.includes(id));
         setSelectedIds(restoredIds.length ? restoredIds : validIds);
         if (restoredIds.length === 0) {
           navigate({ screen: "select" }, { replace: true });
           return;
         }
         setLoadingLeagues(true);
-        const { leagues: built, week: builtWeek } = await api.buildLeagues(sessionId, restoredIds);
+        const { leagues: built, week: builtWeek } = await api.buildLeagues(sessionId, restoredIds, last.week ?? undefined);
         setLiveLeagues(built);
         setWeek(builtWeek ?? currentWeek);
         setSyncedAt("just now");
@@ -844,9 +860,40 @@ export default function App() {
       } finally {
         setLoadingLeagues(false);
       }
+    },
+    [navigate]
+  );
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const status = await api.getAuthStatus();
+        if (!status.authenticated) {
+          navigate({ screen: "login" }, { replace: true });
+          return;
+        }
+        await reconnectFromLastSession(status.lastSession);
+      } catch {
+        navigate({ screen: "login" }, { replace: true });
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleLoginSubmit = useCallback(async () => {
+    setLoggingIn(true);
+    setLoginError(null);
+    try {
+      await api.login(password);
+      setPassword("");
+      const status = await api.getAuthStatus();
+      await reconnectFromLastSession(status.lastSession);
+    } catch (err) {
+      setLoginError(err.message || "Couldn't log in — try again.");
+    } finally {
+      setLoggingIn(false);
+    }
+  }, [password, reconnectFromLastSession]);
 
   const handleConnectSubmit = useCallback(async () => {
     setConnecting(true);
@@ -878,7 +925,9 @@ export default function App() {
       setLiveLeagues(leagues);
       setWeek(builtWeek);
       setSyncedAt("just now");
-      savePersisted({ username: username.trim(), selectedLeagueIds: selectedIds });
+      // No client-side persistence call needed here — the build endpoint
+      // already calls setLastSession() server-side, which is what
+      // reconnectFromLastSession() reads on the next login/bootstrap.
       navigate({ screen: "dashboard" });
     } catch (err) {
       setConnectError(err.message || "Couldn't load those leagues — try again.");
@@ -931,8 +980,15 @@ export default function App() {
     return () => clearInterval(id);
   }, [sessionId, selectedIds.length]);
 
-  const handleLogout = useCallback(() => {
-    clearPersisted();
+  const handleLogout = useCallback(async () => {
+    try {
+      await api.logout();
+    } catch {
+      // A network failure logging out shouldn't trap someone on the
+      // dashboard — clear local state and send them to the login screen
+      // regardless; the server-side session just won't be revoked until
+      // it naturally expires.
+    }
     setSessionId(null);
     setSleeperUser(null);
     setAvailableLeagues([]);
@@ -940,8 +996,10 @@ export default function App() {
     setLiveLeagues([]);
     setWeek(null);
     setUsername("");
+    setPassword("");
     setConnectError(null);
-    navigate({ screen: "connect" });
+    setLoginError(null);
+    navigate({ screen: "login" });
   }, [navigate]);
 
   const handleEditLeagues = useCallback(async () => {
@@ -972,6 +1030,7 @@ export default function App() {
   const crumbs = useMemo(() => {
     const root = { label: sleeperUser?.display_name || "Fantasy Manager", onClick: liveLeagues.length ? () => navigate({ screen: "dashboard" }) : undefined };
     if (view.screen === "bootstrapping") return [{ label: "Fantasy Manager" }];
+    if (view.screen === "login") return [{ label: "Fantasy Manager" }];
     if (view.screen === "connect") return [{ label: "Connect Sleeper" }];
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
     if (view.screen === "dashboard") return [{ label: root.label }];
@@ -995,6 +1054,9 @@ export default function App() {
         showWeek={showWeek}
       />
       {view.screen === "bootstrapping" && <BootstrapScreen />}
+      {view.screen === "login" && (
+        <LoginScreen password={password} setPassword={setPassword} onSubmit={handleLoginSubmit} loading={loggingIn} error={loginError} />
+      )}
       {view.screen === "dashboard" && (
         <Dashboard
           computed={computed}

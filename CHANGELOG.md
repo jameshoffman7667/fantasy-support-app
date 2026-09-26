@@ -1,22 +1,74 @@
 # Changelog
 
 All notable changes to this project are logged here, one entry per
-delivered version. Going forward, every delivered zip + functional spec
-pair gets a version number (`vN`), a short commit-style summary (for
-pasting into a real `git commit -m "..."` when this gets pushed), and an
-entry here describing what changed and why.
+delivered version. Every delivered zip gets a version number (`vN`,
+also used as the zip's top-level folder name and included at the front
+of both commit messages below, so a commit can be cross-referenced back
+to its changelog entry at a glance), a commit message split into a
+short subject (≤50 characters, for `git commit -m "..."`) and an
+extended description (≤200 words, for the commit body, `git commit -m
+"<short>" -m "<extended>"`), and an entry here describing what changed
+and why — mirroring the short+extended commit split. Both the short and
+extended commit messages are also included directly in the chat reply
+that delivers the files, not just here. The functional spec and this
+changelog are bundled inside the zip itself, alongside a copy of the
+changelog kept here in the outputs folder.
 
-**A note on v1–v5 specifically:** these are reconstructed from the
+**Versioning scheme:** v0.1 through v0.8 are the pre-release
+iterations built before the app had a real login system — every
+delivery up through the old "v9" was renumbered to this decimal scheme
+in retrospect. **v1 is the first official release**, starting with the
+delivery that added real authentication. Versions continue from v1
+onward (v1, v2, v3, ...) for future official releases.
+
+**A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
-timestamps, since versioning wasn't introduced until v6. A couple of
+timestamps, since versioning wasn't introduced until v0.6. A couple of
 very closely-related, back-to-back turns are grouped into a single
 version entry where that gives a cleaner history than splitting them —
-noted individually below. From v6 onward, each entry corresponds to
-exactly one delivered zip.
+noted individually below. **v0.6–v0.8 predate the short/extended
+commit split and the version-number-in-commit-message convention**
+(both introduced at v1) and use a single free-form commit-message line
+instead. From v0.6 onward, each entry corresponds to exactly one
+delivered zip.
 
 ---
 
-## v8 — Wired into an existing Caddy reverse proxy
+## v1 — Real in-app login, replacing localStorage with server-side persistence (first official release)
+
+**Commit (short):** `v1: feat(auth): shared-password login + port 5000`
+
+**Commit (extended):**
+v1 adds a real login screen gating the app behind a single shared
+password (`APP_PASSWORD`), checked with a timing-safe SHA-256
+comparison. A correct login issues an opaque session token stored
+server-side in a new `web_sessions` SQLite table (30-day expiry) and
+set as an HttpOnly, `SameSite=Lax` cookie (`Secure` when served over
+HTTPS, detected via `X-Forwarded-Proto`). `/api/connect`,
+`/api/leagues/*`, and `/api/faab` now require a valid session;
+`/api/health` stays open for the Docker healthcheck. Unset
+`APP_PASSWORD` and the server fails closed with a startup warning
+rather than letting anyone in.
+
+Persistence moves from the browser to the server: the old
+`localStorage` record is gone, replaced by a new `/api/auth/status`
+endpoint that returns the server-side `last_session` record when
+authenticated, so logging in from any device reconnects to the same
+tracked leagues automatically. Logout calls `/api/logout`, which
+revokes the token in SQLite rather than just clearing it client-side.
+
+Also changes the client's internal port from 80 to 5000 for
+consistency with the published `${CLIENT_PORT}` — `nginx.conf`,
+`Dockerfile`, and both compose files updated together, including
+Caddy-facing comments.
+
+README rewritten: security note, Caddy `basic_auth` reframed as
+optional, persistence write-up, and `APP_PASSWORD` documented
+throughout.
+
+---
+
+## v0.8 — Wired into an existing Caddy reverse proxy
 
 **Commit message:** `feat(deploy): attach client to external caddy_net network for reverse-proxy access by container name; docs: Caddyfile + basic_auth guide`
 
@@ -45,7 +97,7 @@ exactly one delivered zip.
 
 ---
 
-## v7 — Fixed server container failing its healthcheck (never starting)
+## v0.7 — Fixed server container failing its healthcheck (never starting)
 
 **Commit message:** `fix(docker): force better-sqlite3 to build from source for musl/Alpine, fix volume ownership at container start via entrypoint script`
 
@@ -85,7 +137,7 @@ path to the real cause.
 
 ---
 
-## v6 — Corrected projection pipeline + Docker Hub image packaging
+## v0.6 — Corrected projection pipeline + Docker Hub image packaging
 
 **Commit message:** `fix(projections): 3-tier FP-API→scrape→ESPN pipeline with real ID joins via ffb_ids; feat(deploy): publish as Docker Hub images instead of Portainer git-build`
 
@@ -104,16 +156,17 @@ path to the real cause.
   `docker-compose.yml` now has no build context at all; the old
   build-from-source file is preserved as `docker-compose.local-build.yml`.
 
-**Amended within v6** (kept as the same version, per instruction, rather
-than bumped to v7): default client port changed from 8080 to 5000
-(`docker-compose.yml`, `docker-compose.local-build.yml`, `.env.example`,
-README); Docker Hub account confirmed as `mybadreligon` and set as the
-actual compose default rather than a placeholder, so a normal Portainer
-deploy no longer needs `DOCKERHUB_USER` set at all.
+**Amended within v0.6** (kept as the same version, per instruction,
+rather than bumped to v0.7): default client port changed from 8080 to
+5000 (`docker-compose.yml`, `docker-compose.local-build.yml`,
+`.env.example`, README); Docker Hub account confirmed as
+`mybadreligon` and set as the actual compose default rather than a
+placeholder, so a normal Portainer deploy no longer needs
+`DOCKERHUB_USER` set at all.
 
 ---
 
-## v5 — Major feature round: navigation, persistence, database, and a batch of real-data bug fixes
+## v0.5 — Major feature round: navigation, persistence, database, and a batch of real-data bug fixes
 
 *(Reconstructed from several consecutive, closely-related turns — a
 large combined feature request, a follow-up ffb_ids integration ask,
@@ -142,7 +195,7 @@ the app before the next distinct delivery.)*
   time), an hourly background refresh for the last-active session, and
   a stale-data fallback if a live rebuild fails.
 - Integrated the ffb_ids player-ID crosswalk for a real Sleeper↔ESPN ID
-  join (FantasyPros ID-joining came later, in v6, once scraped-data
+  join (FantasyPros ID-joining came later, in v0.6, once scraped-data
   IDs were confirmed not to exist).
 - FAAB bid-percentile suggestions, scoped to tracked leagues only after
   confirming Sleeper's API has no platform-wide league directory.
@@ -160,7 +213,7 @@ the app before the next distinct delivery.)*
 
 ---
 
-## v4 — Portainer/GitHub-ready two-service Docker stack
+## v0.4 — Portainer/GitHub-ready two-service Docker stack
 
 **Commit message:** `feat(deploy): two-service Compose stack (client+server), nginx-served frontend, Portainer deployment docs`
 
@@ -176,17 +229,17 @@ the app before the next distinct delivery.)*
 
 ---
 
-## v3 — Dockerized the backend
+## v0.3 — Dockerized the backend
 
 **Commit message:** `feat(deploy): add server Dockerfile and docker-compose for the backend`
 
 - Added `server/Dockerfile` (non-root user, standard patterns) and an
   initial `docker-compose.yml` covering just the server service, ahead
-  of the full two-service stack added in v4.
+  of the full two-service stack added in v0.4.
 
 ---
 
-## v2 — Hybrid FantasyPros data sourcing (API + scraping)
+## v0.2 — Hybrid FantasyPros data sourcing (API + scraping)
 
 **Commit message:** `feat(fantasypros): add robots.txt-compliant scraper as a second projections source alongside the API`
 
@@ -200,12 +253,13 @@ the app before the next distinct delivery.)*
 
 ---
 
-## v1 — First real, running app (not a sandboxed preview)
+## v0.1 — First real, running app (not a sandboxed preview)
 
 *(Reconstructed from two consecutive turns: the initial full-stack
 build, and an immediate fix for a live 400 error discovered right
-after — grouped together since the second was really "finishing" v1's
-FantasyPros integration to actually work, not a separate feature.)*
+after — grouped together since the second was really "finishing"
+v0.1's FantasyPros integration to actually work, not a separate
+feature.)*
 
 **Commit message:** `feat: initial Express+Vite two-app real deployment with live Sleeper + FantasyPros integration`
 
@@ -226,9 +280,9 @@ FantasyPros integration to actually work, not a separate feature.)*
 
 ## Pre-versioning history (context, not a numbered version)
 
-Before v1, this project went through a functional-specification phase
+Before v0.1, this project went through a functional-specification phase
 and an in-chat prototype phase — a single-file React artifact with
 mock data, then a version with real (but sandbox-limited) Sleeper API
 calls — before "set it up to run for real" produced the first actual
-deployable app (v1, above). Not numbered since nothing from that phase
-persisted into the real app's codebase.
+deployable app (v0.1, above). Not numbered since nothing from that
+phase persisted into the real app's codebase.

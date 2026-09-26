@@ -27,3 +27,22 @@ export function getFaabSuggestions(sessionId, leagueId) {
     body: JSON.stringify({ sessionId, leagueId }),
   });
 }
+
+// Cookies are sent automatically for these same-origin requests in every
+// deployment mode this app ships (Vite dev proxy, nginx production), so
+// no explicit `credentials` option is needed.
+export function login(password) {
+  return request(`/api/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+}
+
+export function logout() {
+  return request(`/api/logout`, { method: "POST" });
+}
+
+export function getAuthStatus() {
+  return request(`/api/auth/status`);
+}

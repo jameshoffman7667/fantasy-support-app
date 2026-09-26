@@ -26,6 +26,11 @@ services:
       # Either way, the real key is never written into this file or
       # baked into the image.
       - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY}
+      # The shared login password (see the in-app login screen). No
+      # username — this is a single-household deployment, not
+      # multi-tenant — and, same as the FantasyPros key above, it's
+      # resolved at deploy time and never baked into the image.
+      - APP_PASSWORD=${APP_PASSWORD}
       - PORT=4000
     ports:
       - "${SERVER_PORT:-4000}:4000"
@@ -49,12 +54,12 @@ services:
       server:
         condition: service_healthy
     ports:
-      - "${CLIENT_PORT:-5000}:80"
+      - "${CLIENT_PORT:-5000}:5000"
     networks:
       # "default" keeps it able to reach `server` (nginx proxies /api/*
       # there internally) exactly as before. "caddy_net" is new: an
       # existing external network your Caddy reverse proxy is already
-      # on, so Caddy can reach this container by name (`client:80`)
+      # on, so Caddy can reach this container by name (`client:5000`)
       # without needing the published ${CLIENT_PORT} at all. `server`
       # deliberately isn't added here — nothing external ever talks to
       # it directly, only `client`'s own nginx does.

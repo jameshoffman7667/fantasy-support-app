@@ -60,6 +60,12 @@ db.exec(`
     week INTEGER,
     updated_at INTEGER
   );
+
+  CREATE TABLE IF NOT EXISTS web_sessions (
+    token TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
 `);
 
 /* ---------------- Generic cache (L1 memory + L2 SQLite) ---------------- */
@@ -148,6 +154,35 @@ export function setLastSession(username, leagueIds, week) {
   db.prepare(
     "INSERT INTO last_session (id, username, league_ids, week, updated_at) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET username = excluded.username, league_ids = excluded.league_ids, week = excluded.week, updated_at = excluded.updated_at"
   ).run(username, JSON.stringify(leagueIds), week, Date.now());
+}
+
+/* ---------------- Web login sessions ---------------- */
+// Opaque random tokens, not signed/JWT cookies, checked against this table
+// on every protected request — the point being that logout (or an admin
+// revoking a session) can actually invalidate a token server-side, which a
+// self-verifying signed cookie can't do without a separate revocation list
+// anyway. 30 days is a soft "stay logged in on your own devices" window.
+const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function createWebSession(token) {
+  const now = Date.now();
+  db.prepare("INSERT INTO web_sessions (token, created_at, expires_at) VALUES (?, ?, ?)").run(token, now, now + SESSION_MS);
+}
+
+export function isValidWebSession(token) {
+  const row = db.prepare("SELECT expires_at FROM web_sessions WHERE token = ?").get(token);
+  if (!row) return false;
+  if (row.expires_at <= Date.now()) {
+    // Opportunistic cleanup — no need for a separate sweep job for what
+    // amounts to a handful of rows per household deployment.
+    db.prepare("DELETE FROM web_sessions WHERE token = ?").run(token);
+    return false;
+  }
+  return true;
+}
+
+export function deleteWebSession(token) {
+  db.prepare("DELETE FROM web_sessions WHERE token = ?").run(token);
 }
 
 export default db;

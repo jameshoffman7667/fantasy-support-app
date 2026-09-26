@@ -4,12 +4,29 @@ import cors from "cors";
 import * as sleeper from "./sleeper.js";
 import { buildFullLeague } from "./buildLeague.js";
 import { getFaabSuggestions } from "./faab.js";
-import { setLastSession, getBuiltLeague, setBuiltLeague } from "./db.js";
+import { setLastSession, getLastSession, getBuiltLeague, setBuiltLeague, isValidWebSession } from "./db.js";
 import { startScheduler } from "./scheduler.js";
+import {
+  isPasswordConfigured,
+  checkPassword,
+  newSessionToken,
+  parseCookies,
+  getSessionToken,
+  buildSetCookieHeader,
+  requireAuth,
+  deleteWebSession,
+} from "./auth.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Manual cookie parsing (see auth.js) — populates req.cookies for every
+// route below, including the login route itself.
+app.use((req, res, next) => {
+  req.cookies = parseCookies(req.headers.cookie);
+  next();
+});
 
 // In-memory session store: connect once, keep the built league list around
 // so refresh can diff against it. Fine for personal use on one machine;
@@ -22,9 +39,49 @@ function newSessionId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+// Deliberately left unprotected — this is what the Docker healthcheck
+// hits, and it carries nothing sensitive.
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, fantasyProsKeySet: Boolean(process.env.FANTASYPROS_API_KEY && process.env.FANTASYPROS_API_KEY !== "your_key_here") });
 });
+
+/* ---------------- Login / logout / auth status ---------------- */
+app.post("/api/login", (req, res) => {
+  const { password } = req.body || {};
+  if (!isPasswordConfigured()) {
+    return res.status(500).json({ error: "APP_PASSWORD isn't set on the server — nobody can log in until it is. See README." });
+  }
+  if (!checkPassword(password)) {
+    return res.status(401).json({ error: "Wrong password." });
+  }
+  const token = newSessionToken();
+  res.setHeader("Set-Cookie", buildSetCookieHeader(req, token));
+  res.json({ ok: true });
+});
+
+app.post("/api/logout", (req, res) => {
+  const token = getSessionToken(req);
+  if (token) deleteWebSession(token);
+  res.setHeader("Set-Cookie", buildSetCookieHeader(req, null, { clear: true }));
+  res.json({ ok: true });
+});
+
+// Also returns the server-side last-session record when authenticated —
+// this is what replaces localStorage for cross-device persistence: any
+// device that logs in with the shared password picks up the same
+// last-tracked username/leagues/week rather than starting from scratch.
+app.get("/api/auth/status", (req, res) => {
+  const token = getSessionToken(req);
+  const authenticated = Boolean(token && isValidWebSession(token));
+  if (!authenticated) return res.json({ authenticated: false });
+  const last = getLastSession();
+  res.json({ authenticated: true, lastSession: last });
+});
+
+// Everything below this point requires a valid session cookie.
+app.use("/api/connect", requireAuth);
+app.use("/api/leagues", requireAuth);
+app.use("/api/faab", requireAuth);
 
 // Step 1: username -> Sleeper user + their leagues for the current season.
 app.get("/api/connect", async (req, res) => {
@@ -135,6 +192,9 @@ app.listen(PORT, () => {
   console.log(`Fantasy manager server listening on http://localhost:${PORT}`);
   if (!process.env.FANTASYPROS_API_KEY || process.env.FANTASYPROS_API_KEY === "your_key_here") {
     console.warn("⚠️  FANTASYPROS_API_KEY is not set — copy server/.env.example to server/.env and add your key.");
+  }
+  if (!isPasswordConfigured()) {
+    console.warn("⚠️  APP_PASSWORD is not set — nobody will be able to log in until it is. See README.");
   }
   startScheduler();
 });
