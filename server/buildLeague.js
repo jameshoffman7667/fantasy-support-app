@@ -6,6 +6,7 @@ import * as espn from "./espnProjections.js";
 import { lookupBySleeperId } from "./playerIdMap.js";
 import { buildFpIndex, lookupFpMulti } from "./matching.js";
 import { checkAndRecordInjury, clearInjurySeen, getInjurySeenForLeague } from "./db.js";
+import { getSnapShareForWeek, getUsageStatsForWeek, lookupUsage } from "./nflverseUsage.js";
 
 const FLEX_ELIGIBLE = { FLEX: ["RB", "WR", "TE"], SUPERFLEX: ["QB", "RB", "WR", "TE"] };
 const OUT_LIKE = ["Out", "Doubtful", "IR", "Suspended", "NA"];
@@ -137,13 +138,21 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const leagueId = leagueSummary.league_id;
   const season = leagueSummary.season;
 
-  const [league, rosters, leagueUsers, sleeperPlayers, weekSchedule, matchups] = await Promise.all([
+  // Usage context (snap share/targets/carries) is naturally a week behind —
+  // it's how much a player played LAST week, used to sanity-check THIS
+  // week's projection, not a projection itself. Clamped to 1 so week 1
+  // doesn't request week 0.
+  const usageWeek = Math.max(1, week - 1);
+
+  const [league, rosters, leagueUsers, sleeperPlayers, weekSchedule, matchups, snapShareMap, usageStatsMap] = await Promise.all([
     sleeper.getLeague(leagueId),
     sleeper.getRosters(leagueId),
     sleeper.getLeagueUsers(leagueId),
     sleeper.getPlayers(),
     schedule.getWeekSchedule(season, week).catch(() => null), // unofficial endpoint — degrade to "kickoff unknown" rather than fail the whole build
     sleeper.getMatchups(leagueId, week).catch(() => null), // used for "lock in actual score once played" — degrade to projections-only if unavailable
+    getSnapShareForWeek(season, usageWeek),
+    getUsageStatsForWeek(season, usageWeek),
   ]);
 
   const scoring = fpScoringParam(league.scoring_settings);
@@ -298,6 +307,10 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null,
       irEligible: meta?.injury_status === "IR" || meta?.injury_status === "PUP",
       note: meta?.injury_status && meta?.injury_body_part ? `${meta.injury_status} — ${meta.injury_body_part}` : undefined,
+      // Supplemental context from nflverse (last week's usage), not a
+      // projection input — null fields mean no match/no data this week,
+      // not zero usage.
+      usage: lookupUsage(snapShareMap, usageStatsMap, name),
     };
   };
 
@@ -419,6 +432,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     projSource: fa.projSource,
     ecr: fa.ecr,
     trending: true,
+    usage: lookupUsage(snapShareMap, usageStatsMap, fa.name),
   }));
 
   // --- Trade Radar: every team's strengths/weaknesses, suggestions grouped by opponent ---
@@ -506,6 +520,69 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     // Trade Radar is a bonus heuristic — fail soft, not a build failure.
   }
 
+  // --- Trade Finder: concrete 1-for-1 player swaps against each rival ---
+  // A real swap suggestion, not a positional heuristic: for each of your
+  // CURRENT STARTERS, look at every rival roster for a same-position
+  // player whose ECR is close enough to yours that they'd plausibly say
+  // yes (the FAIRNESS_ECR_TOLERANCE below is what filters out "my worst
+  // bench guy for their All-Pro"-style lopsided offers), then only
+  // resolve full point projections for that short, promising list — not
+  // every player on every roster — to stay within FantasyPros' rate
+  // limit. Ranked by actual projected-points gain to your starting lineup.
+  const tradeFinder = [];
+  try {
+    const posGroups = ["QB", "RB", "WR", "TE"];
+    const FAIRNESS_ECR_TOLERANCE = 20;
+    const myStarterPlayers = starters.filter((s) => s.player && posGroups.includes(s.player.pos)).map((s) => s.player);
+
+    const quickEval = async (id) => {
+      const meta = sleeperPlayers[id];
+      if (!meta || !posGroups.includes(meta.position)) return null;
+      const name = playerName(meta, id);
+      const fpPos = toFpPosition(meta.position);
+      const crosswalk = await lookupBySleeperId(id).catch(() => null);
+      const ecrRec = lookupFpMulti(ecrIndex, crosswalk?.name ? [name, crosswalk.name] : [name], fpPos);
+      const ecr = ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null;
+      if (ecr == null || Number.isNaN(ecr)) return null;
+      return { id, name, pos: meta.position, ecr, meta, crosswalk };
+    };
+
+    if (myStarterPlayers.length) {
+      for (const otherRoster of rosters) {
+        if (otherRoster.roster_id === myRoster.roster_id) continue;
+        const owner = leagueUsers.find((u) => u.user_id === otherRoster.owner_id);
+        const theirLabel = otherRoster.metadata?.team_name || owner?.metadata?.team_name || owner?.display_name || `Roster #${otherRoster.roster_id}`;
+        const candidates = (await Promise.all((otherRoster.players || []).map(quickEval))).filter(Boolean);
+        const swapsForTeam = [];
+
+        for (const give of myStarterPlayers) {
+          if (give.ecr == null || give.proj == null) continue;
+          const near = candidates
+            .filter((c) => c.pos === give.pos && c.ecr < give.ecr && give.ecr - c.ecr <= FAIRNESS_ECR_TOLERANCE)
+            .sort((a, b) => a.ecr - b.ecr)
+            .slice(0, 3); // only the closest few — bounds the extra projection lookups per rival
+          for (const cand of near) {
+            const { proj: candProj } = await resolveProjection(cand.id, cand.name, toFpPosition(cand.pos), cand.crosswalk?.name, cand.meta?.team, cand.crosswalk?.fantasyprosId);
+            if (candProj == null) continue;
+            const gain = candProj - give.proj;
+            if (gain <= 0) continue;
+            swapsForTeam.push({
+              theirTeam: theirLabel,
+              give: { name: give.name, pos: give.pos, proj: give.proj, ecr: give.ecr },
+              get: { name: cand.name, pos: cand.pos, proj: candProj, ecr: cand.ecr },
+              gain: Math.round(gain * 10) / 10,
+            });
+          }
+        }
+        swapsForTeam.sort((a, b) => b.gain - a.gain);
+        tradeFinder.push(...swapsForTeam.slice(0, 2)); // cap per rival so one team doesn't crowd out the rest
+      }
+      tradeFinder.sort((a, b) => b.gain - a.gain);
+    }
+  } catch (err) {
+    console.warn(`[buildLeague] Trade Finder failed for league ${leagueId}, continuing without it: ${err.message}`);
+  }
+
   const built = {
     id: leagueId,
     name: league.name,
@@ -524,6 +601,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     freeAgents,
     tradeSuggestions,
     leagueTeams,
+    tradeFinder: tradeFinder.slice(0, 10),
   };
 
   const unmatchedStarters = starters.filter((s) => s.player && s.player.proj == null).map((s) => s.player.name);

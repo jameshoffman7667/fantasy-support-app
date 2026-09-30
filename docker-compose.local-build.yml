@@ -21,6 +21,10 @@ services:
       # docker-compose.yml for the full explanation.
       - APP_PASSWORD=${APP_PASSWORD}
       - PORT=4000
+      # Web Push (v2, pre-kickoff alerts) — optional; see docker-compose.yml.
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-}
     ports:
       - "${SERVER_PORT:-4000}:4000"
     volumes:

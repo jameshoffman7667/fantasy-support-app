@@ -34,6 +34,37 @@ delivered zip.
 
 ---
 
+## v2 — Season Outlook, real Trade Finder, nflverse usage data, pre-kickoff push alerts
+
+**Commit (short):** `v2: feat: season odds, trade finder, usage, push`
+
+**Commit (extended):**
+v2 integrates everything queued in the pending-changes log since v1. A
+new Season Outlook tab runs a 3,000-trial Monte Carlo simulation
+(`server/simulate.js`) using each team's season-to-date scoring average
+against the real remaining Sleeper schedule to produce playoff and
+championship odds, avoiding a full per-player projection re-run that
+would risk FantasyPros' rate limit. The Trade tab gains a real Trade
+Finder: 1-for-1 swaps against every rival roster, filtered to
+same-position players within a 20-rank ECR "fairness" tolerance who
+project more points, ranked by gain (`buildLeague.js`). Roster/Waiver
+cards now show snap%/targets/carries badges from nflverse's free public
+data (`server/nflverseUsage.js`), name-matched for the prior week.
+
+Pre-kickoff push alerts ship via real Web Push (VAPID, `server/push.js`,
+a new `push_subscriptions` table, service-worker handlers, a dashboard
+toggle): the hourly scheduler now fires a notification when a starter
+is designated Out/IR/PUP within ~26 hours of kickoff, or a bench option
+clearly outscores a starter, deduplicated per condition.
+
+Deliberate, documented scope reduction from the original "Android APK
+with push notifications" idea: Web Push through the existing PWA, not a
+native app with Firebase Cloud Messaging (packaging, signing, Play
+Store review). `ANDROID_APK.md`'s Trusted Web Activity path to an
+installable APK is unaffected and works with these alerts unchanged.
+
+---
+
 ## v1 — Real in-app login, replacing localStorage with server-side persistence (first official release)
 
 **Commit (short):** `v1: feat(auth): shared-password login + port 5000`

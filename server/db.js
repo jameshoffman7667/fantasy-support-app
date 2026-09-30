@@ -66,6 +66,12 @@ db.exec(`
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    subscription_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 /* ---------------- Generic cache (L1 memory + L2 SQLite) ---------------- */
@@ -183,6 +189,19 @@ export function isValidWebSession(token) {
 
 export function deleteWebSession(token) {
   db.prepare("DELETE FROM web_sessions WHERE token = ?").run(token);
+}
+
+/* ---------------- Web Push subscriptions (for pre-kickoff alerts) ---------------- */
+export function addPushSubscription(endpoint, subscriptionJson) {
+  db.prepare(
+    "INSERT INTO push_subscriptions (endpoint, subscription_json, created_at) VALUES (?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET subscription_json = excluded.subscription_json"
+  ).run(endpoint, subscriptionJson, Date.now());
+}
+export function getAllPushSubscriptions() {
+  return db.prepare("SELECT endpoint, subscription_json FROM push_subscriptions").all();
+}
+export function deletePushSubscription(endpoint) {
+  db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").run(endpoint);
 }
 
 export default db;

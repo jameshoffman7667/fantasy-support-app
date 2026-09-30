@@ -32,6 +32,12 @@ services:
       # resolved at deploy time and never baked into the image.
       - APP_PASSWORD=${APP_PASSWORD}
       - PORT=4000
+      # Web Push (v2, pre-kickoff alerts) — optional; leave unset in your
+      # .env/Portainer vars and the server just runs with push disabled
+      # (logged as a startup warning, not an error).
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-}
     ports:
       - "${SERVER_PORT:-4000}:4000"
     volumes:

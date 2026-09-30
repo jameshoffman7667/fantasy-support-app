@@ -6,6 +6,8 @@ import { buildFullLeague } from "./buildLeague.js";
 import { getFaabSuggestions } from "./faab.js";
 import { setLastSession, getLastSession, getBuiltLeague, setBuiltLeague, isValidWebSession } from "./db.js";
 import { startScheduler } from "./scheduler.js";
+import { simulateSeason } from "./simulate.js";
+import { isPushConfigured, getPublicKey, saveSubscription, removeSubscription } from "./push.js";
 import {
   isPasswordConfigured,
   checkPassword,
@@ -82,6 +84,8 @@ app.get("/api/auth/status", (req, res) => {
 app.use("/api/connect", requireAuth);
 app.use("/api/leagues", requireAuth);
 app.use("/api/faab", requireAuth);
+app.use("/api/season-odds", requireAuth);
+app.use("/api/push", requireAuth);
 
 // Step 1: username -> Sleeper user + their leagues for the current season.
 app.get("/api/connect", async (req, res) => {
@@ -187,6 +191,49 @@ app.post("/api/faab", async (req, res) => {
   }
 });
 
+// Rest-of-season playoff/championship odds via Monte Carlo simulation
+// (see simulate.js for the methodology and its documented limitations).
+app.post("/api/season-odds", async (req, res) => {
+  const { sessionId, leagueId } = req.body || {};
+  const session = sessions.get(sessionId);
+  if (!session) return res.status(400).json({ error: "Unknown session — connect again." });
+  try {
+    const league = await sleeper.getLeague(leagueId);
+    const rosters = await sleeper.getRosters(leagueId);
+    const leagueUsers = await sleeper.getLeagueUsers(leagueId);
+    const odds = await simulateSeason(rosters, league, session.week, sleeper.getMatchups, leagueId);
+    const withLabels = odds.map((o) => {
+      const roster = rosters.find((r) => r.roster_id === o.rosterId);
+      const owner = leagueUsers.find((u) => u.user_id === roster?.owner_id);
+      const isMe = roster?.owner_id === session.userId;
+      const label = isMe ? "Your Team" : roster?.metadata?.team_name || owner?.metadata?.team_name || owner?.display_name || `Roster #${o.rosterId}`;
+      return { ...o, label, isMe };
+    });
+    withLabels.sort((a, b) => b.championshipPct - a.championshipPct);
+    res.json({ odds: withLabels });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't compute season odds." });
+  }
+});
+
+/* ---------------- Web Push subscription management (pre-kickoff alerts) ---------------- */
+app.get("/api/push/vapid-public-key", (req, res) => {
+  res.json({ publicKey: getPublicKey(), configured: isPushConfigured() });
+});
+
+app.post("/api/push/subscribe", (req, res) => {
+  const { subscription } = req.body || {};
+  if (!subscription?.endpoint) return res.status(400).json({ error: "A valid push subscription is required." });
+  saveSubscription(subscription);
+  res.json({ ok: true });
+});
+
+app.post("/api/push/unsubscribe", (req, res) => {
+  const { endpoint } = req.body || {};
+  if (endpoint) removeSubscription(endpoint);
+  res.json({ ok: true });
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Fantasy manager server listening on http://localhost:${PORT}`);
@@ -195,6 +242,9 @@ app.listen(PORT, () => {
   }
   if (!isPasswordConfigured()) {
     console.warn("⚠️  APP_PASSWORD is not set — nobody will be able to log in until it is. See README.");
+  }
+  if (!isPushConfigured()) {
+    console.warn("⚠️  VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY are not set — pre-kickoff push alerts are disabled until they are. See README.");
   }
   startScheduler();
 });

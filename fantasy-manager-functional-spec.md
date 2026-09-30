@@ -68,6 +68,7 @@ redeploys, not just in-container restarts.
 | ESPN scoreboard (unofficial) | Kickoff times per game, which teams are playing (for bye-week detection) | No auth needed; unofficial/undocumented, could change without notice |
 | ESPN per-athlete projections (unofficial) | Fallback projection source when FantasyPros has nothing for a player | Used only as a gap-fill, not a primary source |
 | ffb_ids crosswalk (community CSV) | Cross-platform player IDs (Sleeper/ESPN/FantasyPros/Yahoo/CBS/NFL.com) | Gives a real ID join for ESPN lookups; FantasyPros matching is still name-based since no confirmed ID field exists in its responses to join against |
+| nflverse public CSV releases (v2) | Snap share (`snapPct`) and weekly usage stats (`targets`, `carries`) for the most recently completed week | Community data, name-matched (not ID-joined); column names discovered/logged defensively at runtime rather than hardcoded, since a live response wasn't confirmed while building this |
 
 **Refresh cadence (as implemented):**
 - Client-side automatic refresh every 30 minutes while the app is open in a tab.
@@ -118,9 +119,16 @@ Your Leagues (Dashboard)
      ├─ Roster Optimization
      ├─ Lineup Advice
      ├─ Waiver Management
-     ├─ Trade Radar
-     └─ Injury Watch
+     ├─ Trade Radar (incl. Trade Finder — real 1-for-1 swaps)
+     ├─ Injury Watch
+     └─ Season Outlook (v2 — playoff/championship odds)
 ```
+
+Season Outlook is fetched on demand when opened (like the FAAB panel),
+not derived from the main league build, so it has no pass/fail status
+indicator on the Dashboard or League Overview screens the way the other
+five tabs do — it appears there as a separate "Outlook" button/card
+instead of a colored status badge.
 
 - Tapping a **league name** → League Overview page.
 - Tapping a **status indicator** next to a league → deep-links directly into that sub-tab for that league.
@@ -160,7 +168,7 @@ Reached by tapping the league name. Shows:
 
 **Purpose:** Verify the *currently set* starting lineup is structurally sound.
 
-**Displays:** Starting Lineup, Bench, IR, and Taxi Squad as separate sections (IR and Taxi only render if non-empty — unlike Bench, there's no "empty slot" concept exposed for them by Sleeper's API). Every player card shows real kickoff time (or "On bye" / "Kickoff time unavailable").
+**Displays:** Starting Lineup, Bench, IR, and Taxi Squad as separate sections (IR and Taxi only render if non-empty — unlike Bench, there's no "empty slot" concept exposed for them by Sleeper's API). Every player card shows real kickoff time (or "On bye" / "Kickoff time unavailable"), plus a usage badge (v2 — snap %/targets/carries from nflverse) when that player was matched by name for the prior completed week.
 
 **Major variance (🔴):**
 - Empty starting roster slot.
@@ -198,7 +206,7 @@ The optimal lineup is computed by a **greedy slot-filling algorithm** (strict po
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
 
-**Displays:** Available players with projection (with `FP`/`E` source tag), ECR rank, and trending status. Filtered against **every roster in the league**, not just the user's own, and against each league's actual starting positions — a league with no K or DEF/DST starting slot never shows kicker/defense waiver candidates, since they'd be irrelevant noise.
+**Displays:** Available players with projection (with `FP`/`E` source tag), ECR rank, trending status, and a usage badge (v2 — see 8.1) when matched. Filtered against **every roster in the league**, not just the user's own, and against each league's actual starting positions — a league with no K or DEF/DST starting slot never shows kicker/defense waiver candidates, since they'd be irrelevant noise.
 
 **Variance logic** — unchanged from original design:
 - 🟢 Green: neither trending nor rank-worthy.
@@ -227,6 +235,16 @@ This is a **heuristic based on positional depth**, not a dedicated trade-value m
 
 ---
 
+### 8.4a Trade Finder — real 1-for-1 swaps (v2)
+
+**Purpose:** Unlike Trade Radar above (position-level strength/weakness), Trade Finder proposes concrete, named-player swaps.
+
+**Methodology:** For each player in the user's starting lineup, scans every rival roster for same-position players whose FantasyPros ECR is within a **20-rank fairness tolerance** of the user's player (a proxy for "close enough a rival could plausibly accept," not a negotiated trade-value model) and who project **more points** than the player being given up. To bound FantasyPros/ESPN API call volume, only the 3 closest-ECR candidates per position per rival are resolved to full point projections. Results are ranked by projected-points gain to the user's starting lineup, capped at 10 shown.
+
+**Display:** "Give [player] · Get [player] from [rival team]" cards with the projected point gain, shown above the existing Trade Radar section on the same tab.
+
+---
+
 ### 8.5 Injury Watch
 
 **Purpose:** Track every rostered player's injury/status designation, independent of whether they're currently starting.
@@ -237,6 +255,34 @@ This is a **heuristic based on positional depth**, not a dedicated trade-value m
 - A player's tracking record clears once they're healthy again, so a *future* re-injury with the same status (e.g., "Questionable" again, weeks later) is correctly treated as new rather than still "seen" from months earlier.
 
 This state lives in the server's SQLite database, not an in-memory diff — it survives restarts.
+
+---
+
+### 8.6 Season Outlook (v2)
+
+**Purpose:** Rest-of-season playoff and championship odds per team, so the user can see where a league actually stands beyond the current week's record.
+
+**Methodology:** A Monte Carlo simulation (3,000 trials per league, computed fresh on demand — not cached, not part of the main league build). Each team's per-game scoring mean is its **season-to-date scoring average** (total points for ÷ games played), not a full per-player rest-of-season projection re-run — deliberately, to avoid resolving FantasyPros/ESPN projections for every player on every roster in the league (a real rate-limit risk) for a number that is fundamentally a rough estimate either way. Each simulated week draws a Gaussian-distributed score per team (mean = that team's average, a fixed coefficient of variation) against the **real remaining Sleeper schedule** for that league, standings are computed from simulated wins, and the top N teams (from `settings.playoff_teams`, default 6) enter a seeded single-elimination bracket with byes (from `settings.playoff_week_start`, default week 15) to determine a simulated champion.
+
+**Display:** Every team's current record, simulated average projected wins, playoff-odds percentage, and championship-odds percentage, sorted by championship odds — with the user's own team visually distinguished.
+
+**Caveat:** `settings.playoff_teams`/`settings.playoff_week_start` field names and the generic bye-seeded bracket logic are built from Sleeper's documented schema, not confirmed against a live response in this environment; sane defaults are used if either field is missing.
+
+---
+
+## 8b. Pre-Kickoff Push Alerts (v2)
+
+**Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
+
+**Mechanism:** Real Web Push (VAPID keypair, `web-push` npm package server-side; a `push`/`notificationclick` event pair in the existing PWA service worker client-side). The dashboard's "Enable alerts" toggle requests browser notification permission, subscribes via the Push API, and registers the subscription with the server (`push_subscriptions` SQLite table). The existing hourly background scheduler additionally scans every tracked league on each refresh and sends a push to all subscribed devices when either:
+- a starter carries an "Out"/"IR"/"PUP" designation within roughly 26 hours of their kickoff, or
+- a bench/waiver option projects at least 3 points higher than a starter in the same slot, and that slot hasn't locked yet.
+
+Each alert is deduplicated (won't re-fire for the same player+condition) using the existing generic cache table as dedup storage.
+
+**Scoping note:** this satisfies the underlying need ("get notified about lineup problems without opening the app") via the app's existing installable-PWA path, not a native Android app using Firebase Cloud Messaging. A true native wrapper (packaging, signing, Play Store review) is materially more work and wasn't attempted this round — see `ANDROID_APK.md` for the (separate, already-documented) path to wrapping this PWA as a side-loadable Android APK via Trusted Web Activity, inside which these push alerts continue to work unchanged.
+
+**Caveat:** Sleeper's `injury_status` field is the official injury *report*, not a live gameday-inactive feed — the closest available proxy for "ruled out," not a guarantee.
 
 ---
 
@@ -264,6 +310,11 @@ Collected here since they cut across multiple sections:
 - **FantasyPros' free/personal API tier is rate-limited** (~50 requests/day) — mitigated by the SQLite-backed cache, but a real constraint if tracking many leagues with frequent manual refreshes.
 - **Sleeper-connection session state is in-memory per server process**; a restart forgets active Sleeper sessions (the client's auto-reconnect, now driven by server-side last-session data, papers over this from the user's side). The SQLite-backed pieces (cache, injury history, last-session record, and now login sessions) do survive restarts.
 - **The internal client port changed from 80 to 5000** in this version, to match the externally-published port — a minor operational detail (nginx now listens on 5000 inside the container), not a behavior change, but relevant if you have an existing Caddyfile or firewall rule referencing `client:80` directly.
+- **Season Outlook (v2) uses season-to-date scoring averages, not per-player rest-of-season projections**, as each team's simulated mean — a deliberate accuracy/API-cost tradeoff, not an oversight (see Section 8.6).
+- **Trade Finder (v2)'s 20-rank ECR "fairness tolerance" is a heuristic**, not a modeled trade-value negotiation — it filters out obviously lopsided offers, it doesn't guarantee a rival would accept what passes the filter.
+- **nflverse usage data (v2) is name-matched, not ID-joined**, and its exact CSV column names were not confirmed against a live response while building this — column names are discovered and logged at runtime instead of hardcoded blind.
+- **Push alerts (v2) require a secure context (HTTPS or localhost)** — the Push API is browser-enforced this way; this is already satisfied by the documented Caddy reverse-proxy deployment path.
+- **Push alerts are Web Push through the PWA, not a native Android app with Firebase Cloud Messaging** — see Section 8b's scoping note. `ANDROID_APK.md`'s Trusted Web Activity path remains the documented option for an installable Android app; push alerts work inside that wrapper too.
 
 ---
 
@@ -296,3 +347,8 @@ Collected here since they cut across multiple sections:
 18. **App-level login (v1):** a single shared password, opaque server-side session tokens in SQLite (not signed/JWT cookies), chosen specifically so logout can revoke a session server-side rather than merely forgetting it client-side. Timing-safe password comparison via fixed-length SHA-256 digests rather than comparing raw strings or padded buffers.
 19. **Cross-device persistence (v1):** the previous per-browser `localStorage` record (username + tracked leagues) was replaced with a server-side `last_session` record tied to login, so it now follows the person across devices instead of the browser.
 20. **Internal client port (v1):** changed from 80 to 5000 to match the externally-published port, for consistency rather than any functional need.
+21. **Season Outlook methodology (v2):** season-to-date scoring average as each team's simulated per-game mean, chosen specifically to avoid re-resolving FantasyPros/ESPN projections for every player on every roster (a real free-tier rate-limit risk) for a number that is a rough estimate either way.
+22. **Trade Finder scope (v2):** built as a genuine addition alongside Trade Radar rather than a replacement for it, since they answer different questions (named-player swap opportunities vs. team-level positional strength/weakness).
+23. **Usage-data source (v2):** nflverse's free public CSV releases chosen over a paid usage-stats API, matched by normalized player name (no confirmed shared ID with Sleeper/FantasyPros for this specific data source).
+24. **"Android APK with push notifications" idea (v2):** implemented as real Web Push through the existing installable PWA rather than a native Android app with Firebase Cloud Messaging — a deliberate scope reduction given the added complexity (packaging, code signing, Play Store review) of a true native wrapper, documented explicitly rather than silently substituted. The previously-documented Trusted Web Activity path (`ANDROID_APK.md`) for wrapping this PWA as an Android APK is unaffected and compatible with these push alerts.
+25. **Pre-kickoff alert triggers (v2):** an injury-status change to Out/IR/PUP within ~26 hours of kickoff, or a bench option projecting 3+ points above a starter in the same slot — chosen as concrete, checkable conditions rather than a vaguer "something changed" alert, using Sleeper's official injury-report field as the closest available proxy for "ruled out" (not a live gameday-inactive feed).

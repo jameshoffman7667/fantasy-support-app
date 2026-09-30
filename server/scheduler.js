@@ -1,8 +1,65 @@
 import * as sleeper from "./sleeper.js";
 import { buildFullLeague } from "./buildLeague.js";
-import { getLastSession, setBuiltLeague } from "./db.js";
+import { getLastSession, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
+import { sendPushToAll, isPushConfigured } from "./push.js";
 
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // hourly, per the request this exists to satisfy
+
+const ALERT_DEDUP_TTL_MS = 9 * 24 * 60 * 60 * 1000; // outlives a week so the same alert doesn't repeat next cycle
+const ALERT_LOOKAHEAD_MS = 26 * 60 * 60 * 1000; // only alert about a kickoff within about a day
+const ALERT_DELTA_THRESHOLD = 3; // points — "clearly better," not a rounding-noise swap
+
+function alreadyAlerted(key) {
+  return cacheGet(`alertsent:${key}`) !== null;
+}
+function markAlerted(key) {
+  cacheSet(`alertsent:${key}`, true, ALERT_DEDUP_TTL_MS);
+}
+
+/**
+ * Pre-kickoff alerts: push notifications for (1) a starter carrying a
+ * real injury designation ahead of their kickoff, or (2) a bench option
+ * that clearly outprojects a current starter — the same two conditions
+ * Roster Optimization / Lineup Advice already surface in the UI, just
+ * pushed proactively before the lock, not only when someone opens the app.
+ *
+ * Sleeper's injury_status is the official injury report, updated on its
+ * own schedule — not a live gameday-inactive feed. A true last-minute
+ * "ruled inactive" designation (~90 minutes before kickoff) isn't
+ * confirmed available from any source this app already uses, so "Out" /
+ * "IR" / "PUP" on the injury report is the closest available proxy, not
+ * a guarantee of catching every inactive in time.
+ */
+async function scanForAlerts(built) {
+  if (!isPushConfigured()) return;
+  const now = Date.now();
+  const dueSoon = (kickoff) => kickoff != null && kickoff > now && kickoff - now < ALERT_LOOKAHEAD_MS;
+
+  for (const s of built.starters || []) {
+    const p = s.player;
+    if (!p || !["Out", "IR", "PUP"].includes(p.status) || !dueSoon(p.kickoff)) continue;
+    const key = `${built.id}:${built.week}:${p.name}:status`;
+    if (alreadyAlerted(key)) continue;
+    await sendPushToAll({
+      title: `${built.name}: ${p.name} is ${p.status}`,
+      body: `${p.name} (${s.slot}) is listed ${p.status} this week — check your lineup before kickoff.`,
+    });
+    markAlerted(key);
+  }
+
+  for (const c of built.lineupComparison || []) {
+    if (!c.changed || c.locked || !c.optimal || c.delta < ALERT_DELTA_THRESHOLD) continue;
+    const currentKickoff = (built.starters || []).find((s) => s.slot === c.slot)?.player?.kickoff;
+    if (!dueSoon(currentKickoff)) continue;
+    const key = `${built.id}:${built.week}:${c.slot}:swap:${c.optimal.name}`;
+    if (alreadyAlerted(key)) continue;
+    await sendPushToAll({
+      title: `${built.name}: better option at ${c.slot}`,
+      body: `${c.optimal.name} projects ${c.delta.toFixed(1)} pts higher than ${c.current?.name || "your current starter"} at ${c.slot}.`,
+    });
+    markAlerted(key);
+  }
+}
 
 /**
  * Refreshes whichever leagues were last actively tracked (recorded via
@@ -30,6 +87,7 @@ async function refreshLastSession() {
       try {
         const built = await buildFullLeague(user.user_id, leagueSummary, week, trending, []);
         setBuiltLeague(session.username, leagueSummary.league_id, built);
+        await scanForAlerts(built).catch((err) => console.warn(`[scheduler] Alert scan failed for league ${leagueSummary.league_id}: ${err.message}`));
       } catch (err) {
         console.warn(`[scheduler] Background refresh failed for league ${leagueSummary.league_id}: ${err.message}`);
       }

@@ -1,6 +1,6 @@
 # Fantasy Manager — real Sleeper + FantasyPros app
 
-*Current version: v1 — see [CHANGELOG.md](./CHANGELOG.md) for what
+*Current version: v2 — see [CHANGELOG.md](./CHANGELOG.md) for what
 changed in this and every prior version.*
 
 A running (not preview-sandboxed) multi-league fantasy manager, packaged
@@ -16,6 +16,55 @@ Deployable three ways: Portainer from a GitHub repo (no terminal needed
 once it's pushed), plain `docker compose` locally, or running each side
 with Node/Vite directly for active development. All three are covered
 below.
+
+## What's new in v2 (Season Outlook, real Trade Finder, usage data, push alerts)
+
+- **Season Outlook tab**: rest-of-season Monte Carlo simulation (3,000
+  trials/league) producing playoff odds and championship odds per team,
+  using each team's season-to-date scoring average against the real
+  remaining Sleeper schedule. See [`server/simulate.js`](./server/simulate.js)
+  for the exact methodology and its documented limitations — it's a
+  defensible proxy, not full per-player rest-of-season projections (that
+  would mean resolving FantasyPros/ESPN projections for every player on
+  every roster in the league, which risks the free-tier rate limit for a
+  number that's a rough estimate either way).
+- **Trade Finder reworked to real player-level swaps.** The old Trade
+  Radar (position-level strength/weakness) is still there, but there's
+  now a genuine 1-for-1 swap finder: it scans every rival roster for
+  same-position players whose ECR is within 20 ranks of a player in your
+  starting lineup (a fairness proxy — "close enough a rival might accept
+  it," not a trade-value model) and who project more points than what
+  you'd give up, ranked by projected gain. Bounded to the 3 closest ECR
+  candidates per position per rival to control FantasyPros API call
+  volume.
+- **Usage-data badges** (snap %, targets, carries) on Roster and Waiver
+  player cards, sourced from nflverse's free public CSV releases (not
+  independently verified against a live response in this environment —
+  see [`server/nflverseUsage.js`](./server/nflverseUsage.js) for the
+  column-name discovery/logging this relies on). Shown only when a
+  player's usage data actually matched by name; no placeholder otherwise.
+- **Pre-kickoff push alerts**, via real Web Push (VAPID) through the
+  existing PWA service worker — not a native app. An "Enable alerts"
+  toggle on the dashboard requests browser notification permission and
+  subscribes; the background scheduler then pushes a notification when
+  a starter picks up an Out/IR/PUP designation within ~26 hours of
+  kickoff, or when a bench/waiver option projects at least 3 points
+  higher than a starter at the same slot, deduplicated so you're not
+  re-alerted for the same thing. Requires `VAPID_PUBLIC_KEY`/
+  `VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` to be set (see `.env.example`) —
+  without them the app runs fine, alerts are just disabled.
+  - **Scoping note on the original "Android APK with push notifications"
+    idea**: this round delivers that as Web Push through the app's
+    existing installable-PWA path, not a native Android app with Firebase
+    Cloud Messaging. A true native wrapper (packaging, code signing, Play
+    Store review) is a materially bigger, separate undertaking and wasn't
+    attempted here. If you do wrap this app as an Android APK via the TWA
+    route in [`ANDROID_APK.md`](./ANDROID_APK.md), these push alerts keep
+    working inside that wrapper too, since it's the same underlying PWA.
+  - Sleeper's `injury_status` field is the official injury *report*, not
+    a live gameday-inactive feed — it's the closest available signal for
+    "ruled out," not a guarantee a player won't play or that no one else
+    got ruled out that Sleeper hasn't reflected yet.
 
 ## What's new in this round (projection pipeline fix + Docker Hub packaging)
 
@@ -574,6 +623,34 @@ is correctly treated as new. This, the generic response cache, and the
 hourly background refresh (`server/scheduler.js`) all live in the same
 SQLite file, mounted as a named Docker volume so it survives redeploys,
 not just restarts.
+
+### Trade Finder, Season Outlook, usage data, and push alerts (v2)
+
+- **Trade Finder** (the "Trade Finder — 1-for-1 Swaps" section on the
+  Trade tab) is separate from the Trade Radar above — it deals in actual
+  named players, not position-level strength/weakness. The 20-rank ECR
+  "fairness tolerance" is a heuristic, not a negotiated trade-value
+  model; it exists to filter out offers no rival would plausibly accept
+  ("my worst bench guy for their All-Pro"), not to guarantee a rival
+  *will* accept what passes the filter.
+- **Season Outlook**'s odds are recomputed fresh on every visit to the
+  tab (not cached, not part of the main league build), so opening it
+  costs one extra request plus 3,000 simulated trials server-side —
+  noticeable but not slow. It reads `settings.playoff_teams` /
+  `settings.playoff_week_start` from Sleeper's league object and falls
+  back to 6 teams / week 15 if either is missing, since these exact
+  field names weren't confirmed against a live Sleeper response in this
+  environment.
+- **Usage badges** only appear when nflverse's data matched a player by
+  normalized name for the *previous* completed week (there's no
+  in-progress-week usage data to pull yet) — a badge's absence means "no
+  match," not "zero usage."
+- **Push alerts require HTTPS in production** (the Push API is a
+  secure-context feature) — this already works with the Caddy reverse
+  proxy setup described later in this README, and `localhost` is exempt
+  during local dev. If "Enable alerts" fails with a permission or
+  registration error while testing over plain HTTP on a LAN IP, that's
+  the browser enforcing this, not a bug in this app.
 
 ### Other things to know
 

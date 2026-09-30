@@ -18,6 +18,9 @@ import {
   Settings2,
   DollarSign,
   Lock,
+  Trophy,
+  Bell,
+  BellOff,
 } from "lucide-react";
 import * as api from "./api.js";
 
@@ -84,8 +87,8 @@ function computeRoster(league) {
 
   const benchRows = league.bench.map((p) => {
     if (!p) return { slot: "BN", label: "(empty)", severity: "minor", reasons: ["Open bench slot — consider a waiver add"] };
-    if (p.irEligible) return { slot: "BN", label: p.name, severity: "minor", reasons: ["IR-eligible — move to an empty IR slot"] };
-    return { slot: "BN", label: p.name, severity: "ok", reasons: [] };
+    if (p.irEligible) return { slot: "BN", label: p.name, severity: "minor", reasons: ["IR-eligible — move to an empty IR slot"], usage: p.usage };
+    return { slot: "BN", label: p.name, severity: "ok", reasons: [], usage: p.usage };
   });
   const irRows = (league.ir || []).map((p) => ({ slot: "IR", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
   const taxiRows = (league.taxi || []).map((p) => ({ slot: "TAXI", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
@@ -245,7 +248,92 @@ const TAB_META = {
   waiver: { label: "Waivers", short: "Waivers", Icon: Users },
   trade: { label: "Trade Radar", short: "Trades", Icon: ArrowLeftRight },
   injury: { label: "Injury Watch", short: "Injury", Icon: Stethoscope },
+  odds: { label: "Season Outlook", short: "Outlook", Icon: Trophy },
 };
+// Season Outlook is fetched on demand (like FAAB), not derived from the
+// league build response, so it has no pass/fail "status" the way the
+// other tabs do — excluded from the per-league status-badge rows on the
+// Dashboard and League Overview screens, but still a normal tab
+// otherwise (breadcrumb, navigation, TAB_COMPONENTS all use it as-is).
+const STATUS_BADGE_TABS = Object.keys(TAB_META).filter((k) => k !== "odds");
+
+// Converts a base64url VAPID public key into the Uint8Array the Push API
+// expects — standard boilerplate for subscribing with applicationServerKey.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+}
+
+// Pre-kickoff alerts (v2) ride on Web Push through the existing PWA service
+// worker — not a native Android app with FCM push. That's a deliberate
+// scoping decision (see README/CHANGELOG): a true native wrapper needs
+// packaging, signing and Play Store review that's out of scope here, while
+// Web Push is real, works on this app today, and needs no app-store step.
+function PushToggle() {
+  const [state, setState] = useState({ supported: true, subscribed: false, busy: false, error: null, configured: true });
+
+  useEffect(() => {
+    (async () => {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        setState((s) => ({ ...s, supported: false }));
+        return;
+      }
+      try {
+        const { configured } = await api.getPushPublicKey();
+        const reg = await navigator.serviceWorker.ready;
+        const existing = await reg.pushManager.getSubscription();
+        setState((s) => ({ ...s, configured, subscribed: Boolean(existing) }));
+      } catch {
+        // Can't reach the server yet — leave defaults, the button will
+        // surface any real error on the next click instead.
+      }
+    })();
+  }, []);
+
+  const toggle = async () => {
+    setState((s) => ({ ...s, busy: true, error: null }));
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (state.subscribed) {
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await api.unsubscribePush(sub.endpoint);
+          await sub.unsubscribe();
+        }
+        setState((s) => ({ ...s, subscribed: false, busy: false }));
+      } else {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          setState((s) => ({ ...s, busy: false, error: "Notifications permission was denied." }));
+          return;
+        }
+        const { publicKey, configured } = await api.getPushPublicKey();
+        if (!configured) {
+          setState((s) => ({ ...s, busy: false, configured: false, error: "Push alerts aren't configured on the server yet (VAPID keys missing) — see README." }));
+          return;
+        }
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+        await api.subscribePush(sub.toJSON());
+        setState((s) => ({ ...s, subscribed: true, busy: false }));
+      }
+    } catch (err) {
+      setState((s) => ({ ...s, busy: false, error: err.message || "Couldn't update push alerts." }));
+    }
+  };
+
+  if (!state.supported) return null;
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button onClick={toggle} disabled={state.busy} style={{ color: state.subscribed ? C.ok : C.textMuted }} className="text-xs font-medium flex items-center gap-1">
+        {state.busy ? <Loader2 size={13} className="animate-spin" /> : state.subscribed ? <Bell size={13} /> : <BellOff size={13} />}
+        {state.subscribed ? "Alerts on" : "Enable alerts"}
+      </button>
+      {state.error && <div style={{ color: C.major }} className="text-[10px] max-w-[180px] text-right">{state.error}</div>}
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  SCREENS                                                            */
@@ -253,7 +341,8 @@ const TAB_META = {
 function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, sleeperUser }) {
   return (
     <div className="px-4 py-3">
-      <div className="flex items-center justify-end pb-3">
+      <div className="flex items-center justify-between pb-3">
+        <PushToggle />
         <div className="flex items-center gap-3 shrink-0">
           <button onClick={onEditLeagues} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
             <Settings2 size={13} />
@@ -279,9 +368,13 @@ function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues,
             </button>
             {!lg.error && (
               <div className="flex items-center gap-1 px-4 pb-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.border}` }}>
-                {Object.entries(TAB_META).map(([key, meta]) => (
-                  <StatusBadge key={key} status={lg[key].status} label={meta.short} compact onClick={() => onOpenTab(lg.id, key)} />
+                {STATUS_BADGE_TABS.map((key) => (
+                  <StatusBadge key={key} status={lg[key].status} label={TAB_META[key].short} compact onClick={() => onOpenTab(lg.id, key)} />
                 ))}
+                <button onClick={() => onOpenTab(lg.id, "odds")} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="text-[11px] rounded-full px-2 py-1 flex items-center gap-1 shrink-0">
+                  <Trophy size={11} />
+                  Outlook
+                </button>
               </div>
             )}
           </div>
@@ -331,7 +424,8 @@ function LeagueOverview({ league, onOpenTab }) {
           {league.dataWarnings.map((w, i) => <div key={i}>{w}</div>)}
         </div>
       )}
-      {Object.entries(TAB_META).map(([key, meta]) => {
+      {STATUS_BADGE_TABS.map((key) => {
+        const meta = TAB_META[key];
         const s = STATUS[league[key].status];
         const Icon = meta.Icon;
         return (
@@ -347,12 +441,40 @@ function LeagueOverview({ league, onOpenTab }) {
           </button>
         );
       })}
+      <button onClick={() => onOpenTab("odds")} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="w-full flex items-center gap-3 rounded-lg px-3.5 py-3 text-left">
+        <div style={{ background: C.surfaceRaised, color: C.brand }} className="p-2 rounded-md shrink-0">
+          <Trophy size={18} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-[14px]">Season Outlook</div>
+          <div style={{ color: C.textMuted }} className="text-xs truncate">Playoff &amp; championship odds, simulated</div>
+        </div>
+        <ChevronRight size={16} style={{ color: C.textFaint }} />
+      </button>
     </div>
   );
 }
 
 function SectionLabel({ children }) {
   return <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-[11px] tracking-wide px-1 pt-3 pb-1.5">{children}</div>;
+}
+
+// Usage badge: snap %/targets/carries from the nflverse-backed `usage`
+// field (see server/nflverseUsage.js). That source isn't guaranteed to
+// match every player by name, so this renders nothing rather than a
+// misleading placeholder when usage is missing.
+function UsageBadge({ usage }) {
+  if (!usage) return null;
+  const parts = [];
+  if (usage.snapPct != null) parts.push(`${usage.snapPct}% snaps`);
+  if (usage.targets != null) parts.push(`${usage.targets} tgt`);
+  if (usage.carries != null) parts.push(`${usage.carries} car`);
+  if (parts.length === 0) return null;
+  return (
+    <span style={{ color: C.textFaint, border: `1px solid ${C.border}` }} className="text-[10px] rounded px-1.5 py-0.5 shrink-0 whitespace-nowrap">
+      {parts.join(" · ")}
+    </span>
+  );
 }
 
 function RosterTab({ league }) {
@@ -367,6 +489,7 @@ function RosterTab({ league }) {
           <div style={{ color: C.text }} className="text-sm font-medium truncate">{r.label}</div>
           {r.kickoffLabel && <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{r.kickoffLabel}</div>}
           {r.reason && <div style={{ color: s.color }} className="text-xs mt-0.5">{r.reason}</div>}
+          {r.usage && <div className="mt-1"><UsageBadge usage={r.usage} /></div>}
         </div>
         <s.Icon size={16} style={{ color: s.color }} className="shrink-0 mt-0.5" />
       </div>
@@ -375,7 +498,7 @@ function RosterTab({ league }) {
   // starterRows is index-aligned with league.starters (both built from the
   // same array with no filtering in between), so kickoff time can just be
   // zipped in by position rather than re-matched by label/slot text.
-  const starterRowsWithKickoff = starterRows.map((r, i) => ({ ...r, kickoffLabel: league.starters[i]?.player?.kickoffLabel }));
+  const starterRowsWithKickoff = starterRows.map((r, i) => ({ ...r, kickoffLabel: league.starters[i]?.player?.kickoffLabel, usage: league.starters[i]?.player?.usage }));
 
   return (
     <div className="px-4 py-3">
@@ -531,6 +654,7 @@ function WaiverTab({ league, sessionId }) {
                     {p.ecr != null ? `ECR #${p.ecr} ` : "ECR unmatched "}
                     {p.trendHit ? "· Trending add" : ""}
                   </div>
+                  {p.usage && <div className="mt-1"><UsageBadge usage={p.usage} /></div>}
                 </div>
                 <s.Icon size={16} style={{ color: s.color }} className="shrink-0" />
               </div>
@@ -580,6 +704,27 @@ function TradeTab({ league }) {
           <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm mb-1">Your Team</div>
           <StrengthWeaknessRow label="Strong" items={me.strengths} color={C.ok} />
           <StrengthWeaknessRow label="Weak" items={me.weaknesses} color={C.major} />
+        </div>
+      )}
+
+      <SectionLabel>Trade Finder — 1-for-1 Swaps</SectionLabel>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Concrete player-for-player swaps against real rival rosters, ranked by the projected-points gain to your starting lineup. Filtered to offers close enough in trade value (ECR) that a rival could plausibly accept — not "my worst bench guy for their All-Pro."
+      </div>
+      {(league.tradeFinder || []).length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1 pb-3">No fair 1-for-1 swaps found against any rival roster right now.</div>
+      ) : (
+        <div className="space-y-1.5 mb-3">
+          {league.tradeFinder.map((t, i) => (
+            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.ok}` }} className="rounded-md px-3.5 py-2.5">
+              <div style={{ color: C.text }} className="text-xs">
+                <span style={{ color: C.textMuted }}>Give </span>{t.give.name} <span style={{ color: C.textFaint }}>({t.give.pos})</span>
+                <span style={{ color: C.textMuted }}> · Get </span>{t.get.name} <span style={{ color: C.textFaint }}>({t.get.pos})</span>
+                <span style={{ color: C.textMuted }}> from </span>{t.theirTeam}
+              </div>
+              <div style={{ color: C.ok }} className="text-[11px] mt-0.5">+{t.gain.toFixed(1)} projected pts to your starting lineup</div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -652,7 +797,76 @@ function InjuryTab({ league }) {
   );
 }
 
-const TAB_COMPONENTS = { roster: RosterTab, lineup: LineupTab, waiver: WaiverTab, trade: TradeTab, injury: InjuryTab };
+function SeasonOutlookTab({ league, sessionId }) {
+  const [state, setState] = useState({ loading: true, odds: null, error: null });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true, odds: null, error: null });
+    api
+      .getSeasonOdds(sessionId, league.id)
+      .then((result) => {
+        if (!cancelled) setState({ loading: false, odds: result.odds, error: null });
+      })
+      .catch((err) => {
+        if (!cancelled) setState({ loading: false, odds: null, error: err.message || "Couldn't compute season odds." });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, league.id]);
+
+  return (
+    <div className="px-4 py-3">
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Rest-of-season Monte Carlo simulation (3,000 trials) using each team's season-to-date scoring average against the
+        remaining Sleeper schedule — not a full per-player projection re-run for every roster. Treat this as a rough,
+        directional read, not a guarantee.
+      </div>
+      {state.loading && (
+        <div className="flex items-center gap-2 px-1 py-4" style={{ color: C.textMuted }}>
+          <Loader2 size={16} className="animate-spin" />
+          <span className="text-sm">Simulating the rest of the season…</span>
+        </div>
+      )}
+      {state.error && <div style={{ color: C.major }} className="text-xs px-1 py-2">{state.error}</div>}
+      {state.odds && (
+        <div className="space-y-1.5">
+          {state.odds.map((o, i) => (
+            <div
+              key={i}
+              style={{ background: C.surface, border: `1px solid ${o.isMe ? C.brand : C.border}` }}
+              className="rounded-md px-3.5 py-2.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm truncate">
+                  {o.label}
+                </div>
+                <div style={{ color: C.textMuted }} className="text-xs shrink-0">{o.currentRecord}</div>
+              </div>
+              <div className="flex items-center gap-4 mt-1.5">
+                <div>
+                  <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Proj. wins</div>
+                  <div style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-sm font-medium">{o.projectedWins}</div>
+                </div>
+                <div>
+                  <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Playoff odds</div>
+                  <div style={{ color: C.brand, fontVariantNumeric: "tabular-nums" }} className="text-sm font-medium">{o.playoffPct}%</div>
+                </div>
+                <div>
+                  <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Title odds</div>
+                  <div style={{ color: C.ok, fontVariantNumeric: "tabular-nums" }} className="text-sm font-medium">{o.championshipPct}%</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const TAB_COMPONENTS = { roster: RosterTab, lineup: LineupTab, waiver: WaiverTab, trade: TradeTab, injury: InjuryTab, odds: SeasonOutlookTab };
 
 function LoginScreen({ password, setPassword, onSubmit, loading, error }) {
   return (

@@ -46,3 +46,31 @@ export function logout() {
 export function getAuthStatus() {
   return request(`/api/auth/status`);
 }
+
+export function getSeasonOdds(sessionId, leagueId) {
+  return request(`/api/season-odds`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, leagueId }),
+  });
+}
+
+export function getPushPublicKey() {
+  return request(`/api/push/vapid-public-key`);
+}
+
+export function subscribePush(subscription) {
+  return request(`/api/push/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ subscription }),
+  });
+}
+
+export function unsubscribePush(endpoint) {
+  return request(`/api/push/unsubscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint }),
+  });
+}
