@@ -439,7 +439,7 @@ unlocks that too, if you want a side-loadable APK later.
 - **Persistence**: which leagues you're tracking is saved **server-side** per user, tied to being logged in rather than to one browser. Log in from any device and it reconnects automatically to the same leagues, right where you left off — no re-entering anything, and no per-device setup.
 - **Log out** (on the dashboard) revokes the session cookie server-side and returns you to the login screen.
 - **Edit tracked leagues** (also on the dashboard) re-pulls your current Sleeper league list and lets you change your selection without logging out — handles the case where the server restarted and forgot your in-memory session, transparently.
-- **Week dropdown** in the header, available on the dashboard, league overview, and every tab — changing it rebuilds every tracked league for that week (fresh Sleeper roster-for-week + FantasyPros projections/ECR for that week).
+- **Week dropdown** in the header, available on the dashboard, league overview, and every tab — changing it rebuilds every tracked league for that week (fresh Sleeper roster-for-week + ESPN projections and FantasyPros ECR for that week).
 
 ### ESPN schedule integration (kickoff times + bye weeks)
 
@@ -473,87 +473,45 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
-### Player ID matching / projection pipeline (Sleeper ↔ FantasyPros ↔ ESPN)
+### Projections (v2.2: ESPN only) and player matching
 
-Corrected this round to a proper 3-tier waterfall, cheapest/most-reliable
-first — **this replaces an earlier, wrongly-ordered version** that tried
-scraping before the API and attempted an ID join against scraped data
-that turned out not to carry one:
+**Projections come from ESPN only as of v2.2.** The earlier FantasyPros
+pipeline (API → scraped pages → ESPN fallback) left most players blank:
+FantasyPros' free API *and* its logged-out projection pages both stop at
+about 10 players per position, and the old ESPN fallback endpoint turned
+out to return season-total real NFL stats rather than weekly fantasy
+projections. The scraper (`fantasyProsScrape.js`) and the FantasyPros
+`/projections` call are removed.
 
-1. **FantasyPros API `/projections`** — one call covers every position
-   at once. Capped at roughly the top 10 players/position on the free
-   tier, but its response carries a real `fpid` per player (confirmed
-   field), which is a genuine ID join against the ffb_ids crosswalk's
-   `fantasyprosId` column — confirmed to exist by direct inspection of
-   that CSV, not guessed at. Whoever the free tier actually covers gets
-   matched this way, reliably.
-2. **FantasyPros scraped pages** (`server/fantasyProsScrape.js`) — fills
-   whatever tier 1's cap left out, via **name-fuzzy-matching only**.
-   Confirmed that scraped rows carry no usable ID to join against the
-   crosswalk with (a speculative attempt at extracting one from a
-   `data-*` attribute was added last round without that confirmation,
-   and has been removed now that it's confirmed not to apply — no
-   point leaving dead-end code that looks like it might be doing
-   something it isn't). `/consensus-rankings` (ECR) has no equivalent
-   cap and stays entirely on the API, unaffected by any of this.
-3. **ESPN** (`server/espnProjections.js`) — real ID join via the
-   crosswalk's `espnId` column, tried only for whatever both
-   FantasyPros tiers still miss.
-4. **Team-abbreviation matching**, defenses only, layered into tiers 1
-   and 2 as a fallback before falling through to the next tier — more
-   reliable than name-matching a defense, which is a genuinely
-   different kind of "name" (a city/mascot pair, formatted differently
-   across sources) than a person's name.
+`server/espnProjections.js` now makes **one request per week** to ESPN's
+fantasy "league defaults" player feed
+(`lm-api-reads.fantasy.espn.com/.../leaguedefaults/3?view=kona_player_info&scoringPeriodId=N`,
+no login, `X-Fantasy-Filter` header to raise the 50-player default limit),
+cached for an hour and shared by every league and user. That covers the
+whole player pool — QB, RB, WR, TE, K and D/ST. The weekly projection is
+the stats entry with `statSourceId 1`, `statSplitTypeId 1` and that week's
+`scoringPeriodId`.
 
-If a player still shows no projection after all tiers, that's either a
-genuine data gap (not enough of a season yet, or a very recent roster
-move no source has caught up on) or a real mismatch worth checking the
-server logs for — not a silent, unexplained miss.
+**Matching to Sleeper players:** ESPN ID via the ffb_ids crosswalk first,
+then normalized name + position, and team for defenses.
 
-**What I checked before building this scraper tier, not after:**
-- `fantasypros.com/robots.txt` explicitly *allows* crawling
-  `/nfl/projections/` (it only disallows `/ranker/`, `/ajax/`, `/api/`,
-  `/json/`, `/xml/`), with a `Crawl-delay: 5` — enforced in code, not
-  just documented.
-- There's prior art: `ffpros`, an actively-maintained R package under
-  the [ffverse](https://ffverse.com) project, scrapes these exact same
-  pages the same way, and is one of several ffverse packages worth
-  knowing about — `ffscrapr` (multi-platform league API client, the
-  same job `sleeper.js` does but for MFL/Fleaflicker/ESPN too),
-  `ffsimulator` (bootstrap-resampling season simulations over
-  historical ADP + play-by-play + FantasyPros data), and
-  `ffopportunity` (an xgboost expected-fantasy-points model on
-  nflverse play-by-play). All R, not directly reusable in this Node
-  stack, but `ffsimulator` in particular is a reasonable reference if a
-  future "season outlook" feature is ever worth adding here.
+**Scoring:** ESPN's default feed is PPR. The app adjusts each player's
+total to the league's own points per reception (including TE premium) and
+points per passing TD. Other scoring differences (e.g. bonuses, return
+yards, unusual kicker/defense scoring) use ESPN's defaults.
 
-**What's genuinely unresolved:** `robots.txt` governs crawler etiquette,
-not a legal license — FantasyPros' actual Terms of Use may separately
-restrict automated access even to pages `robots.txt` permits crawling
-(common on sites that also sell a paid API for the same data). This
-wasn't glossed over; it's a real tradeoff, and part of why the ECR data
-stays on the official API rather than also being scraped.
+**What's verified vs not:** the endpoint answering without auth and its
+field names were checked against a live sample. That `leaguedefaults/3`
+is PPR comes from a third-party project's testing; that raw stat `53` is
+receptions and `4` is passing TDs comes from community ESPN stat maps —
+neither could be checked directly here. On each build the server logs
+`[espnProjections] … N players from ESPN, M with a weekly projection` and
+one sample player, so a problem is obvious in the logs. A third-party
+report also suggests ESPN's QB projections for *future* weeks are less
+reliable than current-week ones.
 
-**What's best-effort, not confirmed:** the exact table markup for tier
-2. The tools used to research this render pages as cleaned text, not
-raw HTML, so the parser targets the table containing an "FPTS" header
-and pulls name/team/points heuristically rather than against verified
-CSS selectors. It logs one sample parsed row to the server console on
-first real run — check that against what's actually on
-`fantasypros.com/nfl/projections/qb.php` if tier-2 projections come
-back empty or wrong.
-
-**Practical tradeoffs of the scrape tier specifically vs. a pure API
-approach:**
-- **Slower on a cold cache.** With the 5-second crawl delay honestly
-  enforced, the first tier-2 fetch after the hourly cache expires takes
-  20+ seconds (4 positions × 5s, plus page-load time) before that
-  league build response comes back. Cached requests within the hour are
-  instant, same as before.
-- **More brittle.** A page-layout change on FantasyPros' end breaks this
-  silently (parses to empty/wrong data) where an API contract usually
-  wouldn't. One position failing to parse doesn't take down the other
-  three, but it's worth spot-checking output occasionally.
+FantasyPros is still used for **expert consensus rankings (ECR)** —
+waiver flags, Trade Radar and Trade Finder — via the official API.
 
 **On the crosswalk's column headers specifically:** never directly
 verified either — GitHub's raw-file path was robots-disallowed for the
@@ -694,11 +652,9 @@ not just restarts.
   `buildLeague.js` expects, that explorer is the source of truth to
   check — not this README.
 - **Rate limits**: FantasyPros' free/personal API tier is roughly **50
-  requests/day**. Each league build now costs 5 API calls again (4x
-  `/consensus-rankings`, one per position, plus 1x `/projections` — back
-  up from 4 after this round's fix restored `/projections` to the
-  pipeline as tier 1, for the real ID join it enables). Scraping (tier 2)
-  doesn't count against this quota at all. `server/fantasyPros.js`
+  requests/day**. Each league build costs one `/consensus-rankings`
+  call per position (v2.2 dropped the `/projections` call — projections
+  come from ESPN, which has no key or quota). `server/fantasyPros.js`
   caches every API response for 10 minutes via SQLite, shared across all
   your tracked leagues. A 429 gets one automatic retry with backoff
   before it surfaces as an error.
@@ -723,12 +679,11 @@ docker-compose.local-build.yml  Builds from source instead — local dev, or bui
 server/
   server.js             Express app + routes (+ FAAB endpoint)
   sleeper.js             Sleeper API client (no auth needed)
-  fantasyPros.js          FantasyPros API client (uses your key, server-only) — tier 1 projections + consensus-rankings
-  fantasyProsScrape.js     FantasyPros projections scraper — tier 2, fills the API's per-position cap
-  espnProjections.js       ESPN projections fallback — tier 3, last resort
+  fantasyPros.js          FantasyPros API client (uses your key, server-only) — consensus rankings (ECR) only
+  espnProjections.js       ESPN weekly fantasy projections — the only projection source (v2.2)
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)
   playerIdMap.js          ffb_ids ID crosswalk (Sleeper/ESPN/FantasyPros/etc)
-  matching.js             Name-based cross-source player matching (tiers 2 and the ECR pipeline)
+  matching.js             Name-based cross-source player matching (FantasyPros ECR)
   buildLeague.js          Merges everything into the shape the UI renders
   db.js                   SQLite: generic cache, persistent injury tracking, session/build cache
   scheduler.js             Hourly background refresh for the last-active user's leagues
@@ -773,23 +728,16 @@ double-check first:
    confirmed. This is the one most likely to still need another pass —
    the server log warning it now prints if the response week doesn't
    match the request is the fastest way to know either way.
-2. **`espnProjections.js`** — the endpoint's existence is confirmed, the
-   exact JSON field names for a fantasy-points value are not. Logs raw
-   response keys on first use.
-3. **The FantasyPros row-ID extraction** (`fantasyProsScrape.js`) — added
-   this round to try a real ID join against the crosswalk's confirmed
-   `fantasyprosId` column, but whether the scraped page's markup
-   actually carries an ID to extract was never confirmed. Logs whether
-   it found one on the first row.
+2. **`espnProjections.js` (v2.2)** — endpoint and field names checked
+   against a live sample; the PPR default and the reception/passing-TD
+   stat IDs used for scoring adjustment are from third-party sources.
+   Logs player counts and one sample player on each fresh fetch.
 4. **`playerIdMap.js`** — the CSV's column headers were never directly
    read (GitHub's raw-file path was robots-blocked for my research
    tools specifically); columns are discovered by fuzzy-matching header
    text at runtime instead, and logged on first load. (The
    `fantasyprosId` column's *existence* was confirmed by direct
    inspection this round — just not its exact header spelling.)
-5. **`fantasyProsScrape.js`**'s table markup generally — targeted
-   heuristically, not against confirmed raw HTML. Logs a sample parsed
-   row on first run.
 
 This round's cross-module export re-check (same method that caught the
 `getLeagueUsers` bug last time) came back clean — every function called

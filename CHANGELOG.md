@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,41 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.2 — ESPN-only weekly projections
+
+**Commit (short):** `v2.2: feat: ESPN-only weekly projections`
+
+**Commit (extended):**
+v2.2 makes ESPN the only projection source, fixing most players having
+no projection. FantasyPros' free API and its logged-out projection pages
+both stop at about 10 players per position, and the old ESPN fallback hit
+an endpoint that returns season-total NFL stats, not weekly fantasy
+projections, so everyone else came back blank.
+
+espnProjections.js now makes one cached request per week to ESPN's
+fantasy player feed (leaguedefaults/3, kona_player_info, no login),
+covering QB, RB, WR, TE, K and D/ST. Players are matched by crosswalk
+ESPN ID, then name and position, and defenses by team. ESPN's PPR totals
+are adjusted to each league's points per reception, TE premium and
+points per passing TD.
+
+The FantasyPros scraper, its cheerio dependency and the /projections API
+call are removed; FantasyPros remains for expert consensus rankings. The
+UI source tag now reads ESPN.
+
+**Details**
+- New `server/espnProjections.js`: `getWeekProjections(season, week)` (one request, hourly cache, logs player counts + one sample), `lookupProjection()` (ESPN ID → name+position → team for D/ST), `adjustForScoring()` (rec, `bonus_rec_te`, `pass_td`).
+- `buildLeague.js` uses it for every projection (roster, waivers, Trade Finder); warning text now "No ESPN projection for: …".
+- Removed `server/fantasyProsScrape.js`, `cheerio`, and `fantasyPros.getProjections()`. FantasyPros API calls per build drop by one.
+- UI: projection source tag shows `ESPN` instead of `FP`/`E`; header reads "Sleeper + ESPN projections (live)".
+
+**Known limitations / what was and wasn't tested**
+- ESPN is blocked from the build sandbox, so only a 3-player live sample was inspected. Full pool size, K/D/ST coverage, the PPR default (third-party report) and the stat IDs for receptions (`53`) and passing TDs (`4`) (community maps) are unverified. Check the server log line `[espnProjections] … N players from ESPN, M with a weekly projection` after deploying.
+- Scoring settings other than reception/TE-premium/passing-TD use ESPN defaults.
+- Tested with mocked ESPN/Sleeper responses: unit tests for parsing, matching and scoring, plus a full league build (all six players projected, no warnings), and the 44 existing server checks.
 
 ---
 

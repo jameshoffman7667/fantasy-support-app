@@ -7,7 +7,9 @@
  * scraped pages and the consensus-rankings API don't expose an ID field
  * this app has confirmed, so a true ID join for FantasyPros specifically
  * isn't wired up — only the name-based approach. (ESPN, by contrast,
- * does get a real ID join now — see espnProjections.js.) When a name
+ * does get a real ID join — see espnProjections.js.) As of v2.2 this
+ * index is used for FantasyPros consensus rankings (ECR) only; projections
+ * come from ESPN. When a name
  * match still fails, proj/ecr come back null and the UI shows that
  * explicitly rather than a silently wrong number.
  */

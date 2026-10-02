@@ -1,8 +1,7 @@
 import * as sleeper from "./sleeper.js";
 import * as fp from "./fantasyPros.js";
-import * as fpScrape from "./fantasyProsScrape.js";
 import * as schedule from "./schedule.js";
-import * as espn from "./espnProjections.js";
+import * as espn from "./espnProjections.js"; // v2.2: the only projection source
 import { lookupBySleeperId } from "./playerIdMap.js";
 import { buildFpIndex, lookupFpMulti } from "./matching.js";
 import { checkAndRecordInjury, clearInjurySeen, getInjurySeenForLeague } from "./db.js";
@@ -22,12 +21,9 @@ const FLEX_ELIGIBLE = {
   WRRB_FLEX: ["RB", "WR"],
 };
 const OUT_LIKE = ["Out", "Doubtful", "IR", "Suspended", "NA"];
-// K and DST were missing entirely before this round — meaning every
-// kicker and every team defense in a tracked league (a near-universal
-// pair of starting slots in standard leagues) NEVER got a projection,
-// regardless of name-matching quality, because their positions simply
-// weren't in this list. Confirmed live that fantasypros.com/nfl/projections/k.php
-// and .../dst.php are both real pages before adding them.
+// Positions FantasyPros expert consensus rankings (ECR) are fetched for.
+// (Projections no longer come from FantasyPros at all as of v2.2 — see
+// espnProjections.js.)
 const FP_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"];
 // Sleeper's position code for a team defense is "DEF" (confirmed via
 // community API docs); FantasyPros' is "DST". Every FP lookup for a
@@ -168,40 +164,17 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   ]);
 
   const scoring = fpScoringParam(league.scoring_settings);
-  // Three-tier projection pipeline, in priority order:
-  //  1. FantasyPros API (/projections) — capped at ~10 players/position on
-  //     the free tier, but its response carries a real `fpid` per player
-  //     (confirmed shape), which is a genuine ID join against the
-  //     crosswalk's fantasyprosId column. One call covers every position
-  //     at once (unlike consensus-rankings, which needs one call per
-  //     position), so this is cheap.
-  //  2. FantasyPros scraped pages — fills whatever the API's cap left out.
-  //     Confirmed (by direct inspection, not by this code) that scraped
-  //     rows carry no usable ID — name-fuzzy-matching only, deliberately,
-  //     rather than repeating the earlier speculative ID-extraction
-  //     attempt that turned out not to apply here.
-  //  3. ESPN — real ID join via the crosswalk's espnId column, tried only
-  //     for whatever's left after both FantasyPros tiers miss.
-  const [apiProjections, scrapedProjections, ...ecrByPosition] = await Promise.all([
-    fp.getProjections(season, week, { scoring }).catch((err) => {
-      console.warn(`[buildLeague] FantasyPros API projections failed, continuing with scrape+ESPN only: ${err.message}`);
+  // v2.2: projections come from ESPN only — one cached request per week
+  // covers every player (see espnProjections.js for why FantasyPros was
+  // dropped). FantasyPros is still used for expert consensus rankings (ECR).
+  const [espnPool, ...ecrByPosition] = await Promise.all([
+    espn.getWeekProjections(season, week).catch((err) => {
+      console.warn(`[buildLeague] ESPN projections unavailable this build: ${err.message}`);
       return null;
     }),
-    fpScrape.getAllProjections(season, week, scoring, FP_POSITIONS),
     ...FP_POSITIONS.map((position) => fp.getConsensusRankings(season, { position, scoring, week })),
   ]);
 
-  function extractApiPoints(rec) {
-    const pts = rec?.stats?.points ?? rec?.stats?.points_ppr ?? rec?.points;
-    return pts != null ? Number(pts) : null;
-  }
-  const apiProjByFpid = new Map(
-    (apiProjections?.players || apiProjections?.data || [])
-      .filter((p) => p.fpid != null)
-      .map((p) => [String(p.fpid), p])
-  );
-
-  const projIndex = buildFpIndex(scrapedProjections);
   const fpConsensusPlayers = ecrByPosition.flatMap((r, i) =>
     (r.players || r.data || []).map((p) => ({ ...p, position_id: p.position_id || p.player_position_id || FP_POSITIONS[i] }))
   );
@@ -222,7 +195,6 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     }
     return idx;
   }
-  const projTeamIndex = buildDstTeamIndex(scrapedProjections, "team");
   const ecrTeamIndex = buildDstTeamIndex(fpConsensusPlayers, "player_team_id");
 
   const myRoster = rosters.find((r) => r.owner_id === userId);
@@ -262,21 +234,11 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     return { kickoff: null, kickoffLabel: onBye ? "On bye" : "Kickoff time unavailable", onBye };
   };
 
-  /** proj + which source it came from (FP/E/null) — tier 1: FantasyPros API via real ID; tier 2: FantasyPros scrape via name; tier 3: ESPN via real ID. */
-  async function resolveProjection(sleeperId, name, fpPos, crosswalkName, teamAbbr, crosswalkFpid) {
-    if (crosswalkFpid) {
-      const apiRec = apiProjByFpid.get(String(crosswalkFpid));
-      const apiPts = extractApiPoints(apiRec);
-      if (apiPts != null) return { proj: apiPts, projSource: "FP" };
-    }
-    let fpRec = lookupFpMulti(projIndex, crosswalkName ? [name, crosswalkName] : [name], fpPos);
-    if (!fpRec && fpPos === "DST" && teamAbbr) {
-      fpRec = projTeamIndex.get(schedule.normalizeTeam(teamAbbr)) || null;
-    }
-    if (fpRec?.fpts != null) return { proj: Number(fpRec.fpts), projSource: "FP" };
-    const espnPts = await espn.getEspnProjectionBySleeperId(sleeperId, name, season, week);
-    if (espnPts != null) return { proj: espnPts, projSource: "E" };
-    return { proj: null, projSource: null };
+  /** proj + source ("E" = ESPN, null = none). Adjusted to this league's reception / TE-premium / passing-TD scoring. */
+  async function resolveProjection(sleeperId, name, pos, crosswalkName, teamAbbr, espnId) {
+    const rec = espn.lookupProjection(espnPool, { espnId, names: [name, crosswalkName], pos, team: teamAbbr });
+    if (!rec) return { proj: null, projSource: null };
+    return { proj: espn.adjustForScoring(rec, league.scoring_settings), projSource: "E" };
   }
 
   const enrich = async (id) => {
@@ -291,7 +253,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
     }
     const { kickoff, kickoffLabel, onBye } = kickoffFor(meta?.team);
-    let { proj, projSource } = await resolveProjection(id, name, fpPos, crosswalk?.name, meta?.team, crosswalk?.fantasyprosId);
+    let { proj, projSource } = await resolveProjection(id, name, pos, crosswalk?.name, pos === "DEF" ? id : meta?.team, crosswalk?.espnId);
 
     // "Once players have played, update their projection to their actual
     // score." Two signals required together, not either alone: a
@@ -355,7 +317,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       if (!ecrRec && fpPos === "DST" && meta?.team) {
         ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
       }
-      const { proj, projSource } = await resolveProjection(t.player_id, name, fpPos, crosswalk?.name, meta?.team, crosswalk?.fantasyprosId);
+      const { proj, projSource } = await resolveProjection(t.player_id, name, pos, crosswalk?.name, pos === "DEF" ? t.player_id : meta?.team, crosswalk?.espnId);
       return { name, pos, proj, projSource, ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null, trending: true, origin: "waiver" };
     })
   );
@@ -574,7 +536,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
             .sort((a, b) => a.ecr - b.ecr)
             .slice(0, 3); // only the closest few — bounds the extra projection lookups per rival
           for (const cand of near) {
-            const { proj: candProj } = await resolveProjection(cand.id, cand.name, toFpPosition(cand.pos), cand.crosswalk?.name, cand.meta?.team, cand.crosswalk?.fantasyprosId);
+            const { proj: candProj } = await resolveProjection(cand.id, cand.name, cand.pos, cand.crosswalk?.name, cand.pos === "DEF" ? cand.id : cand.meta?.team, cand.crosswalk?.espnId);
             if (candProj == null) continue;
             const gain = candProj - give.proj;
             if (gain <= 0) continue;
@@ -621,7 +583,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const unmatched = [...new Set([...unmatchedStarters, ...unmatchedOptimal])];
   const dataWarnings = [];
   if (unmatched.length) {
-    dataWarnings.push(`No projection from FantasyPros or ESPN for: ${unmatched.join(", ")}`);
+    dataWarnings.push(`No ESPN projection for: ${unmatched.join(", ")}`);
   }
 
   const injuryEvents = buildInjuryRows(leagueId, built);

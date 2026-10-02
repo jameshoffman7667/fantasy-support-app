@@ -342,7 +342,7 @@ app.get("/api/connect", async (req, res) => {
 });
 
 // Step 2: build (or rebuild, on refresh, or on a week change) the
-// selected leagues with real Sleeper + real FantasyPros/ESPN data merged in.
+// selected leagues with real Sleeper + real ESPN projections + FantasyPros rankings merged in.
 app.post("/api/leagues/build", async (req, res) => {
   const { sessionId, leagueIds, week } = req.body || {};
   const session = ownSession(req, res, sessionId);

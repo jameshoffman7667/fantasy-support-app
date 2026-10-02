@@ -1,160 +1,170 @@
 import { cacheGet, cacheSet } from "./db.js";
-import { lookupBySleeperId } from "./playerIdMap.js";
+import { normalizeName } from "./matching.js";
 
 /**
- * Fallback projection source for players FantasyPros doesn't have (free
- * scrape/API coverage gaps, name mismatches, etc). Only ever called for
- * players that already failed to match FantasyPros — this is a gap-fill,
- * not a replacement.
+ * v2.2: ESPN is the ONLY projection source.
  *
- * CONFIRMED (via search, cross-referenced across multiple independent
- * community API-documentation projects, not a single source):
- *  - sports.core.api.espn.com/v2/sports/football/leagues/nfl/athletes
- *    lists all athletes with numeric IDs, no auth needed.
- *  - sports.core.api.espn.com/.../seasons/{year}/types/2/athletes/{id}/projections
- *    exists and needs no auth or fantasy-league context (unlike the
- *    fantasy.espn.com/apis/v3 endpoints, which need real ESPN league IDs
- *    and often SWID/espn_s2 auth cookies — deliberately avoided here).
+ * Why: FantasyPros' free API and its logged-out projection pages both stop at
+ * ~10 players per position, and the old ESPN fallback hit
+ * sports.core.api.espn.com/.../athletes/{id}/projections, which turned out to
+ * return season-total real NFL stats — not weekly fantasy projections — so it
+ * yielded nothing. Net effect: almost everyone outside the top 10 had no
+ * projection.
  *
- * NOT CONFIRMED: the exact JSON field names inside that projections
- * response for a fantasy-points total. The page-reading tools available
- * while writing this render pages as text, not raw JSON I could inspect
- * directly for this specific endpoint. The parser below tries several
- * plausible shapes based on ESPN's general "categories -> stats" API
- * convention seen elsewhere in their API, logs the raw shape of the
- * first response on first use, and returns null (not a guess) if none
- * of the shapes match — a wrong number here would be worse than no
- * number, since the UI would present it as real.
+ * Source now: ESPN's fantasy "league defaults" player feed — the same data
+ * behind ESPN's own player pages. One request per (season, week) covers the
+ * whole player pool (QB/RB/WR/TE/K/D/ST), needs no login, and is cached.
+ *
+ *   https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}
+ *     /segments/0/leaguedefaults/3?view=kona_player_info&scoringPeriodId={week}
+ *   header X-Fantasy-Filter: {"players":{"limit":3000, ...}}   (default is 50)
+ *
+ * The weekly projection for a player is the entry in player.stats with
+ * statSourceId 1 (projected), statSplitTypeId 1 (single week),
+ * seasonId = season, scoringPeriodId = week; `appliedTotal` is the points.
+ *
+ * CONFIRMED while building: the endpoint answers without auth and returns
+ * players[].player.{fullName, defaultPositionId, proTeamId, stats[]} with
+ * seasonId/scoringPeriodId/statSourceId/statSplitTypeId/appliedTotal fields
+ * (fetched a small sample directly).
+ * FROM A THIRD-PARTY REPORT, NOT VERIFIED HERE: leaguedefaults/3 is ESPN's PPR
+ * default (recomputing at 1 pt/reception lands within 0.1 of appliedTotal).
+ * FROM ESPN-API COMMUNITY STAT MAPS, NOT VERIFIED HERE: raw stat "53" =
+ * receptions, "4" = passing TDs. Used only for the scoring adjustment below,
+ * and the first player parsed is logged so the shape can be checked in the
+ * server logs.
  */
-const ESPN_CORE_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl";
-const ATHLETE_LIST_TTL_MS = 24 * 60 * 60 * 1000;
-const PROJECTION_TTL_MS = 60 * 60 * 1000;
+const SEASON_BASE = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons";
+const CACHE_TTL_MS = 60 * 60 * 1000; // projections move during the week (injuries, news) — hourly is plenty
+const STAT_RECEPTIONS = "53";
+const STAT_PASS_TD = "4";
+const ESPN_DEFAULT_PASS_TD = 4;
 
-let _loggedRawShape = false;
+// ESPN defaultPositionId -> Sleeper position code.
+const POSITION = { 1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DEF" };
 
-async function espnFetch(url) {
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error(`ESPN core API error ${res.status} on ${url}`);
-  return res.json();
+// ESPN proTeamId -> team abbreviation (Sleeper-style). Used to match team
+// defenses, whose "player" on ESPN is "Bills D/ST" etc.
+const PRO_TEAM = {
+  1: "ATL", 2: "BUF", 3: "CHI", 4: "CIN", 5: "CLE", 6: "DAL", 7: "DEN", 8: "DET",
+  9: "GB", 10: "TEN", 11: "IND", 12: "KC", 13: "LV", 14: "LAR", 15: "MIA", 16: "MIN",
+  17: "NE", 18: "NO", 19: "NYG", 20: "NYJ", 21: "PHI", 22: "ARI", 23: "PIT", 24: "LAC",
+  25: "SF", 26: "SEA", 27: "TB", 28: "WAS", 29: "CAR", 30: "JAX", 33: "BAL", 34: "HOU",
+};
+// Spelling differences between Sleeper and ESPN team codes.
+const TEAM_ALIASES = { WSH: "WAS", JAC: "JAX", LA: "LAR" };
+export function normalizeTeam(abbr) {
+  if (!abbr) return null;
+  const up = String(abbr).toUpperCase();
+  return TEAM_ALIASES[up] || up;
 }
 
-function normalizeName(name) {
-  if (!name) return "";
-  return name
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[.'`]/g, "")
-    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+let _loggedSample = false;
+
+async function fetchPlayerPool(season, week) {
+  const url = `${SEASON_BASE}/${season}/segments/0/leaguedefaults/3?view=kona_player_info&scoringPeriodId=${week}`;
+  const filter = {
+    players: {
+      limit: 3000,
+      sortPercOwned: { sortPriority: 1, sortAsc: false },
+    },
+  };
+  const res = await fetch(url, {
+    headers: { Accept: "application/json", "X-Fantasy-Filter": JSON.stringify(filter) },
+  });
+  if (!res.ok) throw new Error(`ESPN fantasy API error ${res.status}`);
+  const json = await res.json();
+  return Array.isArray(json?.players) ? json.players : [];
 }
 
-/** Name -> ESPN athlete ID index, built once and cached for a day. */
-async function getAthleteIndex() {
-  const cached = cacheGet("espn:athlete-index");
+function weeklyProjection(player, season, week) {
+  return (player?.stats || []).find(
+    (s) => s.statSourceId === 1 && s.statSplitTypeId === 1 && Number(s.seasonId) === Number(season) && Number(s.scoringPeriodId) === Number(week)
+  );
+}
+
+/**
+ * Fetches (or reads from cache) every ESPN player's projection for one week,
+ * compacted to what the app needs:
+ *   { byId: { espnId: rec }, byName: { "name|POS": rec }, byTeamDef: { TEAM: rec }, count, withProjection }
+ * where rec = { pts, rec, passTd, pos, team, name } (pts = ESPN PPR total).
+ * Throws on a network/API failure — the caller decides how to degrade.
+ */
+export async function getWeekProjections(season, week) {
+  const cacheKey = `espn:proj-pool:${season}:${week}`;
+  const cached = cacheGet(cacheKey);
   if (cached !== null) return cached;
 
-  const data = await espnFetch(`${ESPN_CORE_BASE}/athletes?limit=20000&active=true`);
-  const index = {};
-  // ESPN's list endpoints are typically { items: [{ $ref, ... } or full objects] }.
-  // Handle both a fully-embedded list and a $ref-only list defensively —
-  // if it's $ref-only, resolving 20,000 individual refs isn't worth the
-  // request budget for a fallback feature, so that case degrades to an
-  // empty index (ESPN fallback simply unavailable) rather than attempting it.
-  const items = data.items || [];
-  for (const item of items) {
-    if (item.fullName || item.displayName) {
-      const name = item.fullName || item.displayName;
-      const id = item.id || (item.$ref && item.$ref.match(/athletes\/(\d+)/)?.[1]);
-      if (id) index[normalizeName(name)] = id;
+  const pool = await fetchPlayerPool(season, week);
+  const byId = {};
+  const byName = {};
+  const byTeamDef = {};
+  let withProjection = 0;
+  for (const entry of pool) {
+    const p = entry.player || entry;
+    const pos = POSITION[p.defaultPositionId];
+    if (!pos) continue;
+    const proj = weeklyProjection(p, season, week);
+    if (!proj || proj.appliedTotal == null) continue;
+    const stats = proj.stats || {};
+    const rec = {
+      name: p.fullName,
+      pos,
+      team: PRO_TEAM[p.proTeamId] || null,
+      pts: Number(proj.appliedTotal),
+      rec: stats[STAT_RECEPTIONS] != null ? Number(stats[STAT_RECEPTIONS]) : null,
+      passTd: stats[STAT_PASS_TD] != null ? Number(stats[STAT_PASS_TD]) : null,
+    };
+    if (Number.isNaN(rec.pts)) continue;
+    withProjection++;
+    byId[String(p.id ?? entry.id)] = rec;
+    if (pos === "DEF") {
+      if (rec.team) byTeamDef[rec.team] = rec;
+    } else if (p.fullName) {
+      byName[`${normalizeName(p.fullName)}|${pos}`] = rec;
+    }
+    if (!_loggedSample && pos !== "DEF") {
+      console.log(`[espnProjections] Sample week ${week} projection:`, { ...rec, rawStatKeys: Object.keys(stats).slice(0, 25) });
+      _loggedSample = true;
     }
   }
-  cacheSet("espn:athlete-index", index, ATHLETE_LIST_TTL_MS);
-  return index;
+  const data = { byId, byName, byTeamDef, count: pool.length, withProjection };
+  console.log(`[espnProjections] ${season} week ${week}: ${pool.length} players from ESPN, ${withProjection} with a weekly projection.`);
+  cacheSet(cacheKey, data, CACHE_TTL_MS);
+  return data;
 }
 
-function extractFantasyPoints(json) {
-  // Try a few plausible shapes rather than committing to one guess.
-  // ESPN's stats/projections responses commonly nest values under
-  // splits.categories[].stats[] with a `name`/`abbreviation` + `value`.
-  const categories = json?.splits?.categories || json?.categories || [];
-  for (const cat of categories) {
-    for (const stat of cat.stats || []) {
-      if (["fantasyPoints", "points", "appliedTotal"].includes(stat.name || stat.abbreviation)) {
-        const val = Number(stat.value);
-        if (!Number.isNaN(val)) return val;
-      }
-    }
+/**
+ * Adjusts ESPN's PPR total to the league's own scoring for the settings that
+ * most commonly differ: points per reception (incl. TE premium) and points per
+ * passing TD. Everything else uses ESPN's default scoring as-is.
+ */
+export function adjustForScoring(rec, scoringSettings = {}) {
+  let pts = rec.pts;
+  if (rec.rec != null) {
+    const ppr = Number(scoringSettings.rec ?? 0);
+    const tePremium = rec.pos === "TE" ? Number(scoringSettings.bonus_rec_te ?? 0) : 0;
+    pts += (ppr + tePremium - 1) * rec.rec;
   }
-  // Some ESPN responses expose a flatter top-level appliedTotal/points field.
-  const flat = json?.appliedTotal ?? json?.totalPoints ?? json?.points;
-  if (flat != null && !Number.isNaN(Number(flat))) return Number(flat);
+  if (rec.passTd != null && scoringSettings.pass_td != null) {
+    pts += (Number(scoringSettings.pass_td) - ESPN_DEFAULT_PASS_TD) * rec.passTd;
+  }
+  return Math.round(pts * 100) / 100;
+}
+
+/**
+ * Finds a Sleeper player's ESPN projection: by the ffb_ids crosswalk's ESPN id
+ * first (a real ID join), then by name + position (Sleeper's name, then the
+ * crosswalk's spelling), and for team defenses by team.
+ */
+export function lookupProjection(pool, { espnId, names = [], pos, team }) {
+  if (!pool) return null;
+  if (pos === "DEF") return pool.byTeamDef[normalizeTeam(team)] || null;
+  if (espnId && pool.byId[String(espnId)]) return pool.byId[String(espnId)];
+  for (const n of names) {
+    if (!n) continue;
+    const hit = pool.byName[`${normalizeName(n)}|${pos}`];
+    if (hit) return hit;
+  }
   return null;
-}
-
-/**
- * Preferred entry point: resolves the ESPN athlete ID via the ffb_ids
- * crosswalk (playerIdMap.js) first — a real ID join, not a name guess —
- * and only falls back to the fuzzy 20k-athlete name index (getEspnProjection)
- * for players the crosswalk doesn't have (recent rookies, practice-squad
- * adds, etc). sleeperId is Sleeper's own player_id, already on hand for
- * every rostered/trending player in buildLeague.js.
- */
-export async function getEspnProjectionBySleeperId(sleeperId, playerNameFallback, season, week) {
-  const crosswalk = await lookupBySleeperId(sleeperId);
-  if (crosswalk?.espnId) {
-    try {
-      const cacheKey = `espn:proj:${crosswalk.espnId}:${season}:${week}`;
-      const cached = cacheGet(cacheKey);
-      if (cached !== null) return cached === "null" ? null : cached;
-
-      const url = `${ESPN_CORE_BASE}/seasons/${season}/types/2/athletes/${crosswalk.espnId}/projections`;
-      const json = await espnFetch(url);
-      if (!_loggedRawShape) {
-        console.log("[espnProjections] Sample raw response shape (top-level keys):", Object.keys(json || {}));
-        _loggedRawShape = true;
-      }
-      const points = extractFantasyPoints(json);
-      cacheSet(cacheKey, points === null ? "null" : points, PROJECTION_TTL_MS);
-      return points;
-    } catch (err) {
-      console.warn(`[espnProjections] Crosswalk ID ${crosswalk.espnId} failed for "${playerNameFallback}": ${err.message}`);
-      // Fall through to name-based lookup below rather than giving up outright.
-    }
-  }
-  return getEspnProjection(playerNameFallback, season, week);
-}
-
-/**
- * Returns projected fantasy points for one player by name, or null if
- * unavailable/unmatched/unparseable. Every failure mode returns null —
- * this function never throws, since it's a best-effort fallback and a
- * single player's lookup failing shouldn't affect anyone else's.
- */
-export async function getEspnProjection(playerName, season, week) {
-  try {
-    const index = await getAthleteIndex();
-    const athleteId = index[normalizeName(playerName)];
-    if (!athleteId) return null;
-
-    const cacheKey = `espn:proj:${athleteId}:${season}:${week}`;
-    const cached = cacheGet(cacheKey);
-    if (cached !== null) return cached === "null" ? null : cached;
-
-    const url = `${ESPN_CORE_BASE}/seasons/${season}/types/2/athletes/${athleteId}/projections`;
-    const json = await espnFetch(url);
-
-    if (!_loggedRawShape) {
-      console.log("[espnProjections] Sample raw response shape (top-level keys):", Object.keys(json || {}));
-      _loggedRawShape = true;
-    }
-
-    const points = extractFantasyPoints(json);
-    cacheSet(cacheKey, points === null ? "null" : points, PROJECTION_TTL_MS);
-    return points;
-  } catch (err) {
-    console.warn(`[espnProjections] Failed for "${playerName}": ${err.message}`);
-    return null;
-  }
 }

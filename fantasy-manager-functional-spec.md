@@ -11,8 +11,8 @@ implementation rather than kept as a historical planning artifact.*
 
 A self-hosted companion app for fantasy football managers who run
 multiple leagues simultaneously. It ingests league/roster data from
-**Sleeper**, player projections and rankings from **FantasyPros**, a
-fallback projection source from **ESPN**, kickoff times and bye weeks
+**Sleeper**, weekly player projections from **ESPN's fantasy feed** (the only
+projection source as of v2.2), expert rankings from **FantasyPros**, kickoff times and bye weeks
 from **ESPN's schedule feed**, and a cross-platform player-ID crosswalk
 from the community **ffb_ids** dataset — then surfaces a single "health
 check" view per league so the user can quickly see which leagues need
@@ -64,10 +64,9 @@ redeploys, not just in-container restarts.
 |---|---|---|
 | Sleeper API | User's leagues, rosters (incl. IR and taxi squad), league users/team names, league settings, player directory, trending adds, waiver transactions | Public, no auth token — username-based lookup only |
 | FantasyPros API | Expert Consensus Rankings (ECR), called once per position (QB/RB/WR/TE) since the endpoint has no "all positions" option | Uses the user's API key, server-side only |
-| FantasyPros website (scraped) | Weekly player projections | The API's `/projections` endpoint caps at ~10 players/position on the free tier; scraping the public projections pages instead gets the full list. Robots.txt-compliant (5s crawl delay, honest User-Agent, hourly cache) |
 | ESPN scoreboard (unofficial) | Kickoff times per game, which teams are playing (for bye-week detection) | No auth needed; unofficial/undocumented, could change without notice |
-| ESPN per-athlete projections (unofficial) | Fallback projection source when FantasyPros has nothing for a player | Used only as a gap-fill, not a primary source |
-| ffb_ids crosswalk (community CSV) | Cross-platform player IDs (Sleeper/ESPN/FantasyPros/Yahoo/CBS/NFL.com) | Gives a real ID join for ESPN lookups; FantasyPros matching is still name-based since no confirmed ID field exists in its responses to join against |
+| ESPN fantasy player feed (unofficial; v2.2) | **All weekly player projections** — QB/RB/WR/TE/K/D/ST, one request per week (`leaguedefaults/3?view=kona_player_info&scoringPeriodId=N`, `X-Fantasy-Filter` limit 3000), cached hourly | No auth. ESPN's default (PPR) totals, adjusted per league for points per reception, TE premium and points per passing TD. Matched by crosswalk ESPN ID, then name + position, D/ST by team. Replaced the FantasyPros API/scrape tiers, which both stop at ~10 players per position, and an ESPN per-athlete endpoint that returned season stats, not projections |
+| ffb_ids crosswalk (community CSV) | Cross-platform player IDs (Sleeper/ESPN/FantasyPros/Yahoo/CBS/NFL.com) | Gives a real ID join for ESPN projections; FantasyPros ECR matching is name-based |
 | nflverse public CSV releases (v2) | Snap share (`snapPct`) and weekly usage stats (`targets`, `carries`) for the most recently completed week | Community data, name-matched (not ID-joined); column names discovered/logged defensively at runtime rather than hardcoded, since a live response wasn't confirmed while building this |
 
 **Refresh cadence (as implemented):**
@@ -204,7 +203,7 @@ Reached by tapping the league name. Shows:
 
 **Purpose:** Compare the current starting lineup against a computed optimal lineup.
 
-**Displays:** **Side-by-side current vs. optimal**, per slot — not just a summary total. Current-column and optimal-column are shown together for every slot; when they differ, the current (to-be-dropped) player is highlighted red and the optimal (suggested) player highlighted green, with the point swing shown per slot. Each player card shows a small `FP`/`E`/`FINAL` tag in the bottom corner indicating whether its value came from FantasyPros, the ESPN fallback, or a locked-in actual result.
+**Displays:** **Side-by-side current vs. optimal**, per slot — not just a summary total. Current-column and optimal-column are shown together for every slot; when they differ, the current (to-be-dropped) player is highlighted red and the optimal (suggested) player highlighted green, with the point swing shown per slot. Each player card shows a small `ESPN`/`FINAL` tag in the bottom corner indicating whether its value is an ESPN projection or a locked-in actual result (as of v2.2 ESPN is the only projection source).
 
 A player is only ever shown as "changed" if they're genuinely entering or leaving the starting lineup — not merely reassigned between two interchangeable slots of the same eligibility (e.g. two WRs with equal projections swapping WR1/WR2 has zero effect on the total and is not flagged). The optimal *set* of players is computed first; the display then keeps any player who's in both the current and optimal sets in their current slot, and only reassigns slots actually vacated by a real drop.
 
@@ -235,7 +234,7 @@ Each roster card has a drag handle (pointer events, edge auto-scroll while dragg
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
 
-**Displays:** Available players with projection (with `FP`/`E` source tag), ECR rank, trending status, and a usage badge (v2 — see 8.1) when matched. Filtered against **every roster in the league**, not just the user's own, and against each league's actual starting positions — a league with no K or DEF/DST starting slot never shows kicker/defense waiver candidates, since they'd be irrelevant noise.
+**Displays:** Available players with projection (with `ESPN` source tag), ECR rank, trending status, and a usage badge (v2 — see 8.1) when matched. Filtered against **every roster in the league**, not just the user's own, and against each league's actual starting positions — a league with no K or DEF/DST starting slot never shows kicker/defense waiver candidates, since they'd be irrelevant noise.
 
 **Variance logic** — unchanged from original design:
 - 🟢 Green: neither trending nor rank-worthy.
@@ -330,9 +329,8 @@ Each alert is deduplicated (won't re-fire for the same player+condition) using t
 Collected here since they cut across multiple sections:
 
 - **Per-user login (v2.1)** is the baseline protection (see Section 4). Throttling is per username, so someone can briefly lock a *named* account by guessing wrong passwords; it clears itself after 15 minutes. Reverse-proxy `basic_auth` or a VPN remain optional extra layers.
-- **FantasyPros matching is name-based first**, with a best-effort ID-join attempted via the ffb_ids crosswalk's confirmed `fantasyprosId` column — but only works if the scraped page's markup actually carries a matching ID, which wasn't confirmed while building this. Name matching (with a team-abbreviation fallback for defenses specifically) covers the rest. A rare name collision, a very recent trade, or a scrape-parsing edge case can still miss a match; when that happens the UI shows an explicit warning rather than a silently wrong number.
-- **K and DST were previously missing from projections entirely** (not fetched at all, regardless of matching quality) — fixed; both positions are now fetched, with a Sleeper `DEF` → FantasyPros `DST` position-name translation since the two platforms spell defenses differently.
-- **ESPN's schedule and projections endpoints are unofficial/undocumented** — could change without notice. A real bug was found and partially fixed here: the season-year query parameter was wrong, and even after correcting it, live testing suggested a caching layer may still return a different week than requested. Mitigated with a cache-busting parameter and explicit logged validation, but not fully re-verified — check server logs for a week-mismatch warning if kickoff times still look wrong. Both endpoints degrade gracefully (missing kickoff time / no fallback projection) rather than breaking the build.
+- **Projections are ESPN's (v2.2)**, from ESPN's unofficial fantasy feed. That `leaguedefaults/3` is PPR comes from third-party testing, and the reception (`53`) and passing-TD (`4`) stat IDs used for the per-league scoring adjustment come from community ESPN stat maps — neither verified directly. Other scoring differences (bonuses, return yards, unusual K/D/ST scoring) use ESPN's defaults, so totals can differ from Sleeper's for heavily customised leagues. A third-party report suggests ESPN QB projections for future weeks are less reliable than current-week. The server logs player counts and a sample player per fetch. **FantasyPros ECR matching** is name-based (team abbreviation for defenses).
+- **ESPN's schedule and projections endpoints are unofficial/undocumented** — could change without notice. A real bug was found and partially fixed here: the season-year query parameter was wrong, and even after correcting it, live testing suggested a caching layer may still return a different week than requested. Mitigated with a cache-busting parameter and explicit logged validation, but not fully re-verified — check server logs for a week-mismatch warning if kickoff times still look wrong. Both degrade gracefully (missing kickoff time / no projection, with a warning) rather than breaking the build.
 - **The ffb_ids crosswalk's exact column headers were never directly verified** (a research-tool limitation, not a real access restriction) — columns are discovered dynamically at runtime and logged on first load. The presence of a `fantasyprosId` column specifically was confirmed by direct inspection.
 - **FAAB suggestions are scoped to tracked leagues only**, not platform-wide, and are statistically a directional guide (percentile of recent winning bids) rather than a true per-player confidence interval, given realistic sample sizes.
 - **Trade Radar uses average ECR, not literal rest-of-season point totals**, as its "team strength" signal — a reasonable proxy, but a real distinction if exact ROS point projections are wanted later (would need a separate, currently-unbuilt fetch).
@@ -368,9 +366,9 @@ Collected here since they cut across multiple sections:
 10. **Navigation:** breadcrumb header + real browser history, replacing an earlier back-button-only design.
 11. **Injury Watch persistence:** changed from a "since last refresh" diff to a persistent "seen before vs. new" model, stored in SQLite.
 12. **Lineup Advice presentation:** changed from a flat optimal-lineup list to a side-by-side current-vs-optimal comparison with per-slot deltas, later refined so only genuine adds/drops are flagged (not interchangeable same-position reshuffles).
-13. **Projection sourcing:** FantasyPros first, ESPN as an explicit, visibly-tagged fallback, actual results as a third and final override once a player has played — never silently blended.
+13. **Projection sourcing:** *(superseded by 30)* FantasyPros first, ESPN as an explicit, visibly-tagged fallback, actual results as a third and final override once a player has played — never silently blended.
 14. **FAAB suggestions:** built against tracked leagues only after confirming platform-wide Sleeper data isn't accessible via the public API; framed statistically as a directional guide, not a confidence interval.
-15. **FantasyPros projections specifically:** scraped from the public website (robots.txt-compliant) rather than pulled from the API, after confirming the API's free tier truncates that endpoint to ~10 players/position — and, this round, expanded to include K/DST, which had been missing entirely.
+15. **FantasyPros projections specifically:** *(superseded by 30)* scraped from the public website (robots.txt-compliant) rather than pulled from the API, after confirming the API's free tier truncates that endpoint to ~10 players/position — and, this round, expanded to include K/DST, which had been missing entirely.
 16. **Trade Radar scope:** rebuilt to cover every team in the league (not just the user's), grouping suggestions by opponent, after confirming the original single-suggestion design didn't match the intended methodology.
 17. **Installability:** PWA support (manifest + service worker) added, plus a documented path to a side-loadable Android APK via Trusted Web Activity — no native app codebase introduced.
 18. **App-level login (v1):** a single shared password, opaque server-side session tokens in SQLite (not signed/JWT cookies), chosen specifically so logout can revoke a session server-side rather than merely forgetting it client-side. Timing-safe password comparison via fixed-length SHA-256 digests rather than comparing raw strings or padded buffers.
@@ -385,3 +383,4 @@ Collected here since they cut across multiple sections:
 27. **Player Rankings (v2.1):** user's drag order overrides the suggested lineup; free agents shown but not rankable; IR/taxi honoured-but-flagged in a custom ranking.
 28. **SQLite journal mode (v2.1):** try WAL, then WAL with exclusive locking, then DELETE journal, so volumes that can't do WAL shared memory (`SQLITE_IOERR_SHMSIZE`) no longer crash the server; `DB_JOURNAL_MODE` overrides.
 29. **Superflex slot fix (v2.1):** `SUPER_FLEX` (Sleeper) slots are now recognised as flex-eligible incl. QB; previously they could be left unfilled by the optimizer.
+30. **ESPN-only projections (v2.2):** all projections from ESPN's weekly fantasy feed, adjusted to each league's reception/TE-premium/passing-TD scoring; FantasyPros projections (API and scrape) removed after both proved capped at ~10 players per position. FantasyPros kept for ECR. Actual scores still override once a player has played.

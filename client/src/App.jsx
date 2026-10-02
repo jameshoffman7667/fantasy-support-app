@@ -178,7 +178,7 @@ function SourceTag({ source }) {
   }
   return (
     <span style={{ color: C.textFaint }} className="absolute bottom-1 right-1.5 text-[9px] font-medium tracking-wide">
-      {source}
+      {source === "E" ? "ESPN" : source}
     </span>
   );
 }
@@ -617,7 +617,7 @@ function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, o
         <div style={{ color: zero ? C.major : C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-base font-semibold">
           {p.proj != null ? p.proj.toFixed(1) : "—"}
         </div>
-        <div style={{ color: C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : p.projSource || "no proj"}</div>
+        <div style={{ color: C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : p.projSource === "E" ? "ESPN" : p.projSource || "no proj"}</div>
       </div>
     </div>
   );
@@ -1902,7 +1902,7 @@ export default function App() {
         crumbs={crumbs}
         onRefresh={showRefresh ? handleRefresh : undefined}
         refreshing={refreshing}
-        syncedLabel={showRefresh ? `Synced ${syncedAt} · Sleeper + FantasyPros/ESPN (live)` : null}
+        syncedLabel={showRefresh ? `Synced ${syncedAt} · Sleeper + ESPN projections (live)` : null}
         week={week}
         onWeekChange={handleWeekChange}
         showWeek={showWeek}
