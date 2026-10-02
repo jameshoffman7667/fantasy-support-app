@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v3, ...) for future official releases.
+onward (v1, v2, v2.1, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,47 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.1 — Per-user login with roles, Player Rankings, SQLite WAL fallback
+
+**Commit (short):** `v2.1: feat: per-user login, rankings, WAL fix`
+
+**Commit (extended):**
+v2.1 replaces the shared APP_PASSWORD with per-user login (Sleeper
+username + scrypt-hashed password), owner/guest roles, and an owner-only
+admin screen to add users, reset passwords, change roles, and revoke
+access immediately. The owner comes from OWNER_USERNAME/OWNER_PASSWORD
+(forced change on first login). Users change their own password only
+with the current one. Tracked leagues, push alerts and background
+refresh are now per user.
+
+The Lineup tab gains Player Rankings: every roster player (starter,
+bench, IR, taxi - labelled) as a drag-to-reorder card by projected
+points, free agents in a separate section. The order overrides the
+suggested lineup; yellow flags a better projected lineup, red a
+projection of exactly 0.
+
+Fixes the SQLITE_IOERR_SHMSIZE crash on volumes that can't do WAL
+(falls back WAL > exclusive WAL > DELETE; DB_JOURNAL_MODE override) and
+SUPER_FLEX slots never being filled. Upgrade: sessions reset once,
+re-enable push alerts.
+
+**Details**
+- **Login/roles:** Sleeper username + password; `owner`/`guest`. `OWNER_USERNAME` + `OWNER_PASSWORD` create the owner on first start (forced change at first login). Owner screen: add user, reset password (temp, shown once), make owner/guest, revoke/restore, remove. Env owner can't be demoted/revoked/removed; `OWNER_FORCE_RESET=true` is the recovery path. Revocation ends sessions on the next request.
+- **Player Rankings:** Lineup tab → Player Rankings. Drag handle or ↑/↓ keys; saved per user per league; "Reset to suggested order". Yellow/red highlights as above.
+- **DB fix:** `server/db.js` tries WAL, then WAL with exclusive locking, then DELETE journal, logs which it used, and honours `DB_JOURNAL_MODE`.
+- **Bug fix:** SUPER_FLEX slots were keyed wrongly in `buildLeague.js` and could go unfilled.
+- **Removed:** `APP_PASSWORD` (compose files, `.env.example`, README updated).
+
+**Upgrade notes:** replace `APP_PASSWORD` with `OWNER_USERNAME` and `OWNER_PASSWORD`; everyone is logged out once; push subscriptions are dropped (re-enable alerts per user); the previous tracked-league selection carries over to the user with that username.
+
+**Known limitations / what was and wasn't tested**
+- The real SQLite WAL failure (`SQLITE_IOERR_SHMSIZE`) could not be reproduced here, so the fallback path is untested against the actual failure; the server was tested with Node's built-in SQLite standing in for better-sqlite3.
+- Server flows (login, roles, admin, throttling, rankings, push, migration) passed 44 in-process checks; the client was exercised in headless Chromium with a mocked API using mouse input. Touch dragging on a real phone is untested.
+- Login throttling is per username, so a named account can be briefly locked by someone guessing.
+- Free agents can't be dragged. IR/taxi players are never started by the suggested lineup; ranking one into a slot is honoured but flagged "needs a roster move".
 
 ---
 

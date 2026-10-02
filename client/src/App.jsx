@@ -21,8 +21,16 @@ import {
   Trophy,
   Bell,
   BellOff,
+  GripVertical,
+  ListOrdered,
+  ArrowLeft,
+  UserCog,
+  KeyRound,
+  UserPlus,
+  Copy,
 } from "lucide-react";
 import * as api from "./api.js";
+import { effectiveLineup, isZeroProjection, GROUP_LABEL } from "./lineup.js";
 
 /* ------------------------------------------------------------------ */
 /*  DESIGN TOKENS                                                     */
@@ -97,13 +105,11 @@ function computeRoster(league) {
   return { rows, irRows, taxiRows, status: worst(rows.map((r) => r.severity)) };
 }
 
+// The Lineup tab's numbers, status and per-slot rows — including the user's
+// own Player Rankings override when they've saved one. All the logic lives in
+// lineup.js so it can be tested without React.
 function computeLineup(league) {
-  const rows = league.lineupComparison || [];
-  const currentTotal = rows.reduce((sum, c) => sum + (c.current?.proj ?? 0), 0);
-  const optimalTotal = rows.reduce((sum, c) => sum + (c.optimal?.proj ?? 0), 0);
-  const delta = Math.max(0, optimalTotal - currentTotal);
-  const status = delta === 0 ? "ok" : delta < 5 ? "minor" : "major";
-  return { currentTotal, optimalTotal, delta, status };
+  return effectiveLineup(league);
 }
 
 function rankThreshold(pos, superflex) {
@@ -338,12 +344,16 @@ function PushToggle() {
 /* ------------------------------------------------------------------ */
 /*  SCREENS                                                            */
 /* ------------------------------------------------------------------ */
-function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, sleeperUser }) {
+function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, sleeperUser }) {
   return (
     <div className="px-4 py-3">
-      <div className="flex items-center justify-between pb-3">
+      <div className="flex items-center justify-between flex-wrap gap-y-2 pb-3">
         <PushToggle />
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={onOpenAccount} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
+            <UserCog size={13} />
+            Account
+          </button>
           <button onClick={onEditLeagues} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
             <Settings2 size={13} />
             Edit tracked leagues
@@ -402,7 +412,16 @@ function LeagueOverview({ league, onOpenTab }) {
     roster: league.roster.rows.some((r) => r.severity !== "ok")
       ? `${league.roster.rows.filter((r) => r.severity === "major").length} major, ${league.roster.rows.filter((r) => r.severity === "minor").length} minor issue(s)`
       : "Lineup is clean",
-    lineup: league.lineup.delta === 0 ? "Current lineup is already optimal" : `Optimal lineup gains +${league.lineup.delta.toFixed(1)} pts`,
+    lineup: (() => {
+      const L = league.lineup;
+      if (L.zeroStarters.length) return `${L.zeroStarters.length} starter(s) projected for 0 pts`;
+      if (L.custom) {
+        const changed = L.rows.filter((r) => r.changed).length;
+        const base = changed === 0 ? "Matches your player ranking" : `Your ranking changes ${changed} slot(s)`;
+        return L.betterDelta > 0.05 ? `${base} · better lineup exists (+${L.betterDelta.toFixed(1)})` : base;
+      }
+      return L.delta === 0 ? "Current lineup is already optimal" : `Optimal lineup gains +${L.delta.toFixed(1)} pts`;
+    })(),
     waiver: `${league.waiver.rows.filter((r) => r.severity !== "ok").length} worth a look this week`,
     trade: league.trade.rows.length ? league.trade.rows[0].note : "No standout trade opportunities",
     injury: league.injury.rows.filter((r) => !r.seen).length
@@ -525,9 +544,318 @@ function RosterTab({ league }) {
   );
 }
 
-function LineupTab({ league }) {
-  const { currentTotal, optimalTotal, delta } = league.lineup;
-  const rows = league.lineupComparison || [];
+// Player Rankings (v2.1): every player on the roster (starters, bench, IR, taxi)
+// as a draggable card sorted by projected points, then free agents in their own
+// section. The order the user drags them into becomes the lineup suggestion on
+// the Lineup tab; the cards highlight yellow when a better projected lineup
+// exists, and red when a player is projected for exactly 0 (not just missing).
+const GROUP_STYLE = {
+  starter: { color: C.brand },
+  bench: { color: C.textMuted },
+  ir: { color: C.major },
+  taxi: { color: "#A08BE0" },
+  fa: { color: C.ok },
+};
+
+function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, onHandleDown, onHandleKey, cardRef }) {
+  const p = entry.player;
+  const zero = isZeroProjection(p);
+  const g = GROUP_STYLE[entry.group];
+  const needsMove = Boolean(startsAt) && (entry.group === "ir" || entry.group === "taxi");
+  const accent = zero ? C.major : yellowNote ? C.minor : g.color;
+  return (
+    <div
+      ref={cardRef}
+      data-player-key={entry.key}
+      style={{
+        background: zero ? C.majorBg : yellowNote ? C.minorBg : C.surface,
+        border: `1px solid ${zero ? `${C.major}66` : yellowNote ? `${C.minor}66` : C.border}`,
+        borderLeft: `3px solid ${accent}`,
+        boxShadow: dragging ? "0 6px 18px rgba(0,0,0,0.5)" : "none",
+        opacity: dragging ? 0.92 : 1,
+      }}
+      className="rounded-md px-2.5 py-2.5 flex items-start gap-2"
+    >
+      {draggable && (
+        <button
+          type="button"
+          aria-label={`Drag to reorder ${p.name}. Or use the up and down arrow keys.`}
+          onPointerDown={onHandleDown}
+          onKeyDown={onHandleKey}
+          style={{ touchAction: "none", cursor: dragging ? "grabbing" : "grab", color: C.textFaint }}
+          className="p-1 -ml-1 shrink-0"
+        >
+          <GripVertical size={18} />
+        </button>
+      )}
+      {rank != null && (
+        <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-xs w-6 pt-1 shrink-0 text-right">
+          {rank}
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span style={{ color: C.text }} className="text-sm font-medium truncate">{p.name}</span>
+          <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{p.pos}{p.team ? ` · ${p.team}` : ""}</span>
+        </div>
+        <div className="flex items-center gap-1 flex-wrap mt-1">
+          <span style={{ color: g.color, border: `1px solid ${g.color}55` }} className="text-[10px] rounded px-1.5 py-0.5">{GROUP_LABEL[entry.group]}</span>
+          {startsAt && (
+            <span style={{ color: C.ok, background: C.okBg }} className="text-[10px] rounded px-1.5 py-0.5">Starts at {startsAt}</span>
+          )}
+          {p.status && p.status !== "Healthy" && (
+            <span style={{ color: C.minor, border: `1px solid ${C.minor}55` }} className="text-[10px] rounded px-1.5 py-0.5">{p.status}</span>
+          )}
+          {p.trending && <span style={{ color: C.brand }} className="text-[10px]">Trending add</span>}
+          <UsageBadge usage={p.usage} />
+        </div>
+        {zero && <div style={{ color: C.major }} className="text-xs mt-1">Projected for 0 points</div>}
+        {yellowNote && <div style={{ color: C.minor }} className="text-xs mt-1">{yellowNote}</div>}
+        {needsMove && <div style={{ color: C.textMuted }} className="text-xs mt-1">On your {GROUP_LABEL[entry.group]} — needs a roster move before they can start.</div>}
+      </div>
+      <div className="text-right shrink-0">
+        <div style={{ color: zero ? C.major : C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-base font-semibold">
+          {p.proj != null ? p.proj.toFixed(1) : "—"}
+        </div>
+        <div style={{ color: C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : p.projSource || "no proj"}</div>
+      </div>
+    </div>
+  );
+}
+
+function PlayerRankings({ league, onSaveRanking, onBack }) {
+  // The order the lineup is currently built from: the saved ranking, or the
+  // default (highest projection first).
+  const baseline = useMemo(() => effectiveLineup(league).rosterOrder.map((e) => e.key), [league]);
+  const baselineSig = baseline.join("\n");
+  const [order, setOrder] = useState(baseline);
+  // True once the user has moved a card (or a ranking was already saved). Until then
+  // the lineup uses the suggested order exactly as the Lineup tab does.
+  const [touched, setTouched] = useState(false);
+  const [dragKey, setDragKey] = useState(null);
+  const [saveState, setSaveState] = useState({ saving: false, error: null });
+
+  const orderRef = useRef(order);
+  orderRef.current = order;
+  const baselineRef = useRef(baseline);
+  baselineRef.current = baseline;
+  const draggingRef = useRef(null);
+  const lastY = useRef(0);
+  const cardRefs = useRef(new Map());
+  const saveTimer = useRef(null);
+
+  // Pick up changes from outside (a refresh, another device) — but never mid-drag.
+  useEffect(() => {
+    if (!draggingRef.current) setOrder(baselineRef.current);
+  }, [baselineSig]);
+
+  useEffect(() => () => clearTimeout(saveTimer.current), []);
+
+  const hasCustom = Array.isArray(league.customRanking) && league.customRanking.length > 0;
+  const eff = useMemo(() => effectiveLineup(league, hasCustom || touched ? order : undefined), [league, order, hasCustom, touched]);
+
+  const persist = useCallback(
+    async (keys) => {
+      if (keys.join("\n") === baselineRef.current.join("\n")) return; // nothing actually moved
+      setSaveState({ saving: true, error: null });
+      try {
+        await onSaveRanking(league.id, keys);
+        setSaveState({ saving: false, error: null });
+      } catch (err) {
+        setSaveState({ saving: false, error: err.message || "Couldn't save your ranking." });
+        setOrder(baselineRef.current); // put the cards back where the server has them
+        setTouched(false);
+      }
+    },
+    [league.id, onSaveRanking]
+  );
+
+  // Moves the dragged card to wherever the pointer currently is, by comparing
+  // the pointer to the vertical midpoint of each other card.
+  const reorderToPointer = useCallback(() => {
+    const key = draggingRef.current;
+    if (!key) return;
+    const keys = orderRef.current;
+    const without = keys.filter((k) => k !== key);
+    let idx = 0;
+    for (const k of without) {
+      const el = cardRefs.current.get(k);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (lastY.current > r.top + r.height / 2) idx++;
+      else break;
+    }
+    const next = [...without.slice(0, idx), key, ...without.slice(idx)];
+    if (next.some((k, i) => k !== keys[i])) {
+      orderRef.current = next;
+      setTouched(true);
+      setOrder(next);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!dragKey) return undefined;
+    const onMove = (e) => {
+      lastY.current = e.clientY;
+      reorderToPointer();
+    };
+    const onUp = () => {
+      draggingRef.current = null;
+      setDragKey(null);
+      persist(orderRef.current);
+    };
+    // Window-level listeners rather than pointer capture: React moves the card's
+    // DOM node as it reorders, which can drop a capture mid-drag.
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    // Edge auto-scroll, and re-evaluating the position every frame so the
+    // order keeps up while the page scrolls under a stationary finger.
+    let raf;
+    const tick = () => {
+      const y = lastY.current;
+      if (y < 90) window.scrollBy(0, -14);
+      else if (y > window.innerHeight - 90) window.scrollBy(0, 14);
+      reorderToPointer();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      cancelAnimationFrame(raf);
+    };
+  }, [dragKey, reorderToPointer, persist]);
+
+  const startDrag = (e, key) => {
+    if (e.button !== undefined && e.button !== 0) return; // primary button / touch / pen only
+    e.preventDefault();
+    draggingRef.current = key;
+    lastY.current = e.clientY;
+    setDragKey(key);
+  };
+
+  // Keyboard alternative to dragging: arrow keys nudge the focused card.
+  const nudge = (e, key) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    const keys = orderRef.current;
+    const from = keys.indexOf(key);
+    const to = from + (e.key === "ArrowUp" ? -1 : 1);
+    if (from < 0 || to < 0 || to >= keys.length) return;
+    const next = [...keys];
+    next.splice(from, 1);
+    next.splice(to, 0, key);
+    orderRef.current = next;
+    setTouched(true);
+    setOrder(next);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => persist(orderRef.current), 600);
+  };
+
+  const resetOrder = async () => {
+    setTouched(false);
+    setSaveState({ saving: true, error: null });
+    try {
+      await onSaveRanking(league.id, null);
+      setSaveState({ saving: false, error: null });
+    } catch (err) {
+      setSaveState({ saving: false, error: err.message || "Couldn't reset your ranking." });
+    }
+  };
+
+  const better = eff.betterDelta > 0.05;
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-center justify-between pb-2">
+        <button onClick={onBack} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
+          <ArrowLeft size={13} />
+          Back to lineup
+        </button>
+        {(hasCustom || touched) && (
+          <button onClick={resetOrder} disabled={saveState.saving} style={{ color: C.textMuted }} className="text-xs font-medium">
+            Reset to suggested order
+          </button>
+        )}
+      </div>
+
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Drag the handle to rank your players (or focus it and use the arrow keys). Players ranked higher get first claim on the lineup slots they're eligible for,
+        and your order replaces the suggested lineup on the Lineup tab. It's saved to your account, per league.
+      </div>
+
+      <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg p-3 flex items-center justify-around text-center mb-2">
+        <div>
+          <div style={{ color: C.textMuted }} className="text-[11px] mb-0.5">Set in Sleeper</div>
+          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-lg font-semibold">{eff.currentTotal.toFixed(1)}</div>
+        </div>
+        <div>
+          <div style={{ color: C.textMuted }} className="text-[11px] mb-0.5">{hasCustom || touched ? "Your ranking" : "Suggested"}</div>
+          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-lg font-semibold">{eff.rankedTotal.toFixed(1)}</div>
+        </div>
+        <div>
+          <div style={{ color: C.textMuted }} className="text-[11px] mb-0.5">Best possible</div>
+          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-lg font-semibold">{eff.bestTotal.toFixed(1)}</div>
+        </div>
+      </div>
+      {better && (
+        <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2 mb-2">
+          A better projected lineup exists: +{eff.betterDelta.toFixed(1)} pts over this ranking. The players involved are highlighted yellow.
+        </div>
+      )}
+      {saveState.error && <div style={{ color: C.major }} className="text-xs px-1 pb-2">{saveState.error}</div>}
+      <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-1 h-4">{saveState.saving ? "Saving…" : ""}</div>
+
+      <SectionLabel>Your Roster — {eff.rosterOrder.length} players</SectionLabel>
+      <div className="space-y-1.5">
+        {eff.rosterOrder.map((entry, i) => (
+          <RankingCard
+            key={entry.key}
+            entry={entry}
+            rank={i + 1}
+            startsAt={eff.startsAt.get(entry.key)}
+            yellowNote={eff.yellow.get(entry.key)}
+            draggable
+            dragging={dragKey === entry.key}
+            onHandleDown={(e) => startDrag(e, entry.key)}
+            onHandleKey={(e) => nudge(e, entry.key)}
+            cardRef={(el) => {
+              if (el) cardRefs.current.set(entry.key, el);
+              else cardRefs.current.delete(entry.key);
+            }}
+          />
+        ))}
+      </div>
+
+      <SectionLabel>Free Agents</SectionLabel>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Not on your roster, so they can't be ranked — they're shown with their projections so you can see whether a pickup would beat your lineup.
+      </div>
+      {eff.freeAgents.length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No notable free agents right now.</div>
+      ) : (
+        <div className="space-y-1.5">
+          {eff.freeAgents.map((entry) => (
+            <RankingCard key={entry.key} entry={entry} rank={null} startsAt={null} yellowNote={eff.yellow.get(entry.key)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LineupTab({ league, onSaveRanking }) {
+  const [showRankings, setShowRankings] = useState(false);
+  if (showRankings) {
+    return <PlayerRankings league={league} onSaveRanking={onSaveRanking} onBack={() => setShowRankings(false)} />;
+  }
+
+  const L = league.lineup;
+  const { currentTotal, optimalTotal, delta, custom } = L;
+  const rows = L.rows || [];
+  const suggestedLabel = custom ? "Your ranking" : "Optimal";
+  const better = custom && L.betterDelta > 0.05;
   return (
     <div className="px-4 py-3">
       {league.dataWarnings?.length > 0 && (
@@ -535,51 +863,82 @@ function LineupTab({ league }) {
           {league.dataWarnings.map((w, i) => <div key={i}>{w}</div>)}
         </div>
       )}
+      <div className="flex items-center justify-between gap-2 pb-2">
+        <div style={{ color: C.textMuted }} className="text-xs px-1">
+          {custom ? "Your player ranking is replacing the suggested lineup." : "Suggested lineup from projections."}
+        </div>
+        <button
+          onClick={() => setShowRankings(true)}
+          style={{ color: C.brand, border: `1px solid ${C.brand}66` }}
+          className="text-xs font-medium rounded-md px-2.5 py-1.5 flex items-center gap-1.5 shrink-0"
+        >
+          <ListOrdered size={14} />
+          Player Rankings
+        </button>
+      </div>
+      {L.zeroStarters.length > 0 && (
+        <div style={{ background: C.majorBg, border: `1px solid ${C.major}55`, color: C.major }} className="text-xs rounded-md px-3 py-2 mb-2">
+          Projected for 0 points: {L.zeroStarters.map((p) => p.name).join(", ")}
+        </div>
+      )}
+      {better && (
+        <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2 mb-2">
+          A better projected lineup exists: +{L.betterDelta.toFixed(1)} pts over your ranking — open Player Rankings to see who.
+        </div>
+      )}
       <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg p-4 flex items-center justify-around text-center mb-3">
         <div>
           <div style={{ color: C.textMuted }} className="text-xs mb-1">Current</div>
           <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-2xl font-semibold">{currentTotal.toFixed(1)}</div>
         </div>
-        <div style={{ color: STATUS[league.lineup.status].color }} className="text-sm font-medium">
-          {delta === 0 ? "= optimal" : `+${delta.toFixed(1)} pts`}
+        <div style={{ color: STATUS[L.status].color }} className="text-sm font-medium">
+          {delta === 0 ? `= ${suggestedLabel.toLowerCase()}` : `+${delta.toFixed(1)} pts`}
         </div>
         <div>
-          <div style={{ color: C.textMuted }} className="text-xs mb-1">Optimal</div>
+          <div style={{ color: C.textMuted }} className="text-xs mb-1">{suggestedLabel}</div>
           <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-2xl font-semibold">{optimalTotal.toFixed(1)}</div>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 px-1 pb-1">
         <div style={{ color: C.textFaint }} className="text-[11px] font-medium tracking-wide">CURRENT</div>
-        <div style={{ color: C.textFaint }} className="text-[11px] font-medium tracking-wide">OPTIMAL</div>
+        <div style={{ color: C.textFaint }} className="text-[11px] font-medium tracking-wide">{custom ? "YOUR RANKING" : "OPTIMAL"}</div>
       </div>
       <div className="space-y-1.5">
-        {rows.map((c, i) => (
-          <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md overflow-hidden">
-            <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif", borderBottom: `1px solid ${C.border}` }} className="text-[10px] px-3 py-1 flex items-center justify-between">
-              <span>{c.slot}{c.locked ? " · Played" : ""}</span>
-              {c.changed && c.delta !== 0 && (
-                <span style={{ color: c.delta > 0 ? C.minor : C.ok }}>{c.delta > 0 ? "+" : ""}{c.delta.toFixed(1)} pts</span>
-              )}
-            </div>
-            <div className="grid grid-cols-2">
-              <div
-                style={{ background: c.changed ? C.majorBg : "transparent", borderRight: `1px solid ${C.border}` }}
-                className="relative px-3 py-2.5 pb-4"
-              >
-                <div style={{ color: c.changed ? C.major : C.text }} className="text-sm font-medium truncate">{c.current?.name ?? "(empty)"}</div>
-                <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{c.current?.proj != null ? c.current.proj.toFixed(1) : "—"}</div>
-                <SourceTag source={c.current?.projSource} />
+        {rows.map((c, i) => {
+          const curZero = isZeroProjection(c.current);
+          const optZero = isZeroProjection(c.optimal);
+          return (
+            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md overflow-hidden">
+              <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif", borderBottom: `1px solid ${C.border}` }} className="text-[10px] px-3 py-1 flex items-center justify-between">
+                <span>{c.slot}{c.locked ? " · Played" : ""}</span>
+                {c.changed && c.delta !== 0 && (
+                  <span style={{ color: c.delta > 0 ? C.minor : C.ok }}>{c.delta > 0 ? "+" : ""}{c.delta.toFixed(1)} pts</span>
+                )}
               </div>
-              <div style={{ background: c.changed ? C.okBg : "transparent" }} className="relative px-3 py-2.5 pb-4">
-                <div style={{ color: c.changed ? C.ok : C.text }} className="text-sm font-medium truncate">{c.optimal?.name ?? "(none available)"}</div>
-                <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{c.optimal?.proj != null ? c.optimal.proj.toFixed(1) : "—"}</div>
-                {c.optimal?.note && <div style={{ color: C.brand }} className="text-[10px] mt-0.5">{c.optimal.note}</div>}
-                <SourceTag source={c.optimal?.projSource} />
+              <div className="grid grid-cols-2">
+                <div
+                  style={{ background: curZero ? C.majorBg : c.changed ? C.majorBg : "transparent", borderRight: `1px solid ${C.border}` }}
+                  className="relative px-3 py-2.5 pb-4"
+                >
+                  <div style={{ color: curZero || c.changed ? C.major : C.text }} className="text-sm font-medium truncate">{c.current?.name ?? "(empty)"}</div>
+                  <div style={{ color: curZero ? C.major : C.textMuted }} className="text-xs mt-0.5">
+                    {c.current?.proj != null ? c.current.proj.toFixed(1) : "—"}{curZero ? " · projected 0" : ""}
+                  </div>
+                  <SourceTag source={c.current?.projSource} />
+                </div>
+                <div style={{ background: optZero ? C.majorBg : c.changed ? C.okBg : "transparent" }} className="relative px-3 py-2.5 pb-4">
+                  <div style={{ color: optZero ? C.major : c.changed ? C.ok : C.text }} className="text-sm font-medium truncate">{c.optimal?.name ?? "(none available)"}</div>
+                  <div style={{ color: optZero ? C.major : C.textMuted }} className="text-xs mt-0.5">
+                    {c.optimal?.proj != null ? c.optimal.proj.toFixed(1) : "—"}{optZero ? " · projected 0" : ""}
+                  </div>
+                  {c.optimal?.note && <div style={{ color: C.brand }} className="text-[10px] mt-0.5">{c.optimal.note}</div>}
+                  <SourceTag source={c.optimal?.projSource} />
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -868,64 +1227,314 @@ function SeasonOutlookTab({ league, sessionId }) {
 
 const TAB_COMPONENTS = { roster: RosterTab, lineup: LineupTab, waiver: WaiverTab, trade: TradeTab, injury: InjuryTab, odds: SeasonOutlookTab };
 
-function LoginScreen({ password, setPassword, onSubmit, loading, error }) {
+const inputStyle = { background: C.surface, border: `1px solid ${C.border}`, color: C.text };
+
+function TextField({ type = "text", value, onChange, onEnter, placeholder, autoFocus, autoComplete }) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => e.key === "Enter" && onEnter && onEnter()}
+      placeholder={placeholder}
+      autoFocus={autoFocus}
+      autoComplete={autoComplete}
+      autoCapitalize="none"
+      autoCorrect="off"
+      spellCheck={false}
+      style={inputStyle}
+      className="w-full rounded-md px-3.5 py-2.5 text-sm outline-none"
+    />
+  );
+}
+
+function PrimaryButton({ onClick, disabled, loading, Icon, children }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled || loading}
+      style={{ background: disabled || loading ? C.surfaceRaised : C.brand, color: C.text }}
+      className="w-full rounded-md py-2.5 text-sm font-medium flex items-center justify-center gap-2"
+    >
+      {loading ? <Loader2 size={16} className="animate-spin" /> : Icon ? <Icon size={16} /> : null}
+      {children}
+    </button>
+  );
+}
+
+function LoginScreen({ username, setUsername, password, setPassword, onSubmit, loading, error }) {
+  const ready = username.trim() && password;
   return (
     <div className="px-5 py-8 flex flex-col items-center text-center gap-4">
       <div style={{ background: C.surfaceRaised, color: C.brand }} className="p-3 rounded-full"><Lock size={22} /></div>
       <div>
         <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-lg mb-1">Log in</div>
-        <div style={{ color: C.textMuted }} className="text-sm max-w-xs">This app is shared across your devices with one password.</div>
+        <div style={{ color: C.textMuted }} className="text-sm max-w-xs">Use your Sleeper username and the password the owner of this app set up for you.</div>
       </div>
-      <input
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && !loading && password && onSubmit()}
-        placeholder="Password"
-        autoFocus
-        style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}
-        className="w-full max-w-xs rounded-md px-3.5 py-2.5 text-sm outline-none"
-      />
+      <div className="w-full max-w-xs space-y-2.5">
+        <TextField value={username} onChange={setUsername} placeholder="Sleeper username" autoFocus autoComplete="username" onEnter={() => ready && !loading && onSubmit()} />
+        <TextField type="password" value={password} onChange={setPassword} placeholder="Password" autoComplete="current-password" onEnter={() => ready && !loading && onSubmit()} />
+      </div>
       {error && <div style={{ color: C.major }} className="text-xs max-w-xs">{error}</div>}
-      <button
-        onClick={onSubmit}
-        disabled={loading || !password}
-        style={{ background: loading || !password ? C.surfaceRaised : C.brand, color: C.text }}
-        className="w-full max-w-xs rounded-md py-2.5 text-sm font-medium flex items-center justify-center gap-2"
-      >
-        {loading ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
-        {loading ? "Logging in…" : "Log in"}
+      <div className="w-full max-w-xs">
+        <PrimaryButton onClick={onSubmit} disabled={!ready} loading={loading} Icon={Lock}>{loading ? "Logging in…" : "Log in"}</PrimaryButton>
+      </div>
+    </div>
+  );
+}
+
+// Used for both the forced first-login change and the voluntary one from the Account screen.
+function ChangePasswordForm({ forced, onDone }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    if (next.length < 8) return setError("New password must be at least 8 characters.");
+    if (next !== confirm) return setError("The new passwords don't match.");
+    setBusy(true);
+    try {
+      await api.changePassword(current, next);
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+      setDone(true);
+      if (onDone) onDone();
+    } catch (err) {
+      setError(err.message || "Couldn't change the password.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2.5">
+      {forced && (
+        <div style={{ color: C.textMuted }} className="text-sm">
+          You're signed in with a temporary password. Choose your own to continue — enter the temporary one as your current password.
+        </div>
+      )}
+      <TextField type="password" value={current} onChange={setCurrent} placeholder="Current password" autoComplete="current-password" />
+      <TextField type="password" value={next} onChange={setNext} placeholder="New password (8+ characters)" autoComplete="new-password" />
+      <TextField type="password" value={confirm} onChange={setConfirm} placeholder="Confirm new password" autoComplete="new-password" onEnter={() => current && next && confirm && !busy && submit()} />
+      {error && <div style={{ color: C.major }} className="text-xs">{error}</div>}
+      {done && !forced && <div style={{ color: C.ok }} className="text-xs">Password changed. Your other devices were signed out.</div>}
+      <PrimaryButton onClick={submit} disabled={!current || !next || !confirm} loading={busy} Icon={KeyRound}>
+        {busy ? "Saving…" : "Change password"}
+      </PrimaryButton>
+    </div>
+  );
+}
+
+function ForcePasswordScreen({ authUser, onDone, onLogout }) {
+  return (
+    <div className="px-5 py-8 flex flex-col gap-4 max-w-sm mx-auto">
+      <div className="flex flex-col items-center text-center gap-3">
+        <div style={{ background: C.surfaceRaised, color: C.brand }} className="p-3 rounded-full"><KeyRound size={22} /></div>
+        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-lg">Choose a new password</div>
+        <div style={{ color: C.textMuted }} className="text-xs">Signed in as {authUser?.username}</div>
+      </div>
+      <ChangePasswordForm forced onDone={onDone} />
+      <button onClick={onLogout} style={{ color: C.textMuted }} className="text-xs font-medium flex items-center justify-center gap-1 pt-1">
+        <LogOut size={13} /> Log out
       </button>
     </div>
   );
 }
 
-function ConnectScreen({ username, setUsername, onSubmit, connecting, error }) {
+function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
   return (
-    <div className="px-5 py-8 flex flex-col items-center text-center gap-4">
-      <div style={{ background: C.surfaceRaised, color: C.brand }} className="p-3 rounded-full"><Link2 size={22} /></div>
-      <div>
-        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-lg mb-1">Connect your Sleeper account</div>
-        <div style={{ color: C.textMuted }} className="text-sm max-w-xs">Enter your Sleeper username. This and your tracked leagues are remembered on the server — logging in from any device picks up right where you left off.</div>
+    <div className="px-4 py-3 space-y-4">
+      <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3">
+        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm">{authUser?.username}</div>
+        <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{authUser?.role === "owner" ? "Owner" : "Guest"}</div>
       </div>
-      <input
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && !connecting && username.trim() && onSubmit()}
-        placeholder="Sleeper username"
-        style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }}
-        className="w-full max-w-xs rounded-md px-3.5 py-2.5 text-sm outline-none"
-      />
-      {error && <div style={{ color: C.major }} className="text-xs max-w-xs">{error}</div>}
-      <button
-        onClick={onSubmit}
-        disabled={connecting || !username.trim()}
-        style={{ background: connecting || !username.trim() ? C.surfaceRaised : C.brand, color: C.text }}
-        className="w-full max-w-xs rounded-md py-2.5 text-sm font-medium flex items-center justify-center gap-2"
-      >
-        {connecting ? <Loader2 size={16} className="animate-spin" /> : <Link2 size={16} />}
-        {connecting ? "Looking you up…" : "Find my leagues"}
+      <div>
+        <SectionLabel>Change password</SectionLabel>
+        <div className="pt-1.5"><ChangePasswordForm /></div>
+      </div>
+      {authUser?.role === "owner" && (
+        <button onClick={onOpenAdmin} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text }} className="w-full rounded-md px-3.5 py-3 text-sm font-medium flex items-center justify-between">
+          <span className="flex items-center gap-2"><UserCog size={16} style={{ color: C.brand }} /> Manage users</span>
+          <ChevronRight size={16} style={{ color: C.textFaint }} />
+        </button>
+      )}
+      <button onClick={onLogout} style={{ color: C.textMuted }} className="text-xs font-medium flex items-center gap-1 px-1">
+        <LogOut size={13} /> Log out
       </button>
+    </div>
+  );
+}
+
+function Chip({ children, color }) {
+  return (
+    <span style={{ color, border: `1px solid ${color}66` }} className="text-[10px] rounded-full px-1.5 py-0.5 uppercase tracking-wide">{children}</span>
+  );
+}
+
+function AdminScreen({ authUser }) {
+  const [users, setUsers] = useState(null);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null); // { username, password, verb }
+  const [busyKey, setBusyKey] = useState(null);
+  const [newName, setNewName] = useState("");
+  const [newRole, setNewRole] = useState("guest");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const { users: list } = await api.adminListUsers();
+      setUsers(list);
+    } catch (err) {
+      setError(err.message || "Couldn't load users.");
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const run = async (key, fn) => {
+    setBusyKey(key);
+    setError(null);
+    try {
+      return await fn();
+    } catch (err) {
+      setError(err.message || "That didn't work.");
+      return null;
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const add = async () => {
+    const res = await run("add", () => api.adminCreateUser(newName.trim(), newRole, newPassword));
+    if (res) {
+      setNotice({ username: res.user.username, password: res.temporaryPassword, verb: "created" });
+      setNewName("");
+      setNewPassword("");
+      setNewRole("guest");
+      load();
+    }
+  };
+  const reset = async (u) => {
+    const res = await run(`reset:${u.username}`, () => api.adminResetPassword(u.username));
+    if (res) {
+      setNotice({ username: u.username, password: res.temporaryPassword, verb: "reset" });
+      load();
+    }
+  };
+  const setRole = async (u, role) => {
+    if (await run(`role:${u.username}`, () => api.adminSetRole(u.username, role))) load();
+  };
+  const setAccess = async (u, active) => {
+    if (await run(`access:${u.username}`, () => api.adminSetAccess(u.username, active))) load();
+  };
+  const remove = async (u) => {
+    if (await run(`rm:${u.username}`, () => api.adminDeleteUser(u.username))) {
+      setConfirmRemove(null);
+      load();
+    }
+  };
+  const copy = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard can be blocked on plain HTTP; the password is shown on screen to copy by hand.
+    }
+  };
+
+  const small = { border: `1px solid ${C.border}`, color: C.textMuted };
+
+  return (
+    <div className="px-4 py-3 space-y-4">
+      {notice && (
+        <div style={{ background: C.surface, border: `1px solid ${C.brand}` }} className="rounded-md px-3.5 py-3 space-y-1.5">
+          <div style={{ color: C.text }} className="text-xs">
+            Temporary password for <b>{notice.username}</b> ({notice.verb}). Share it with them now — it isn't shown again. They must change it at first login.
+          </div>
+          <div className="flex items-center gap-2">
+            <code style={{ background: C.bg, color: C.brand }} className="text-sm rounded px-2 py-1 select-all break-all">{notice.password}</code>
+            <button onClick={() => copy(notice.password)} style={small} className="text-[11px] rounded-full px-2 py-1 flex items-center gap-1 shrink-0">
+              <Copy size={11} /> {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <button onClick={() => setNotice(null)} style={{ color: C.textFaint }} className="text-[11px]">Dismiss</button>
+        </div>
+      )}
+      {error && <div style={{ color: C.major }} className="text-xs px-1">{error}</div>}
+
+      <div>
+        <SectionLabel>Users</SectionLabel>
+        {!users && !error && <div className="flex items-center gap-2 px-1 py-3" style={{ color: C.textMuted }}><Loader2 size={16} className="animate-spin" /><span className="text-sm">Loading…</span></div>}
+        <div className="space-y-2">
+          {(users || []).map((u) => {
+            const self = u.username === authUser?.username;
+            const locked = u.isEnvOwner;
+            return (
+              <div key={u.username} style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: u.active ? 1 : 0.7 }} className="rounded-md px-3.5 py-3 space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm">{u.username}</span>
+                  <Chip color={u.role === "owner" ? C.brand : C.textMuted}>{u.role}</Chip>
+                  {!u.active && <Chip color={C.major}>revoked</Chip>}
+                  {u.mustChangePassword && <Chip color={C.minor}>temp password</Chip>}
+                  {self && <Chip color={C.textFaint}>you</Chip>}
+                </div>
+                <div style={{ color: C.textFaint }} className="text-[11px]">
+                  {u.lastLoginAt ? `Last login ${new Date(u.lastLoginAt).toLocaleString()}` : "Never logged in"}
+                  {locked ? " · set by OWNER_USERNAME" : ""}
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button onClick={() => reset(u)} disabled={busyKey === `reset:${u.username}`} style={small} className="text-[11px] rounded-full px-2.5 py-1 flex items-center gap-1">
+                    <KeyRound size={11} /> Reset password
+                  </button>
+                  {!locked && !self && (
+                    <>
+                      <button onClick={() => setRole(u, u.role === "owner" ? "guest" : "owner")} disabled={busyKey === `role:${u.username}`} style={small} className="text-[11px] rounded-full px-2.5 py-1">
+                        {u.role === "owner" ? "Make guest" : "Make owner"}
+                      </button>
+                      <button onClick={() => setAccess(u, !u.active)} disabled={busyKey === `access:${u.username}`} style={{ ...small, color: u.active ? C.major : C.ok }} className="text-[11px] rounded-full px-2.5 py-1">
+                        {u.active ? "Revoke access" : "Restore access"}
+                      </button>
+                      {confirmRemove === u.username ? (
+                        <>
+                          <button onClick={() => remove(u)} disabled={busyKey === `rm:${u.username}`} style={{ border: `1px solid ${C.major}`, color: C.major }} className="text-[11px] rounded-full px-2.5 py-1">Confirm remove</button>
+                          <button onClick={() => setConfirmRemove(null)} style={small} className="text-[11px] rounded-full px-2.5 py-1">Cancel</button>
+                        </>
+                      ) : (
+                        <button onClick={() => setConfirmRemove(u.username)} style={small} className="text-[11px] rounded-full px-2.5 py-1">Remove</button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Add a user</SectionLabel>
+        <div className="space-y-2.5 pt-1.5">
+          <TextField value={newName} onChange={setNewName} placeholder="Their Sleeper username" />
+          <TextField value={newPassword} onChange={setNewPassword} placeholder="Temporary password (blank = generate one)" autoComplete="off" />
+          <div className="flex items-center gap-2">
+            {["guest", "owner"].map((r) => (
+              <button key={r} onClick={() => setNewRole(r)} style={{ border: `1px solid ${newRole === r ? C.brand : C.border}`, color: newRole === r ? C.brand : C.textMuted }} className="text-xs rounded-full px-3 py-1 capitalize">{r}</button>
+            ))}
+          </div>
+          <PrimaryButton onClick={add} disabled={!newName.trim()} loading={busyKey === "add"} Icon={UserPlus}>
+            {busyKey === "add" ? "Adding…" : "Add user"}
+          </PrimaryButton>
+        </div>
+      </div>
     </div>
   );
 }
@@ -988,6 +1597,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [syncedAt, setSyncedAt] = useState("just now");
 
+  const [authUser, setAuthUser] = useState(null);
   const [username, setUsername] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState(null);
@@ -1045,37 +1655,48 @@ export default function App() {
   // browser, so it follows the person across devices.
   const reconnectFromLastSession = useCallback(
     async (last) => {
-      if (!last?.username) {
-        navigate({ screen: "connect" }, { replace: true });
-        return;
-      }
-      setUsername(last.username);
       try {
-        const { sessionId, user, week: currentWeek, leagues } = await api.connect(last.username);
+        const { sessionId, user, week: currentWeek, leagues } = await api.connect();
         setSessionId(sessionId);
         setSleeperUser(user);
         setAvailableLeagues(leagues);
         const validIds = leagues.map((l) => l.league_id);
-        const restoredIds = (last.leagueIds || []).filter((id) => validIds.includes(id));
+        const restoredIds = (last?.leagueIds || []).filter((id) => validIds.includes(id));
         setSelectedIds(restoredIds.length ? restoredIds : validIds);
+        setWeek(currentWeek);
         if (restoredIds.length === 0) {
           navigate({ screen: "select" }, { replace: true });
           return;
         }
         setLoadingLeagues(true);
-        const { leagues: built, week: builtWeek } = await api.buildLeagues(sessionId, restoredIds, last.week ?? undefined);
+        const { leagues: built, week: builtWeek } = await api.buildLeagues(sessionId, restoredIds, last?.week ?? undefined);
         setLiveLeagues(built);
         setWeek(builtWeek ?? currentWeek);
         setSyncedAt("just now");
         navigate({ screen: "dashboard" }, { replace: true });
       } catch (err) {
-        setConnectError(err.message || "Couldn't reconnect automatically — try again.");
-        navigate({ screen: "connect" }, { replace: true });
+        // Logged in fine, but Sleeper couldn't be reached — land on the account screen so
+        // the person isn't stuck, with the reason shown on the league picker.
+        setConnectError(err.message || "Couldn't reach Sleeper — try again.");
+        navigate({ screen: "select" }, { replace: true });
       } finally {
         setLoadingLeagues(false);
       }
     },
     [navigate]
+  );
+
+  // After login/bootstrap: a pending forced password change blocks everything else.
+  const enterApp = useCallback(
+    async (status) => {
+      setAuthUser(status.user);
+      if (status.user.mustChangePassword) {
+        navigate({ screen: "forceChange" }, { replace: true });
+        return;
+      }
+      await reconnectFromLastSession(status.lastSession);
+    },
+    [navigate, reconnectFromLastSession]
   );
 
   useEffect(() => {
@@ -1086,7 +1707,7 @@ export default function App() {
           navigate({ screen: "login" }, { replace: true });
           return;
         }
-        await reconnectFromLastSession(status.lastSession);
+        await enterApp(status);
       } catch {
         navigate({ screen: "login" }, { replace: true });
       }
@@ -1094,38 +1715,58 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The server says the session is gone (logged out elsewhere, or the owner revoked access).
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setAuthUser(null);
+      setSessionId(null);
+      setLiveLeagues([]);
+      setPassword("");
+      setLoginError("Your session ended — please log in again.");
+      setView((v) => (v.screen === "login" ? v : { screen: "login" }));
+      window.history.replaceState({ screen: "login" }, "");
+    };
+    window.addEventListener("fm-unauthorized", onUnauthorized);
+    return () => window.removeEventListener("fm-unauthorized", onUnauthorized);
+  }, []);
+
   const handleLoginSubmit = useCallback(async () => {
     setLoggingIn(true);
     setLoginError(null);
     try {
-      await api.login(password);
+      await api.login(username.trim(), password);
       setPassword("");
       const status = await api.getAuthStatus();
-      await reconnectFromLastSession(status.lastSession);
+      await enterApp(status);
     } catch (err) {
       setLoginError(err.message || "Couldn't log in — try again.");
     } finally {
       setLoggingIn(false);
     }
-  }, [password, reconnectFromLastSession]);
+  }, [username, password, enterApp]);
 
-  const handleConnectSubmit = useCallback(async () => {
-    setConnecting(true);
-    setConnectError(null);
+  const handlePasswordChanged = useCallback(async () => {
+    const status = await api.getAuthStatus();
+    if (status.authenticated) await enterApp(status);
+  }, [enterApp]);
+
+  // Optimistic: show the new ranking at once, save in the background, roll back on failure.
+  const handleSaveRanking = useCallback(async (leagueId, order) => {
+    let previous;
+    setLiveLeagues((prev) =>
+      prev.map((l) => {
+        if (l.id !== leagueId) return l;
+        previous = l.customRanking;
+        return { ...l, customRanking: order };
+      })
+    );
     try {
-      const { sessionId, user, week: currentWeek, leagues } = await api.connect(username.trim());
-      setSessionId(sessionId);
-      setSleeperUser(user);
-      setAvailableLeagues(leagues);
-      setSelectedIds(leagues.map((l) => l.league_id));
-      setWeek(currentWeek);
-      navigate({ screen: "select" });
+      await api.saveRanking(leagueId, order);
     } catch (err) {
-      setConnectError(err.message || "Couldn't reach the server. Is it running?");
-    } finally {
-      setConnecting(false);
+      setLiveLeagues((prev) => prev.map((l) => (l.id === leagueId ? { ...l, customRanking: previous ?? null } : l)));
+      throw err;
     }
-  }, [username, navigate]);
+  }, []);
 
   const handleToggleLeague = useCallback((id) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -1148,7 +1789,7 @@ export default function App() {
     } finally {
       setLoadingLeagues(false);
     }
-  }, [sessionId, selectedIds, week, username, navigate]);
+  }, [sessionId, selectedIds, week, navigate]);
 
   const handleRefresh = useCallback(async () => {
     if (!sessionId || selectedIds.length === 0) return;
@@ -1209,6 +1850,7 @@ export default function App() {
     setSelectedIds([]);
     setLiveLeagues([]);
     setWeek(null);
+    setAuthUser(null);
     setUsername("");
     setPassword("");
     setConnectError(null);
@@ -1217,14 +1859,10 @@ export default function App() {
   }, [navigate]);
 
   const handleEditLeagues = useCallback(async () => {
-    if (!username) {
-      navigate({ screen: "connect" });
-      return;
-    }
     setConnectError(null);
     setConnecting(true);
     try {
-      const { sessionId: freshSessionId, user, leagues } = await api.connect(username);
+      const { sessionId: freshSessionId, user, leagues } = await api.connect();
       setSessionId(freshSessionId);
       setSleeperUser(user);
       setAvailableLeagues(leagues);
@@ -1237,7 +1875,7 @@ export default function App() {
     } finally {
       setConnecting(false);
     }
-  }, [username, liveLeagues, navigate]);
+  }, [liveLeagues, navigate]);
 
   // Breadcrumb trail: username > League Name > Sub tab name. Every level
   // but the current one is clickable.
@@ -1245,7 +1883,9 @@ export default function App() {
     const root = { label: sleeperUser?.display_name || "Fantasy Manager", onClick: liveLeagues.length ? () => navigate({ screen: "dashboard" }) : undefined };
     if (view.screen === "bootstrapping") return [{ label: "Fantasy Manager" }];
     if (view.screen === "login") return [{ label: "Fantasy Manager" }];
-    if (view.screen === "connect") return [{ label: "Connect Sleeper" }];
+    if (view.screen === "forceChange") return [{ label: "Change password" }];
+    if (view.screen === "account") return [root, { label: "Account" }];
+    if (view.screen === "admin") return [root, { label: "Account", onClick: () => navigate({ screen: "account" }) }, { label: "Manage users" }];
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
     if (view.screen === "dashboard") return [{ label: root.label }];
     if (view.screen === "league" && activeLeague) return [root, { label: activeLeague.name }];
@@ -1269,7 +1909,7 @@ export default function App() {
       />
       {view.screen === "bootstrapping" && <BootstrapScreen />}
       {view.screen === "login" && (
-        <LoginScreen password={password} setPassword={setPassword} onSubmit={handleLoginSubmit} loading={loggingIn} error={loginError} />
+        <LoginScreen username={username} setUsername={setUsername} password={password} setPassword={setPassword} onSubmit={handleLoginSubmit} loading={loggingIn} error={loginError} />
       )}
       {view.screen === "dashboard" && (
         <Dashboard
@@ -1278,12 +1918,13 @@ export default function App() {
           onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })}
           onLogout={handleLogout}
           onEditLeagues={handleEditLeagues}
+          onOpenAccount={() => navigate({ screen: "account" })}
           sleeperUser={sleeperUser}
         />
       )}
-      {view.screen === "connect" && (
-        <ConnectScreen username={username} setUsername={setUsername} onSubmit={handleConnectSubmit} connecting={connecting} error={connectError} />
-      )}
+      {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
+      {view.screen === "account" && <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />}
+      {view.screen === "admin" && authUser?.role === "owner" && <AdminScreen authUser={authUser} />}
       {view.screen === "select" && (
         <SelectLeaguesScreen leagues={availableLeagues} selectedIds={selectedIds} onToggle={handleToggleLeague} onConfirm={handleConfirmSelection} loading={loadingLeagues || connecting} error={connectError} />
       )}
@@ -1293,7 +1934,7 @@ export default function App() {
       {view.screen === "tab" && activeLeague && (() => {
         if (activeLeague.error) return <ErrorScreen message={activeLeague.error} />;
         const Comp = TAB_COMPONENTS[view.tab];
-        return <Comp league={activeLeague} sessionId={sessionId} />;
+        return <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} />;
       })()}
     </div>
   );

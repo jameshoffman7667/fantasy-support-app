@@ -26,11 +26,20 @@ services:
       # Either way, the real key is never written into this file or
       # baked into the image.
       - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY}
-      # The shared login password (see the in-app login screen). No
-      # username — this is a single-household deployment, not
-      # multi-tenant — and, same as the FantasyPros key above, it's
-      # resolved at deploy time and never baked into the image.
-      - APP_PASSWORD=${APP_PASSWORD}
+      # v2.1: per-user login. People log in with their Sleeper username + a
+      # password. OWNER_USERNAME is the owner's Sleeper username; the owner
+      # account is created at first start with OWNER_PASSWORD (you're made to
+      # change it at first login) and then adds/manages everyone else in the
+      # app. Replaces the old shared APP_PASSWORD, which is no longer read.
+      - OWNER_USERNAME=${OWNER_USERNAME}
+      - OWNER_PASSWORD=${OWNER_PASSWORD}
+      # Recovery only: set to "true" for one restart to reset the owner's
+      # password back to OWNER_PASSWORD, then remove it again.
+      - OWNER_FORCE_RESET=${OWNER_FORCE_RESET:-}
+      # Optional: force a SQLite journal mode (WAL | WAL_EXCLUSIVE | DELETE)
+      # if your data volume's filesystem doesn't support WAL. Normally leave
+      # unset — the server detects this and falls back automatically.
+      - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
       - PORT=4000
       # Web Push (v2, pre-kickoff alerts) — optional; leave unset in your
       # .env/Portainer vars and the server just runs with push disabled

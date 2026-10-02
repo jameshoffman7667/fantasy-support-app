@@ -17,9 +17,11 @@ services:
       # Either way, the real key is never written into this file or into
       # the built image.
       - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY}
-      # Shared login password for the in-app login screen — see
-      # docker-compose.yml for the full explanation.
-      - APP_PASSWORD=${APP_PASSWORD}
+      # Per-user login (v2.1) — see docker-compose.yml for the full explanation.
+      - OWNER_USERNAME=${OWNER_USERNAME}
+      - OWNER_PASSWORD=${OWNER_PASSWORD}
+      - OWNER_FORCE_RESET=${OWNER_FORCE_RESET:-}
+      - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
       - PORT=4000
       # Web Push (v2, pre-kickoff alerts) — optional; see docker-compose.yml.
       - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}

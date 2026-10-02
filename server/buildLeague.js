@@ -8,7 +8,19 @@ import { buildFpIndex, lookupFpMulti } from "./matching.js";
 import { checkAndRecordInjury, clearInjurySeen, getInjurySeenForLeague } from "./db.js";
 import { getSnapShareForWeek, getUsageStatsForWeek, lookupUsage } from "./nflverseUsage.js";
 
-const FLEX_ELIGIBLE = { FLEX: ["RB", "WR", "TE"], SUPERFLEX: ["QB", "RB", "WR", "TE"] };
+// Slot labels as they appear AFTER slotLabel() (SUPER_FLEX -> "SFLX"). Before
+// v2.1 this map was keyed "SUPERFLEX", which never matched the "SFLX" label the
+// rest of the build actually uses — so in superflex leagues the SFLX slot was
+// treated as a strict position nobody plays, and never got an optimal pick.
+// REC_FLEX/WRRB_FLEX (Sleeper's receiver-only and RB/WR flex slots) are
+// included so those leagues' flex slots resolve too.
+const FLEX_ELIGIBLE = {
+  FLEX: ["RB", "WR", "TE"],
+  SFLX: ["QB", "RB", "WR", "TE"],
+  SUPERFLEX: ["QB", "RB", "WR", "TE"],
+  REC_FLEX: ["WR", "TE"],
+  WRRB_FLEX: ["RB", "WR"],
+};
 const OUT_LIKE = ["Out", "Doubtful", "IR", "Suspended", "NA"];
 // K and DST were missing entirely before this round — meaning every
 // kicker and every team defense in a tracked league (a near-universal

@@ -1,15 +1,28 @@
 // Every call here goes to our own backend (proxied at /api by Vite in
 // dev). The client never holds, sends, or sees the FantasyPros key.
 
+// Raised (as a window event) when a request that should have been logged-in
+// comes back 401 — the session ended, or the owner revoked this user's access.
+// App.jsx listens and sends the person back to the login screen. The login and
+// status calls are exempt: a 401 there just means "wrong password"/"not logged in".
+const UNAUTH_EXEMPT = ["/api/login", "/api/auth/status"];
+
 async function request(path, options) {
   const res = await fetch(path, options);
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && !UNAUTH_EXEMPT.some((p) => path.startsWith(p))) {
+    window.dispatchEvent(new Event("fm-unauthorized"));
+  }
   if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
   return body;
 }
 
-export function connect(username) {
-  return request(`/api/connect?username=${encodeURIComponent(username)}`);
+const jsonPost = (path, payload) =>
+  request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload ?? {}) });
+
+// The logged-in user's own Sleeper account — the server knows who they are.
+export function connect() {
+  return request(`/api/connect`);
 }
 
 export function buildLeagues(sessionId, leagueIds, week) {
@@ -31,12 +44,11 @@ export function getFaabSuggestions(sessionId, leagueId) {
 // Cookies are sent automatically for these same-origin requests in every
 // deployment mode this app ships (Vite dev proxy, nginx production), so
 // no explicit `credentials` option is needed.
-export function login(password) {
-  return request(`/api/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
-  });
+// Cookies are sent automatically for these same-origin requests in every
+// deployment mode this app ships (Vite dev proxy, nginx production), so
+// no explicit `credentials` option is needed.
+export function login(username, password) {
+  return jsonPost(`/api/login`, { username, password });
 }
 
 export function logout() {
@@ -73,4 +85,33 @@ export function unsubscribePush(endpoint) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ endpoint }),
   });
+}
+
+export function changePassword(currentPassword, newPassword) {
+  return jsonPost(`/api/account/password`, { currentPassword, newPassword });
+}
+
+// Saves the drag-ordered Player Rankings for one league; order === null resets it.
+export function saveRanking(leagueId, order) {
+  return jsonPost(`/api/rankings`, { leagueId, order });
+}
+
+/* ---------------- Owner administration ---------------- */
+export function adminListUsers() {
+  return request(`/api/admin/users`);
+}
+export function adminCreateUser(username, role, password) {
+  return jsonPost(`/api/admin/users`, { username, role, password });
+}
+export function adminResetPassword(username, password) {
+  return jsonPost(`/api/admin/users/${encodeURIComponent(username)}/reset-password`, { password });
+}
+export function adminSetRole(username, role) {
+  return jsonPost(`/api/admin/users/${encodeURIComponent(username)}/role`, { role });
+}
+export function adminSetAccess(username, active) {
+  return jsonPost(`/api/admin/users/${encodeURIComponent(username)}/access`, { active });
+}
+export function adminDeleteUser(username) {
+  return request(`/api/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" });
 }

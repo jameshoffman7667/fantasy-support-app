@@ -278,12 +278,15 @@ Caddy container actually attached to it.
 **3. Environment variables section (same form):** add
 ```
 FANTASYPROS_API_KEY = <your real key>
-APP_PASSWORD = <pick a password for logging into the app>
+OWNER_USERNAME = <your Sleeper username>
+OWNER_PASSWORD = <a first password, 8+ characters>
 ```
-Both of those are the ones you actually need to set — `DOCKERHUB_USER`
-already defaults to `mybadreligon` in the compose file itself. Skipping
-`APP_PASSWORD` doesn't leave the app open; it fails closed instead, so
-nobody (including you) can log in until it's set. Optionally also set
+Those are the ones you actually need to set — `DOCKERHUB_USER`
+already defaults to `mybadreligon` in the compose file itself. On first
+start the owner account is created with `OWNER_PASSWORD` and you're asked
+to choose your own at first login. Skipping these doesn't leave the app
+open; it fails closed instead, so nobody can log in until they're set.
+(`APP_PASSWORD` from v1/v2 is no longer used — remove it.) Optionally also set
 `SERVER_PORT` / `CLIENT_PORT` if the defaults (4000 / 5000) collide with
 something else already running on that host, or `IMAGE_TAG` to pin a
 specific build instead of always tracking `:latest`.
@@ -338,16 +341,24 @@ server proxies `/api` to `http://localhost:4000` — see
 
 ## Security note before you expose this beyond localhost
 
-**There's a real login screen.** The app is gated behind a single shared
-password (`APP_PASSWORD` — see `.env.example`), checked server-side with
-a timing-safe comparison, backed by an opaque session cookie stored in
-SQLite (so logout actually revokes it, not just a client-side forget).
-There's still no per-user accounts — it's one password for the whole
-household, not a multi-tenant login — but nobody can pull data through
-your FantasyPros key without it. **Set `APP_PASSWORD` before you deploy**;
-if it's unset, the server logs a warning at startup and every login
-attempt fails closed (nobody gets in, rather than the check silently
-passing).
+**There's a real per-user login.** People log in with their Sleeper
+username and a password. Passwords are stored as salted scrypt hashes;
+sessions are opaque cookies stored in SQLite, re-checked on every request
+so the owner revoking someone ends their access immediately. Only users
+the owner has added can log in; nobody can pull data through your
+FantasyPros key without an account. **Set `OWNER_USERNAME` and
+`OWNER_PASSWORD` before you deploy**; if they're unset the server logs a
+warning at startup and nobody can log in (fails closed). Roles: **owner**
+(manage users, reset passwords, change roles, revoke/restore/remove access)
+and **guest** (use the app, change their own password). Anyone can change
+their own password but must enter the current one. Lost the owner
+password? Set `OWNER_FORCE_RESET=true` for one restart (with
+`OWNER_PASSWORD`) to reset it.
+
+Login attempts are throttled per username (10 failures / 15 minutes) — per
+username rather than per IP because behind nginx + Caddy the real client IP
+isn't reliable. The side effect is that someone can briefly lock a named
+account by guessing; it clears itself.
 
 That's already enough to put this on the open internet. Two more layers
 are still worth knowing about if you want them:
@@ -423,8 +434,9 @@ unlocks that too, if you want a side-loadable APK later.
 
 ### Login, cross-device persistence, and a week selector
 
-- **Login**: a single shared password (`APP_PASSWORD`) gates the whole app — see the security note above. Logging in sets an HttpOnly session cookie backed by a SQLite-stored token, valid for 30 days.
-- **Persistence**: your Sleeper username and which leagues you're tracking are saved **server-side**, tied to being logged in rather than to one browser. Log in from any device and it reconnects automatically to the same leagues, right where you left off — no re-entering anything, and no per-device setup.
+- **Login (v2.1)**: per-user — Sleeper username + password, owner/guest roles, owner-managed users (Account → Manage users) — see the security note above. Logging in sets an HttpOnly session cookie backed by a SQLite-stored token, valid for 30 days. Push alerts and background refresh are per user.
+- **Player Rankings (v2.1)**: Lineup tab → Player Rankings lists every roster player (starters, bench, IR, taxi — labelled) by projected points, free agents in a separate section below. Drag the handle (or use arrow keys) to reorder; your order replaces the suggested lineup for that league. Yellow = a better projected lineup exists; red = projected for exactly 0.
+- **Persistence**: which leagues you're tracking is saved **server-side** per user, tied to being logged in rather than to one browser. Log in from any device and it reconnects automatically to the same leagues, right where you left off — no re-entering anything, and no per-device setup.
 - **Log out** (on the dashboard) revokes the session cookie server-side and returns you to the login screen.
 - **Edit tracked leagues** (also on the dashboard) re-pulls your current Sleeper league list and lets you change your selection without logging out — handles the case where the server restarted and forgot your in-memory session, transparently.
 - **Week dropdown** in the header, available on the dashboard, league overview, and every tab — changing it rebuilds every tracked league for that week (fresh Sleeper roster-for-week + FantasyPros projections/ECR for that week).

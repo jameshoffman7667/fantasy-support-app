@@ -12,7 +12,7 @@
 // to actually receive a push) — same limitation as other Docker/runtime
 // changes in this project that can't be tested without a live deploy.
 import webpush from "web-push";
-import { addPushSubscription, getAllPushSubscriptions, deletePushSubscription } from "./db.js";
+import { addPushSubscription, getPushSubscriptionsForUser, deletePushSubscription } from "./db.js";
 
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY;
@@ -34,21 +34,23 @@ export function getPublicKey() {
   return VAPID_PUBLIC || null;
 }
 
-export function saveSubscription(subscription) {
-  addPushSubscription(subscription.endpoint, JSON.stringify(subscription));
+export function saveSubscription(username, subscription) {
+  addPushSubscription(username, subscription.endpoint, JSON.stringify(subscription));
 }
 
 export function removeSubscription(endpoint) {
   deletePushSubscription(endpoint);
 }
 
-/** Sends one notification payload to every subscribed browser. Prunes
- * subscriptions the push service reports as gone (404/410) so a stale
- * entry doesn't fail on every future alert. */
-export async function sendPushToAll(payload) {
+/** Sends one notification payload to every browser/device THIS user has
+ * subscribed (v2.1: alerts are per-user — one person's lineup problems are
+ * never pushed to someone else's phone). Prunes subscriptions the push
+ * service reports as gone (404/410) so a stale entry doesn't fail on
+ * every future alert. */
+export async function sendPushToUser(username, payload) {
   if (!isPushConfigured()) return { sent: 0, skipped: "VAPID keys not configured" };
   ensureConfigured();
-  const subs = getAllPushSubscriptions();
+  const subs = getPushSubscriptionsForUser(username);
   let sent = 0;
   await Promise.all(
     subs.map(async (row) => {

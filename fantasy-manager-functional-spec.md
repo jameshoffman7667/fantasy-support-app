@@ -73,41 +73,58 @@ redeploys, not just in-container restarts.
 **Refresh cadence (as implemented):**
 - Client-side automatic refresh every 30 minutes while the app is open in a tab.
 - Manual refresh button, available on every screen.
-- Server-side hourly background refresh for the last-active user's tracked leagues, independent of whether the app is open anywhere.
+- Server-side hourly background refresh for every active user's tracked leagues (sequentially), independent of whether the app is open anywhere.
 
 ---
 
 ## 4. Login / Onboarding / Session Persistence
 
-1. **App-level login gate**: a single shared password (`APP_PASSWORD`,
-   server-side env var) protects the whole app. No per-user accounts —
-   this is a household/personal deployment, not multi-tenant. The
-   password is compared with a timing-safe SHA-256-digest comparison; a
-   correct password issues an opaque random session token, stored
-   server-side in SQLite and set as an HttpOnly, SameSite=Lax cookie
-   (`Secure` when served over HTTPS, detected via `X-Forwarded-Proto`).
-   Sessions last 30 days. If `APP_PASSWORD` isn't set, the server logs a
-   startup warning and every login attempt fails closed.
-2. Once logged in, the user connects via Sleeper username (no OAuth
-   exists for Sleeper — this is a public username→user_id lookup, not a
-   second credentialed login).
-3. App pulls all leagues associated with that user_id for the current
-   season and presents a checklist.
-4. User selects which leagues to track.
-5. **Username and tracked-league selection persist server-side**, tied
-   to the login rather than to one browser (a `last_session` record in
-   SQLite, the same one the hourly background scheduler already used).
-   Logging in from any device reconnects to the same leagues
-   automatically — this is what makes the persistence actually
-   cross-device, replacing the previous per-browser `localStorage`
-   approach.
-6. **Log out** (dashboard) revokes the session cookie server-side (the
-   token is deleted from SQLite, not just cleared client-side) and
-   returns to the login screen.
-7. **Edit tracked leagues** (dashboard) re-pulls the current Sleeper
-   league list and lets the selection change without logging out —
-   also transparently recovers if the server's in-memory session was
-   lost to a restart.
+*Per-user login replaced the v1/v2 shared password in v2.1.*
+
+1. **Per-user login**: users log in with their **Sleeper username and a
+   password**. Only accounts defined in the app's `users` table can log
+   in. Usernames are case-insensitive (stored lowercased). Passwords are
+   stored as salted scrypt hashes (min. 8 characters). A correct login
+   issues an opaque random session token stored server-side in SQLite
+   (tied to the username) and set as an HttpOnly, SameSite=Lax cookie
+   (`Secure` when served over HTTPS, detected via `X-Forwarded-Proto`),
+   valid 30 days. Every request re-checks the users table, so revoking or
+   removing a user ends their access on their very next request. Failed
+   logins are throttled per username (10 per 15 minutes; per username
+   rather than IP because the proxy chain makes client IPs unreliable).
+2. **Roles**: `owner` and `guest`. The first owner is named by the
+   `OWNER_USERNAME` env var and is created at startup with
+   `OWNER_PASSWORD`, flagged to change it at first login. That env owner
+   can't be demoted, revoked or removed from inside the app.
+   `OWNER_FORCE_RESET=true` (one restart) resets the owner's password for
+   recovery. `APP_PASSWORD` is no longer read.
+3. **Owner administration** (Account → Manage users, owner-only): add a
+   user (Sleeper username — checked against Sleeper when reachable — role,
+   optional temporary password, otherwise one is generated and shown
+   once), reset a password (temporary, shown once, forces a change at next
+   login, ends that user's sessions), promote/demote owner/guest, revoke
+   or restore access (revoking ends sessions and push alerts immediately),
+   and remove a user (two-step confirm; deletes their saved state). An
+   owner can't modify their own role/access (anti-lockout) but can reset
+   their own password.
+4. **Changing your own password** (Account): requires the current
+   password; signs out the user's other devices. Temporary passwords
+   (new users, owner resets) force a password change before anything else
+   in the app is reachable (server returns `must_change_password`).
+5. Once logged in, the app connects to the **user's own** Sleeper account
+   (the login username *is* the Sleeper username — no separate connect
+   step, and nobody can view another user's Sleeper leagues through
+   their login).
+6. App pulls all leagues for that user_id for the current season and
+   presents a checklist; the user selects which to track.
+7. **Tracked leagues and week persist server-side per user** (`user_state`
+   table; carried over from the old single `last_session` record at
+   upgrade). Logging in from any device reconnects automatically.
+8. **Log out** revokes the session server-side. If the server reports the
+   session is gone (logged out elsewhere, access revoked) the app returns
+   to the login screen.
+9. **Edit tracked leagues** re-pulls the Sleeper league list and lets the
+   selection change without logging out.
 
 ---
 
@@ -199,6 +216,18 @@ The optimal lineup is computed by a **greedy slot-filling algorithm** (strict po
 - 🟢 Green: 0 pt delta
 - 🟡 Yellow: > 0 and < 5 pt delta
 - 🔴 Red: ≥ 5 pt delta
+
+### 8.2a Player Rankings (v2.1)
+
+**Purpose:** let the user override the suggested lineup with their own player order.
+
+A **Player Rankings** button on the Lineup tab opens a card list of every player on the user's roster — starters, bench, IR and taxi (each labelled) — sorted by projected points, highest first. **Free agents** (labelled) appear in a separate section at the bottom; they aren't draggable (they aren't on the roster) and exist to show whether a pickup would beat the lineup.
+
+Each roster card has a drag handle (pointer events, edge auto-scroll while dragging) and an arrow-key alternative (focus the handle, ↑/↓). The order saves automatically per user, per league, and **replaces the suggested lineup**: rank order is priority — strict positional slots fill first from the highest-ranked eligible player, then FLEX / SUPER_FLEX / REC_FLEX / WRRB_FLEX slots. Already-played starters stay locked to their actual score. "Reset to suggested order" deletes the saved ranking. Players added since the order was saved slot in by projection; players no longer on the roster drop out.
+
+**Highlights:** 🟡 yellow on any player involved in an improving swap when a better projected lineup exists than the one the ranking produces (best possible = starters + bench + free agents); 🔴 red on a player projected for **exactly 0** (a missing projection is not 0, and a finished game's actual 0 isn't flagged). Zero-projected starters also set the Lineup status badge to Major.
+
+**IR/taxi behaviour:** the default (suggested) lineup never starts IR/taxi players. If the user ranks one into a starting slot, the ranking is honoured but flagged "needs a roster move before they can start".
 
 ---
 
@@ -300,7 +329,7 @@ Each alert is deduplicated (won't re-fire for the same player+condition) using t
 
 Collected here since they cut across multiple sections:
 
-- **App-level login exists as of v1** (a single shared password, not per-user accounts — see Section 4) and is the recommended baseline before exposing this beyond localhost. Reverse-proxy `basic_auth` and a VPN like Tailscale remain available as additional/alternative layers, but are no longer the only option standing between an open internet port and the FantasyPros quota.
+- **Per-user login (v2.1)** is the baseline protection (see Section 4). Throttling is per username, so someone can briefly lock a *named* account by guessing wrong passwords; it clears itself after 15 minutes. Reverse-proxy `basic_auth` or a VPN remain optional extra layers.
 - **FantasyPros matching is name-based first**, with a best-effort ID-join attempted via the ffb_ids crosswalk's confirmed `fantasyprosId` column — but only works if the scraped page's markup actually carries a matching ID, which wasn't confirmed while building this. Name matching (with a team-abbreviation fallback for defenses specifically) covers the rest. A rare name collision, a very recent trade, or a scrape-parsing edge case can still miss a match; when that happens the UI shows an explicit warning rather than a silently wrong number.
 - **K and DST were previously missing from projections entirely** (not fetched at all, regardless of matching quality) — fixed; both positions are now fetched, with a Sleeper `DEF` → FantasyPros `DST` position-name translation since the two platforms spell defenses differently.
 - **ESPN's schedule and projections endpoints are unofficial/undocumented** — could change without notice. A real bug was found and partially fixed here: the season-year query parameter was wrong, and even after correcting it, live testing suggested a caching layer may still return a different week than requested. Mitigated with a cache-busting parameter and explicit logged validation, but not fully re-verified — check server logs for a week-mismatch warning if kickoff times still look wrong. Both endpoints degrade gracefully (missing kickoff time / no fallback projection) rather than breaking the build.
@@ -314,7 +343,7 @@ Collected here since they cut across multiple sections:
 - **Trade Finder (v2)'s 20-rank ECR "fairness tolerance" is a heuristic**, not a modeled trade-value negotiation — it filters out obviously lopsided offers, it doesn't guarantee a rival would accept what passes the filter.
 - **nflverse usage data (v2) is name-matched, not ID-joined**, and its exact CSV column names were not confirmed against a live response while building this — column names are discovered and logged at runtime instead of hardcoded blind.
 - **Push alerts (v2) require a secure context (HTTPS or localhost)** — the Push API is browser-enforced this way; this is already satisfied by the documented Caddy reverse-proxy deployment path.
-- **Push alerts are Web Push through the PWA, not a native Android app with Firebase Cloud Messaging** — see Section 8b's scoping note. `ANDROID_APK.md`'s Trusted Web Activity path remains the documented option for an installable Android app; push alerts work inside that wrapper too.
+- **Push alerts (v2.1) are per user and need re-enabling once after the v2→v2.1 upgrade** (old subscriptions had no owner and are dropped). Push alerts are Web Push through the PWA, not a native Android app with Firebase Cloud Messaging** — see Section 8b's scoping note. `ANDROID_APK.md`'s Trusted Web Activity path remains the documented option for an installable Android app; push alerts work inside that wrapper too.
 
 ---
 
@@ -332,7 +361,7 @@ Collected here since they cut across multiple sections:
 3. **Bye-week starters:** Major variance.
 4. **Refresh:** manual + 30-min client auto-refresh + hourly server background refresh.
 5. **Cross-league comparison:** in scope for Waiver Management's availability flag.
-6. **Auth:** Sleeper username-based linking (no OAuth, since Sleeper doesn't offer one) for connecting a Sleeper account, layered behind a real app-level login as of v1 — a single shared password gating the whole app, not per-user accounts (see Section 4).
+6. **Auth:** Sleeper username-based linking (no OAuth, since Sleeper doesn't offer one), layered behind a real app-level login — a shared password in v1/v2, **per-user Sleeper-username + password login with owner/guest roles from v2.1** (see Section 4).
 7. **Additional tabs:** Trade Radar and Injury Watch are core, not optional.
 8. **Deployment:** two-container Docker Compose stack, installable via Portainer from a GitHub repo, with a local SQLite database (not an external DB service) for persistence.
 9. **Demo/mock data mode:** removed entirely — the app is real-data-only.
@@ -352,3 +381,7 @@ Collected here since they cut across multiple sections:
 23. **Usage-data source (v2):** nflverse's free public CSV releases chosen over a paid usage-stats API, matched by normalized player name (no confirmed shared ID with Sleeper/FantasyPros for this specific data source).
 24. **"Android APK with push notifications" idea (v2):** implemented as real Web Push through the existing installable PWA rather than a native Android app with Firebase Cloud Messaging — a deliberate scope reduction given the added complexity (packaging, code signing, Play Store review) of a true native wrapper, documented explicitly rather than silently substituted. The previously-documented Trusted Web Activity path (`ANDROID_APK.md`) for wrapping this PWA as an Android APK is unaffected and compatible with these push alerts.
 25. **Pre-kickoff alert triggers (v2):** an injury-status change to Out/IR/PUP within ~26 hours of kickoff, or a bench option projecting 3+ points above a starter in the same slot — chosen as concrete, checkable conditions rather than a vaguer "something changed" alert, using Sleeper's official injury-report field as the closest available proxy for "ruled out" (not a live gameday-inactive feed).
+26. **Per-user login (v2.1):** owner defined by `OWNER_USERNAME`; owner manages users in-app; revocation immediate; own-password changes require the current password; `APP_PASSWORD` retired.
+27. **Player Rankings (v2.1):** user's drag order overrides the suggested lineup; free agents shown but not rankable; IR/taxi honoured-but-flagged in a custom ranking.
+28. **SQLite journal mode (v2.1):** try WAL, then WAL with exclusive locking, then DELETE journal, so volumes that can't do WAL shared memory (`SQLITE_IOERR_SHMSIZE`) no longer crash the server; `DB_JOURNAL_MODE` overrides.
+29. **Superflex slot fix (v2.1):** `SUPER_FLEX` (Sleeper) slots are now recognised as flex-eligible incl. QB; previously they could be left unfilled by the optimizer.
