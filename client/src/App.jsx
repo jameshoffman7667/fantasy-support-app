@@ -178,7 +178,7 @@ function SourceTag({ source }) {
   }
   return (
     <span style={{ color: C.textFaint }} className="absolute bottom-1 right-1.5 text-[9px] font-medium tracking-wide">
-      {source === "E" ? "ESPN" : source}
+      {source === "S" ? "SLEEPER" : source === "E" ? "ESPN" : source}
     </span>
   );
 }
@@ -617,7 +617,7 @@ function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, o
         <div style={{ color: zero ? C.major : C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-base font-semibold">
           {p.proj != null ? p.proj.toFixed(1) : "—"}
         </div>
-        <div style={{ color: C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : p.projSource === "E" ? "ESPN" : p.projSource || "no proj"}</div>
+        <div style={{ color: C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : p.projSource === "S" ? "Sleeper" : p.projSource === "E" ? "ESPN" : p.projSource || "no proj"}</div>
       </div>
     </div>
   );

@@ -439,7 +439,7 @@ unlocks that too, if you want a side-loadable APK later.
 - **Persistence**: which leagues you're tracking is saved **server-side** per user, tied to being logged in rather than to one browser. Log in from any device and it reconnects automatically to the same leagues, right where you left off — no re-entering anything, and no per-device setup.
 - **Log out** (on the dashboard) revokes the session cookie server-side and returns you to the login screen.
 - **Edit tracked leagues** (also on the dashboard) re-pulls your current Sleeper league list and lets you change your selection without logging out — handles the case where the server restarted and forgot your in-memory session, transparently.
-- **Week dropdown** in the header, available on the dashboard, league overview, and every tab — changing it rebuilds every tracked league for that week (fresh Sleeper roster-for-week + ESPN projections and FantasyPros ECR for that week).
+- **Week dropdown** in the header, available on the dashboard, league overview, and every tab — changing it rebuilds every tracked league for that week (fresh Sleeper roster-for-week + Sleeper/ESPN projections and FantasyPros ECR for that week).
 
 ### ESPN schedule integration (kickoff times + bye weeks)
 
@@ -473,42 +473,34 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
-### Projections (v2.2: ESPN only) and player matching
+### Projections (v2.3: Sleeper first, ESPN fallback)
 
-**Projections come from ESPN only as of v2.2.** The earlier FantasyPros
-pipeline (API → scraped pages → ESPN fallback) left most players blank:
-FantasyPros' free API *and* its logged-out projection pages both stop at
-about 10 players per position, and the old ESPN fallback endpoint turned
-out to return season-total real NFL stats rather than weekly fantasy
-projections. The scraper (`fantasyProsScrape.js`) and the FantasyPros
-`/projections` call are removed.
+**Primary: Sleeper's own projections feed** (`server/sleeperProjections.js`)
+— the numbers the Sleeper app shows (supplied to Sleeper by Rotowire). One
+request per week to `api.sleeper.com/projections/nfl/{season}/{week}`
+covers QB, RB, WR, TE, K and DEF, cached for an hour. Rows are keyed by
+Sleeper player ID, so there's no name matching to miss on, and they carry
+raw projected stats using the same names as a league's scoring settings.
+Each league's points are computed as stat × that league's points for it,
+so custom scoring comes out right. Reception bonuses by position (e.g. TE
+premium) and points/yards-allowed tiers for defenses are added when the
+stat line doesn't spell them out. Cards are tagged `SLEEPER`.
 
-`server/espnProjections.js` now makes **one request per week** to ESPN's
-fantasy "league defaults" player feed
-(`lm-api-reads.fantasy.espn.com/.../leaguedefaults/3?view=kona_player_info&scoringPeriodId=N`,
-no login, `X-Fantasy-Filter` header to raise the 50-player default limit),
-cached for an hour and shared by every league and user. That covers the
-whole player pool — QB, RB, WR, TE, K and D/ST. The weekly projection is
-the stats entry with `statSourceId 1`, `statSplitTypeId 1` and that week's
-`scoringPeriodId`.
+**Fallback: ESPN** (`server/espnProjections.js`, the v2.2 source) for any
+player Sleeper has no projection for, tagged `ESPN`, adjusted for
+reception / TE-premium / passing-TD scoring only.
 
-**Matching to Sleeper players:** ESPN ID via the ffb_ids crosswalk first,
-then normalized name + position, and team for defenses.
+**Caveats:** Sleeper's feed is unofficial and undocumented. Other projects
+report the older `/v1/projections` path now returns empty data (not used)
+and that `api.sleeper.com` refuses requests without a browser-style
+User-Agent (one is sent; `api.sleeper.app/projections` is tried as a
+backup). Placeholder values (999/1000) are ignored. Kicker and defense
+scoring may differ slightly from Sleeper's where a league scores
+something the projection doesn't break out (e.g. FG-distance bonuses).
 
-**Scoring:** ESPN's default feed is PPR. The app adjusts each player's
-total to the league's own points per reception (including TE premium) and
-points per passing TD. Other scoring differences (e.g. bonuses, return
-yards, unusual kicker/defense scoring) use ESPN's defaults.
-
-**What's verified vs not:** the endpoint answering without auth and its
-field names were checked against a live sample. That `leaguedefaults/3`
-is PPR comes from a third-party project's testing; that raw stat `53` is
-receptions and `4` is passing TDs comes from community ESPN stat maps —
-neither could be checked directly here. On each build the server logs
-`[espnProjections] … N players from ESPN, M with a weekly projection` and
-one sample player, so a problem is obvious in the logs. A third-party
-report also suggests ESPN's QB projections for *future* weeks are less
-reliable than current-week ones.
+**Checking it after deploy:** each build logs
+`[buildLeague] <league> week N projections — Sleeper: X, ESPN fallback: Y, none: Z`,
+plus a line from each source with how many players it returned.
 
 FantasyPros is still used for **expert consensus rankings (ECR)** —
 waiver flags, Trade Radar and Trade Finder — via the official API.
@@ -680,7 +672,8 @@ server/
   server.js             Express app + routes (+ FAAB endpoint)
   sleeper.js             Sleeper API client (no auth needed)
   fantasyPros.js          FantasyPros API client (uses your key, server-only) — consensus rankings (ECR) only
-  espnProjections.js       ESPN weekly fantasy projections — the only projection source (v2.2)
+  sleeperProjections.js    Sleeper's weekly projections, scored per league — primary source (v2.3)
+  espnProjections.js       ESPN weekly fantasy projections — fallback (v2.3; sole source in v2.2)
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)
   playerIdMap.js          ffb_ids ID crosswalk (Sleeper/ESPN/FantasyPros/etc)
   matching.js             Name-based cross-source player matching (FantasyPros ECR)
@@ -728,7 +721,11 @@ double-check first:
    confirmed. This is the one most likely to still need another pass —
    the server log warning it now prints if the response week doesn't
    match the request is the fastest way to know either way.
-2. **`espnProjections.js` (v2.2)** — endpoint and field names checked
+2. **`sleeperProjections.js` (v2.3)** — unofficial feed; live samples of
+   QB/WR/K/DEF rows were inspected through a page reader, but a full
+   week's response was never fetched end to end from here. Logs row
+   counts and one sample row on each fresh fetch.
+3. **`espnProjections.js` (v2.2, now fallback)** — endpoint and field names checked
    against a live sample; the PPR default and the reception/passing-TD
    stat IDs used for scoring adjustment are from third-party sources.
    Logs player counts and one sample player on each fresh fetch.

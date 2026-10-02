@@ -1,7 +1,8 @@
 import * as sleeper from "./sleeper.js";
 import * as fp from "./fantasyPros.js";
 import * as schedule from "./schedule.js";
-import * as espn from "./espnProjections.js"; // v2.2: the only projection source
+import * as slp from "./sleeperProjections.js"; // v2.3: primary projection source
+import * as espn from "./espnProjections.js"; // v2.3: fallback for players Sleeper has no projection for
 import { lookupBySleeperId } from "./playerIdMap.js";
 import { buildFpIndex, lookupFpMulti } from "./matching.js";
 import { checkAndRecordInjury, clearInjurySeen, getInjurySeenForLeague } from "./db.js";
@@ -164,10 +165,15 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   ]);
 
   const scoring = fpScoringParam(league.scoring_settings);
-  // v2.2: projections come from ESPN only — one cached request per week
-  // covers every player (see espnProjections.js for why FantasyPros was
-  // dropped). FantasyPros is still used for expert consensus rankings (ECR).
-  const [espnPool, ...ecrByPosition] = await Promise.all([
+  // v2.3: projections come from Sleeper's own feed first (keyed by Sleeper
+  // player_id, scored with this league's exact settings — see
+  // sleeperProjections.js), then ESPN for anyone Sleeper has nothing for.
+  // One cached request per week each. FantasyPros is used for ECR only.
+  const [sleeperPool, espnPool, ...ecrByPosition] = await Promise.all([
+    slp.getWeekProjections(season, week).catch((err) => {
+      console.warn(`[buildLeague] Sleeper projections unavailable this build, using ESPN only: ${err.message}`);
+      return null;
+    }),
     espn.getWeekProjections(season, week).catch((err) => {
       console.warn(`[buildLeague] ESPN projections unavailable this build: ${err.message}`);
       return null;
@@ -234,11 +240,26 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     return { kickoff: null, kickoffLabel: onBye ? "On bye" : "Kickoff time unavailable", onBye };
   };
 
-  /** proj + source ("E" = ESPN, null = none). Adjusted to this league's reception / TE-premium / passing-TD scoring. */
+  /**
+   * proj + source: "S" = Sleeper (scored with this league's settings),
+   * "E" = ESPN fallback (adjusted for reception / TE-premium / passing-TD
+   * scoring), null = neither has one.
+   */
+  const projSourceCounts = { S: 0, E: 0, none: 0 };
   async function resolveProjection(sleeperId, name, pos, crosswalkName, teamAbbr, espnId) {
+    const slpRec = slp.lookupProjection(sleeperPool, sleeperId);
+    const slpPts = slpRec ? slp.scoreStats({ ...slpRec, pos: slpRec.pos || pos }, league.scoring_settings) : null;
+    if (slpPts != null) {
+      projSourceCounts.S++;
+      return { proj: slpPts, projSource: "S" };
+    }
     const rec = espn.lookupProjection(espnPool, { espnId, names: [name, crosswalkName], pos, team: teamAbbr });
-    if (!rec) return { proj: null, projSource: null };
-    return { proj: espn.adjustForScoring(rec, league.scoring_settings), projSource: "E" };
+    if (rec) {
+      projSourceCounts.E++;
+      return { proj: espn.adjustForScoring(rec, league.scoring_settings), projSource: "E" };
+    }
+    projSourceCounts.none++;
+    return { proj: null, projSource: null };
   }
 
   const enrich = async (id) => {
@@ -583,8 +604,10 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const unmatched = [...new Set([...unmatchedStarters, ...unmatchedOptimal])];
   const dataWarnings = [];
   if (unmatched.length) {
-    dataWarnings.push(`No ESPN projection for: ${unmatched.join(", ")}`);
+    dataWarnings.push(`No Sleeper or ESPN projection for: ${unmatched.join(", ")}`);
   }
+
+  console.log(`[buildLeague] ${league.name} week ${week} projections — Sleeper: ${projSourceCounts.S}, ESPN fallback: ${projSourceCounts.E}, none: ${projSourceCounts.none}`);
 
   const injuryEvents = buildInjuryRows(leagueId, built);
 

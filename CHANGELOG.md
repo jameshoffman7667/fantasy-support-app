@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,40 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.3 — Sleeper projections first, ESPN fallback
+
+**Commit (short):** `v2.3: feat: Sleeper projections, ESPN fallback`
+
+**Commit (extended):**
+v2.3 makes Sleeper's own weekly projections feed the primary
+projection source, after v2.2's ESPN-only build still left players
+without projections.
+
+sleeperProjections.js makes one cached request per week to the feed the
+Sleeper app uses, covering QB, RB, WR, TE, K and DEF. Rows are keyed by
+Sleeper player ID, so no name or cross-site ID matching is needed. Each
+league's points are computed from the projected stats times that
+league's own scoring settings, so custom scoring is exact, with position
+reception bonuses and defense points/yards-allowed tiers added when not
+explicit. Placeholder values are ignored, a browser User-Agent is sent,
+and api.sleeper.app is tried if api.sleeper.com refuses.
+
+ESPN stays as the fallback for anyone Sleeper has no projection for.
+Cards are tagged SLEEPER or ESPN, and each build logs how many players
+got each source or none.
+
+**Details**
+- New `server/sleeperProjections.js`: `getWeekProjections()` (one request, hourly cache, `api.sleeper.com` then `api.sleeper.app`, browser User-Agent, drops `adp_*` and ≥999 placeholders), `scoreStats()` (Σ stat × scoring setting, `bonus_rec_rb/wr/te`, `pts_allow_*` / `yds_allow_*` tiers from projected points/yards allowed, preset `pts_*` totals only if nothing overlaps), `lookupProjection()`.
+- `buildLeague.js`: Sleeper → ESPN → none, with a per-league log line of the counts; warning text "No Sleeper or ESPN projection for: …".
+- UI tag `SLEEPER` / `ESPN` / `FINAL`.
+
+**Known limitations / what was and wasn't tested**
+- Sleeper's feed is unofficial. Live sample rows (QB, WR, K, DEF) were inspected through a page reader; a full week's response was never fetched end to end, because Sleeper and ESPN are both blocked from the build sandbox. Check the `[sleeperProjections]` and `[buildLeague] … projections — Sleeper: X, ESPN fallback: Y, none: Z` log lines after deploying.
+- Kicker/defense points can differ slightly where a league scores something the projection doesn't break out.
+- Tested with mocked responses: scoring maths for QB/WR/TE/K/DEF, placeholder filtering, the 403 → backup-URL path, a full league build mixing Sleeper and ESPN sources with no warnings, plus the existing server (44) and browser (23) checks.
 
 ---
 

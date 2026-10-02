@@ -2,7 +2,9 @@ import { cacheGet, cacheSet } from "./db.js";
 import { normalizeName } from "./matching.js";
 
 /**
- * v2.2: ESPN is the ONLY projection source.
+ * v2.3: FALLBACK projection source, used only for players Sleeper's own
+ * projections feed (sleeperProjections.js) has nothing for. Was the only
+ * source in v2.2.
  *
  * Why: FantasyPros' free API and its logged-out projection pages both stop at
  * ~10 players per position, and the old ESPN fallback hit
