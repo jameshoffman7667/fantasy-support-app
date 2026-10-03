@@ -115,3 +115,14 @@ export function adminSetAccess(username, active) {
 export function adminDeleteUser(username) {
   return request(`/api/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" });
 }
+
+/* ---------------- Projection accuracy + history backfill (v2.5) ---------------- */
+export function getAccuracy(params) {
+  return request(`/api/accuracy?${new URLSearchParams(params)}`);
+}
+export function adminBackfillStatus() {
+  return request(`/api/admin/backfill`);
+}
+export function adminStartBackfill() {
+  return jsonPost(`/api/admin/backfill`, {});
+}

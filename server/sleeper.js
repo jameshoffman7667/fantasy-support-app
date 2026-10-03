@@ -53,3 +53,11 @@ export async function getPlayers() {
   cacheSet("sleeper:players", data, ONE_DAY_MS);
   return data;
 }
+
+// v2.5: actual per-player stat lines for a finished week (unofficial but
+// widely used; keyed by Sleeper player_id, plus TEAM_xxx team totals).
+// Used to score projection accuracy. Raw stats use the same keys as league
+// scoring_settings, so each scoring profile can be applied to them.
+export function getWeekStats(season, week) {
+  return sleeperFetch(`/stats/nfl/regular/${season}/${week}`);
+}

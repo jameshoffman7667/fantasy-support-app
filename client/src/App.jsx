@@ -171,7 +171,7 @@ function StatusBadge({ status, label, onClick, compact }) {
 // S = Sleeper, E = ESPN.
 const SOURCE_TAG = { V: "VEGAS", T: "TANK01", S: "SLEEPER", E: "ESPN" };
 
-function SourceTag({ source }) {
+function SourceTag({ source, factor }) {
   if (!source) return null;
   if (source === "actual") {
     return (
@@ -183,6 +183,7 @@ function SourceTag({ source }) {
   return (
     <span style={{ color: C.textFaint }} className="absolute bottom-1 right-1.5 text-[9px] font-medium tracking-wide">
       {SOURCE_TAG[source] || source}
+      {factor ? ` ×${factor}` : ""}
     </span>
   );
 }
@@ -348,12 +349,16 @@ function PushToggle() {
 /* ------------------------------------------------------------------ */
 /*  SCREENS                                                            */
 /* ------------------------------------------------------------------ */
-function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, sleeperUser }) {
+function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, onOpenAccuracy, sleeperUser }) {
   return (
     <div className="px-4 py-3">
       <div className="flex items-center justify-between flex-wrap gap-y-2 pb-3">
         <PushToggle />
         <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={onOpenAccuracy} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
+            <TrendingUp size={13} />
+            Accuracy
+          </button>
           <button onClick={onOpenAccount} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
             <UserCog size={13} />
             Account
@@ -621,7 +626,7 @@ function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, o
         <div style={{ color: zero ? C.major : C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-base font-semibold">
           {p.proj != null ? p.proj.toFixed(1) : "—"}
         </div>
-        <div style={{ color: C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : SOURCE_TAG[p.projSource] || p.projSource || "no proj"}</div>
+        <div style={{ color: C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : SOURCE_TAG[p.projSource] || p.projSource || "no proj"}{p.projFactor ? ` ×${p.projFactor}` : ""}</div>
       </div>
     </div>
   );
@@ -929,7 +934,7 @@ function LineupTab({ league, onSaveRanking }) {
                   <div style={{ color: curZero ? C.major : C.textMuted }} className="text-xs mt-0.5">
                     {c.current?.proj != null ? c.current.proj.toFixed(1) : "—"}{curZero ? " · projected 0" : ""}
                   </div>
-                  <SourceTag source={c.current?.projSource} />
+                  <SourceTag source={c.current?.projSource} factor={c.current?.projFactor} />
                 </div>
                 <div style={{ background: optZero ? C.majorBg : c.changed ? C.okBg : "transparent" }} className="relative px-3 py-2.5 pb-4">
                   <div style={{ color: optZero ? C.major : c.changed ? C.ok : C.text }} className="text-sm font-medium truncate">{c.optimal?.name ?? "(none available)"}</div>
@@ -937,7 +942,7 @@ function LineupTab({ league, onSaveRanking }) {
                     {c.optimal?.proj != null ? c.optimal.proj.toFixed(1) : "—"}{optZero ? " · projected 0" : ""}
                   </div>
                   {c.optimal?.note && <div style={{ color: C.brand }} className="text-[10px] mt-0.5">{c.optimal.note}</div>}
-                  <SourceTag source={c.optimal?.projSource} />
+                  <SourceTag source={c.optimal?.projSource} factor={c.optimal?.projFactor} />
                 </div>
               </div>
             </div>
@@ -1024,7 +1029,7 @@ function WaiverTab({ league, sessionId }) {
               {p.crossLeagues.length > 0 && (
                 <div style={{ color: C.brand }} className="text-xs mt-1.5 pl-12">Also available in: {p.crossLeagues.join(", ")}</div>
               )}
-              <SourceTag source={p.projSource} />
+              <SourceTag source={p.projSource} factor={p.projFactor} />
             </div>
           );
         })}
@@ -1543,6 +1548,297 @@ function AdminScreen({ authUser }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  PROJECTION ACCURACY (v2.5)                                         */
+/* ------------------------------------------------------------------ */
+const SRC_NAME = { V: "Vegas", T: "Tank01", S: "Sleeper", E: "ESPN" };
+const SRC_COLOR = { V: "#4A8FC2", T: "#D9A521", S: "#3FAE58", E: "#B07CC6" };
+
+function Select({ value, onChange, options, label }) {
+  return (
+    <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide" style={{ color: C.textFaint }}>
+      {label}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ background: C.surfaceRaised, border: `1px solid ${C.border}`, color: C.text }}
+        className="text-xs rounded-md px-2 py-1.5 outline-none normal-case tracking-normal"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function Toggle({ checked, onChange, children }) {
+  return (
+    <button
+      onClick={() => onChange(!checked)}
+      style={{ border: `1px solid ${checked ? C.brand : C.border}`, color: checked ? C.brand : C.textMuted }}
+      className="text-[11px] rounded-full px-2.5 py-1"
+    >
+      {checked ? "✓ " : ""}{children}
+    </button>
+  );
+}
+
+// Average miss by week, one line per source. Plain inline SVG.
+function MaeChart({ byWeek }) {
+  const weeks = [...new Set(byWeek.map((r) => r.week))].sort((a, b) => a - b);
+  if (weeks.length < 2) return <div style={{ color: C.textFaint }} className="text-xs px-1 py-2">Needs at least two scored weeks to chart.</div>;
+  const W = 340, H = 150, P = { l: 28, r: 8, t: 8, b: 20 };
+  const maxY = Math.max(1, ...byWeek.map((r) => r.mae)) * 1.1;
+  const x = (w) => P.l + ((w - weeks[0]) / (weeks[weeks.length - 1] - weeks[0])) * (W - P.l - P.r);
+  const y = (v) => H - P.b - (v / maxY) * (H - P.t - P.b);
+  const sources = ["V", "T", "S", "E"].filter((s) => byWeek.some((r) => r.source === s));
+  const ticks = [0, maxY / 2, maxY].map((v) => Math.round(v * 10) / 10);
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Average miss by week, by source">
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={P.l} x2={W - P.r} y1={y(t)} y2={y(t)} stroke={C.border} strokeWidth="1" />
+            <text x={P.l - 4} y={y(t) + 3} fontSize="9" textAnchor="end" fill={C.textFaint}>{t}</text>
+          </g>
+        ))}
+        {weeks.map((w) => (
+          <text key={w} x={x(w)} y={H - 6} fontSize="9" textAnchor="middle" fill={C.textFaint}>{w}</text>
+        ))}
+        {sources.map((s) => {
+          const pts = byWeek.filter((r) => r.source === s).sort((a, b) => a.week - b.week);
+          return (
+            <g key={s}>
+              <polyline fill="none" stroke={SRC_COLOR[s]} strokeWidth="2" points={pts.map((r) => `${x(r.week)},${y(r.mae)}`).join(" ")} />
+              {pts.map((r) => (
+                <circle key={r.week} cx={x(r.week)} cy={y(r.mae)} r="2.5" fill={SRC_COLOR[s]}>
+                  <title>{`${SRC_NAME[s]} week ${r.week}: average miss ${r.mae} pts (n=${r.n})`}</title>
+                </circle>
+              ))}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="flex flex-wrap gap-3 px-1 pt-1">
+        {sources.map((s) => (
+          <span key={s} className="text-[11px] flex items-center gap-1" style={{ color: C.textMuted }}>
+            <span style={{ background: SRC_COLOR[s] }} className="inline-block w-2.5 h-2.5 rounded-full" />
+            {SRC_NAME[s]}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BackfillPanel() {
+  const [status, setStatus] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api.adminBackfillStatus().then(setStatus).catch((err) => setError(err.message));
+  }, []);
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 15000);
+    return () => clearInterval(id);
+  }, [load]);
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.adminStartBackfill();
+      setStatus(r.status);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const b1 = status?.batch1;
+  const b2 = status?.batch2;
+  const fmt = (t) => (t ? new Date(t).toLocaleString() : "—");
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-2">
+      <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm">History backfill (owner)</div>
+      <div style={{ color: C.textMuted }} className="text-xs">
+        Fills past weeks so accuracy and leans have data from day one. Sleeper/ESPN projections and actual scores: 2026 to date and all of 2025 (no Tank01 calls).
+        Tank01 (Vegas closing props + Tank01 projections): batch 1 = 2026 to date, then 2025 weeks 18–9 (~230 calls); batch 2 = 2025 weeks 8–1 (~140 calls), automatically 40 days after batch 1.
+        Anything unfinished continues on the last day of the month after 11 pm ET until Tank01 rejects a call.
+      </div>
+      {status && (
+        <div style={{ color: C.textMuted }} className="text-[11px] space-y-0.5">
+          <div>Tank01 key: {status.tank01Configured ? "set" : "not set"} · app-counted Tank01 calls this month: {status.tank01CallsThisMonth} · crosswalk rows: {status.crosswalkRows}</div>
+          <div>Batch 1: {b1 ? `${b1.running ? "running" : b1.tankComplete ? "complete" : "incomplete"} · last run ${fmt(b1.lastRunAt)}${b1.stoppedBecause ? ` · stopped: ${b1.stoppedBecause}` : ""}${b1.lastError ? ` · error: ${b1.lastError}` : ""}` : "not started"}</div>
+          <div>Batch 2: {b2 ? `${b2.running ? "running" : b2.tankComplete ? "complete" : "incomplete"} · last run ${fmt(b2.lastRunAt)}` : status.batch2DueAt ? `scheduled for ${fmt(status.batch2DueAt)}` : "after batch 1 completes"}</div>
+          {status.items?.length > 0 && <div>Items: {status.items.map((i) => `b${i.batch} ${i.status} ${i.n}`).join(" · ")}</div>}
+        </div>
+      )}
+      {error && <div style={{ color: C.major }} className="text-xs">{error}</div>}
+      <button
+        onClick={start}
+        disabled={busy || status?.running}
+        style={{ background: busy || status?.running ? C.surfaceRaised : C.brand, color: C.text }}
+        className="rounded-md px-3 py-2 text-xs font-medium flex items-center gap-2"
+      >
+        {status?.running ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+        {status?.running ? "Backfill running…" : b1 ? "Run / resume batch 1" : "Backfill history"}
+      </button>
+    </div>
+  );
+}
+
+function AccuracyScreen({ authUser }) {
+  const thisSeason = new Date().getFullYear();
+  const [f, setF] = useState({ season: String(thisSeason), profile: "", pos: "ALL", weekFrom: "1", weekTo: "18", sameOnly: false, adjusted: false });
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const set = (k) => (v) => setF((prev) => ({ ...prev, [k]: v }));
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .getAccuracy({ ...f, sameOnly: f.sameOnly ? "1" : "0", adjusted: f.adjusted ? "1" : "0" })
+      .then((d) => {
+        if (cancelled) return;
+        setData(d);
+        if (!f.profile && d.meta?.profile) setF((prev) => ({ ...prev, profile: d.meta.profile }));
+      })
+      .catch((err) => !cancelled && setError(err.message))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [f]);
+
+  const seasons = [...new Set([...(data?.meta?.seasons || []), thisSeason, thisSeason - 1])].sort((a, b) => b - a);
+  const weekOpts = Array.from({ length: 18 }, (_, i) => ({ value: String(i + 1), label: `Week ${i + 1}` }));
+  const rows = (data?.summary || []).filter((r) => (f.pos === "ALL" ? true : r.pos === f.pos));
+  const th = "text-[10px] uppercase tracking-wide font-medium px-1.5 py-1 text-right";
+  const td = "text-xs px-1.5 py-1 text-right";
+
+  return (
+    <div className="px-4 py-3 space-y-4">
+      <div style={{ color: C.textMuted }} className="text-xs px-1">
+        Every source's projection (frozen at each player's kickoff) compared with actual points, scored with the selected scoring profile. A projected player with no stat line counts as 0. Projections under 0.5 pts are ignored.
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Select label="Season" value={f.season} onChange={set("season")} options={seasons.map((s) => ({ value: String(s), label: String(s) }))} />
+        <Select label="Scoring" value={f.profile} onChange={set("profile")} options={(data?.meta?.profiles || []).map((p) => ({ value: p.profile, label: p.label }))} />
+        <Select label="Position" value={f.pos} onChange={set("pos")} options={["ALL", "QB", "RB", "WR", "TE", "K", "DEF"].map((p) => ({ value: p, label: p === "ALL" ? "All positions" : p }))} />
+        <div className="grid grid-cols-2 gap-2">
+          <Select label="From" value={f.weekFrom} onChange={set("weekFrom")} options={weekOpts} />
+          <Select label="To" value={f.weekTo} onChange={set("weekTo")} options={weekOpts} />
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Toggle checked={f.sameOnly} onChange={set("sameOnly")}>Same players only</Toggle>
+        <Toggle checked={f.adjusted} onChange={set("adjusted")}>Lean-adjusted</Toggle>
+      </div>
+      {loading && <div className="flex items-center gap-2 px-1" style={{ color: C.textMuted }}><Loader2 size={14} className="animate-spin" /><span className="text-xs">Crunching…</span></div>}
+      {error && <div style={{ color: C.major }} className="text-xs px-1">{error}</div>}
+      {data?.meta?.note && <div style={{ color: C.textMuted }} className="text-xs px-1">{data.meta.note}</div>}
+
+      {data && !data.meta?.note && (
+        <>
+          <div style={{ color: C.textFaint }} className="text-[11px] px-1">
+            Scored weeks: {data.meta.scoredWeeks.length ? data.meta.scoredWeeks.join(", ") : "none yet (actuals arrive after each week finishes)"}
+            {data.meta.backfilledWeeks.length > 0 && ` · backfilled (projection timing approximate): ${data.meta.backfilledWeeks.join(", ")}`}
+          </div>
+          <div>
+            <SectionLabel>Accuracy by source</SectionLabel>
+            {rows.length === 0 ? (
+              <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No scored projections for these filters yet.</div>
+            ) : (
+              <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${C.border}` }}>
+                <table className="w-full" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                  <thead style={{ background: C.surfaceRaised, color: C.textMuted }}>
+                    <tr>
+                      <th className={`${th} text-left`}>Source</th>
+                      <th className={`${th} text-left`}>Pos</th>
+                      <th className={th}>n</th>
+                      <th className={th} title="Average projected minus actual (+ = runs high)">Bias</th>
+                      <th className={th} title="Average absolute miss">Avg miss</th>
+                      <th className={th}>RMSE</th>
+                      <th className={th} title="Standard deviation of the error">SD</th>
+                      <th className={th} title="Correlation of projected with actual">Corr</th>
+                      <th className={th} title="Rank correlation within position each week">Rank</th>
+                      <th className={th}>±3</th>
+                      <th className={th}>±5</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={`${r.source}|${r.pos}`} style={{ borderTop: `1px solid ${C.border}`, background: r.pos === "ALL" ? C.surface : "transparent" }}>
+                        <td className={`${td} text-left`}><span style={{ color: SRC_COLOR[r.source] }}>●</span> {SRC_NAME[r.source]}</td>
+                        <td className={`${td} text-left`} style={{ color: C.textMuted }}>{r.pos === "ALL" ? "All" : r.pos}</td>
+                        <td className={td}>{r.n}</td>
+                        <td className={td} style={{ color: Math.abs(r.bias) >= 1 ? C.minor : C.text }}>{r.bias > 0 ? "+" : ""}{r.bias}</td>
+                        <td className={td}>{r.mae}</td>
+                        <td className={td}>{r.rmse}</td>
+                        <td className={td}>{r.sdErr}</td>
+                        <td className={td}>{r.corr ?? "—"}</td>
+                        <td className={td}>{r.rankCorr ?? "—"}</td>
+                        <td className={td}>{Math.round(r.within3 * 100)}%</td>
+                        <td className={td}>{Math.round(r.within5 * 100)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div>
+            <SectionLabel>Average miss by week</SectionLabel>
+            <MaeChart byWeek={data.byWeek} />
+          </div>
+          {data.leans && (
+            <div>
+              <SectionLabel>Current leans vs Vegas (week {data.leans.week}, 4-week rolling)</SectionLabel>
+              <div style={{ color: C.textMuted }} className="text-[11px] px-1 pb-1">
+                Factor applied to each source's projection when a player has no Vegas props. 1.08 = the source runs 8% under Vegas. "pooled" = under 8 overlapping players, all-positions factor used.
+              </div>
+              <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${C.border}` }}>
+                <table className="w-full" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                  <thead style={{ background: C.surfaceRaised, color: C.textMuted }}>
+                    <tr>
+                      <th className={`${th} text-left`}>Source</th>
+                      {["QB", "RB", "WR", "TE", "K"].map((p) => (
+                        <th key={p} className={th}>{p}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {["T", "S", "E"].map((s) => (
+                      <tr key={s} style={{ borderTop: `1px solid ${C.border}` }}>
+                        <td className={`${td} text-left`}><span style={{ color: SRC_COLOR[s] }}>●</span> {SRC_NAME[s]}</td>
+                        {["QB", "RB", "WR", "TE", "K"].map((p) => {
+                          const l = data.leans[s]?.[p];
+                          return (
+                            <td key={p} className={td} style={{ color: l?.none ? C.textFaint : C.text }} title={l ? `n=${l.n}` : ""}>
+                              {l?.none ? "—" : `×${l.factor}${l.pooled ? "*" : ""}`}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ color: C.textFaint }} className="text-[10px] px-1 pt-1">* pooled · — not enough overlap yet (no adjustment) · DEF has no Vegas props, so it's never adjusted.</div>
+            </div>
+          )}
+        </>
+      )}
+      {authUser?.role === "owner" && <BackfillPanel />}
+    </div>
+  );
+}
+
 function SelectLeaguesScreen({ leagues, selectedIds, onToggle, onConfirm, loading, error }) {
   return (
     <div className="px-4 py-3">
@@ -1889,6 +2185,7 @@ export default function App() {
     if (view.screen === "login") return [{ label: "Fantasy Manager" }];
     if (view.screen === "forceChange") return [{ label: "Change password" }];
     if (view.screen === "account") return [root, { label: "Account" }];
+    if (view.screen === "accuracy") return [root, { label: "Projection accuracy" }];
     if (view.screen === "admin") return [root, { label: "Account", onClick: () => navigate({ screen: "account" }) }, { label: "Manage users" }];
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
     if (view.screen === "dashboard") return [{ label: root.label }];
@@ -1923,10 +2220,12 @@ export default function App() {
           onLogout={handleLogout}
           onEditLeagues={handleEditLeagues}
           onOpenAccount={() => navigate({ screen: "account" })}
+          onOpenAccuracy={() => navigate({ screen: "accuracy" })}
           sleeperUser={sleeperUser}
         />
       )}
       {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
+      {view.screen === "accuracy" && <AccuracyScreen authUser={authUser} />}
       {view.screen === "account" && <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />}
       {view.screen === "admin" && authUser?.role === "owner" && <AdminScreen authUser={authUser} />}
       {view.screen === "select" && (

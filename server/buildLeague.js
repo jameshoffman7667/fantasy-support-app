@@ -1,9 +1,7 @@
 import * as sleeper from "./sleeper.js";
 import * as fp from "./fantasyPros.js";
 import * as schedule from "./schedule.js";
-import * as tank01 from "./tank01.js"; // v2.4: Vegas props (primary) + Tank01 projections
-import * as slp from "./sleeperProjections.js"; // v2.4: third source (primary in v2.3)
-import * as espn from "./espnProjections.js"; // v2.3: fallback for players Sleeper has no projection for
+import * as hub from "./projectionHub.js"; // v2.5: all projection sources, leans, tracking
 import { lookupBySleeperId } from "./playerIdMap.js";
 import { buildFpIndex, lookupFpMulti } from "./matching.js";
 import { checkAndRecordInjury, clearInjurySeen, getInjurySeenForLeague } from "./db.js";
@@ -166,25 +164,13 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   ]);
 
   const scoring = fpScoringParam(league.scoring_settings);
-  // v2.3: projections come from Sleeper's own feed first (keyed by Sleeper
-  // player_id, scored with this league's exact settings — see
-  // sleeperProjections.js), then ESPN for anyone Sleeper has nothing for.
-  // One cached request per week each. FantasyPros is used for ECR only.
-  // v2.4: Vegas player props (via Tank01) come first, then Tank01's own
-  // projection, then Sleeper, then ESPN. Tank01 calls are quota-bounded
-  // inside tank01.js, so calling this on every build is safe.
-  const [tankWeek, tankIds, sleeperPool, espnPool, ...ecrByPosition] = await Promise.all([
-    tank01.getWeekData(season, week).catch((err) => {
-      console.warn(`[buildLeague] Tank01 data unavailable this build: ${err.message}`);
-      return null;
-    }),
-    tank01.getIdMap().catch(() => null),
-    slp.getWeekProjections(season, week).catch((err) => {
-      console.warn(`[buildLeague] Sleeper projections unavailable this build, using ESPN only: ${err.message}`);
-      return null;
-    }),
-    espn.getWeekProjections(season, week).catch((err) => {
-      console.warn(`[buildLeague] ESPN projections unavailable this build: ${err.message}`);
+  // v2.5: projectionHub works out every source (Vegas props → Tank01 →
+  // Sleeper → ESPN) for every player, records them for accuracy tracking,
+  // and applies each source's rolling per-position lean vs Vegas for this
+  // league's scoring profile. FantasyPros is used for ECR only.
+  const [projWeek, ...ecrByPosition] = await Promise.all([
+    hub.getWeek({ season, week, settings: league.scoring_settings, sleeperPlayers }).catch((err) => {
+      console.warn(`[buildLeague] Projections unavailable this build: ${err.message}`);
       return null;
     }),
     ...FP_POSITIONS.map((position) => fp.getConsensusRankings(season, { position, scoring, week })),
@@ -250,52 +236,15 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   };
 
   /**
-   * proj + source, in priority order (v2.4):
-   *  "V" = Vegas props (full prop set for the position) scored with this league's settings
-   *  "T" = Tank01's projection (stat line scored with this league's settings; preset total for K/DEF)
-   *  "S" = Sleeper's projection, scored with this league's settings
-   *  "E" = ESPN fallback (adjusted for reception / TE-premium / passing-TD scoring)
-   *  null = none of them has one
+   * proj + source (v2.5): "V" Vegas props (raw), else "T" Tank01 / "S" Sleeper /
+   * "E" ESPN with that source's lean factor applied (projFactor). All scored
+   * with this league's settings.
    */
   const projSourceCounts = { V: 0, T: 0, S: 0, E: 0, none: 0 };
-  function tankProjection(sleeperId, name, pos, teamAbbr) {
-    if (!tankWeek) return { tankProj: null, props: null };
-    if (pos === "DEF") return { tankProj: tankWeek.projections?.defenses?.[tank01.normTeam(teamAbbr)] || null, props: null };
-    const tankId = tank01.tankIdFor(tankIds, sleeperId, { name, pos, team: teamAbbr });
-    return { tankProj: tankId ? tankWeek.projections?.players?.[tankId] || null : null, props: tank01.propsFor(tankWeek, tankId) };
-  }
-  async function resolveProjection(sleeperId, name, pos, crosswalkName, teamAbbr, espnId) {
-    const settings = league.scoring_settings;
-    const { tankProj, props } = tankProjection(sleeperId, name, pos, teamAbbr);
-    const vegas = tank01.propsStatLine(props, pos, tankProj);
-    if (vegas) {
-      const pts = vegas.points ?? slp.scoreStats({ pos, stats: vegas.stats }, settings);
-      if (pts != null) {
-        projSourceCounts.V++;
-        return { proj: Math.round(pts * 100) / 100, projSource: "V" };
-      }
-    }
-    if (tankProj) {
-      const hasStats = tankProj.stats && Object.keys(tankProj.stats).length > 0 && pos !== "K" && pos !== "DEF";
-      const pts = hasStats ? slp.scoreStats({ pos, stats: tankProj.stats }, settings) : tank01.presetPoints(tankProj, settings);
-      if (pts != null) {
-        projSourceCounts.T++;
-        return { proj: Math.round(pts * 100) / 100, projSource: "T" };
-      }
-    }
-    const slpRec = slp.lookupProjection(sleeperPool, sleeperId);
-    const slpPts = slpRec ? slp.scoreStats({ ...slpRec, pos: slpRec.pos || pos }, settings) : null;
-    if (slpPts != null) {
-      projSourceCounts.S++;
-      return { proj: slpPts, projSource: "S" };
-    }
-    const rec = espn.lookupProjection(espnPool, { espnId, names: [name, crosswalkName], pos, team: teamAbbr });
-    if (rec) {
-      projSourceCounts.E++;
-      return { proj: espn.adjustForScoring(rec, settings), projSource: "E" };
-    }
-    projSourceCounts.none++;
-    return { proj: null, projSource: null };
+  async function resolveProjection(sleeperId) {
+    const r = hub.pick(projWeek, sleeperId);
+    projSourceCounts[r.projSource || "none"]++;
+    return r;
   }
 
   const enrich = async (id) => {
@@ -310,7 +259,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
     }
     const { kickoff, kickoffLabel, onBye } = kickoffFor(meta?.team);
-    let { proj, projSource } = await resolveProjection(id, name, pos, crosswalk?.name, pos === "DEF" ? id : meta?.team, crosswalk?.espnId);
+    let { proj, projSource, projFactor } = await resolveProjection(id);
 
     // "Once players have played, update their projection to their actual
     // score." Two signals required together, not either alone: a
@@ -334,6 +283,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       kickoffLabel,
       proj,
       projSource,
+      projFactor: projSource === "actual" ? null : projFactor ?? null,
       played: Boolean(played),
       ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null,
       irEligible: meta?.injury_status === "IR" || meta?.injury_status === "PUP",
@@ -374,8 +324,8 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       if (!ecrRec && fpPos === "DST" && meta?.team) {
         ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
       }
-      const { proj, projSource } = await resolveProjection(t.player_id, name, pos, crosswalk?.name, pos === "DEF" ? t.player_id : meta?.team, crosswalk?.espnId);
-      return { name, pos, proj, projSource, ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null, trending: true, origin: "waiver" };
+      const { proj, projSource, projFactor } = await resolveProjection(t.player_id);
+      return { name, pos, proj, projSource, projFactor: projFactor ?? null, ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null, trending: true, origin: "waiver" };
     })
   );
 
@@ -429,12 +379,13 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     const changed = !locked && (current?.name ?? null) !== (optimal?.name ?? null);
     return {
       slot,
-      current: current ? { name: current.name, proj: current.proj, projSource: current.projSource } : null,
+      current: current ? { name: current.name, proj: current.proj, projSource: current.projSource, projFactor: current.projFactor ?? null } : null,
       optimal: optimal
         ? {
             name: optimal.name,
             proj: optimal.proj ?? null,
             projSource: optimal.projSource,
+            projFactor: optimal.projFactor ?? null,
             note: locked ? "Already played — locked to the actual result" : optimal.origin === "waiver" ? "Available on waivers — not currently on your roster" : undefined,
           }
         : null,
@@ -461,6 +412,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     pos: fa.pos,
     proj: fa.proj,
     projSource: fa.projSource,
+    projFactor: fa.projFactor ?? null,
     ecr: fa.ecr,
     trending: true,
     usage: lookupUsage(snapShareMap, usageStatsMap, fa.name),
@@ -593,7 +545,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
             .sort((a, b) => a.ecr - b.ecr)
             .slice(0, 3); // only the closest few — bounds the extra projection lookups per rival
           for (const cand of near) {
-            const { proj: candProj } = await resolveProjection(cand.id, cand.name, cand.pos, cand.crosswalk?.name, cand.pos === "DEF" ? cand.id : cand.meta?.team, cand.crosswalk?.espnId);
+            const { proj: candProj } = await resolveProjection(cand.id);
             if (candProj == null) continue;
             const gain = candProj - give.proj;
             if (gain <= 0) continue;

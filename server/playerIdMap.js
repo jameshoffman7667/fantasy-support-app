@@ -1,4 +1,4 @@
-import { cacheGet, cacheSet } from "./db.js";
+import * as store from "./projectionStore.js";
 
 /**
  * https://github.com/mayscopeland/ffb_ids — a community-maintained CSV
@@ -22,7 +22,6 @@ import { cacheGet, cacheSet } from "./db.js";
  * returning an empty crosswalk.
  */
 const CSV_URL = "https://raw.githubusercontent.com/mayscopeland/ffb_ids/main/player_ids.csv";
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // this is reference data (like Sleeper's player dict) — refetching more than daily isn't useful
 
 let _loggedColumns = false;
 
@@ -71,16 +70,20 @@ function findColumn(headers, matchers) {
   return -1;
 }
 
-async function fetchCrosswalk() {
-  const cached = cacheGet("playerIdMap:crosswalk");
-  if (cached !== null) return cached;
+/**
+ * v2.5: the crosswalk now lives in the app's own SQLite table
+ * (projectionStore.js `crosswalk`). ffb_ids seeds it weekly — merging new
+ * players and filling blanks, never overwriting IDs the app has learned
+ * itself (Tank01 IDs, name-matched ESPN IDs).
+ */
+const SEED_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+let seeding = null;
 
+async function seedFromFfbIds() {
   const res = await fetch(CSV_URL);
   if (!res.ok) throw new Error(`ffb_ids CSV fetch error ${res.status}`);
-  const text = await res.text();
-  const rows = parseCsv(text);
-  if (rows.length < 2) return { bySleeperId: {} };
-
+  const rows = parseCsv(await res.text());
+  if (rows.length < 2) return 0;
   const headers = rows[0];
   const col = {
     sleeper: findColumn(headers, ["sleeper_id", "sleeperid", "sleeper"]),
@@ -88,43 +91,58 @@ async function fetchCrosswalk() {
     fantasypros: findColumn(headers, ["fantasypros_id", "fantasyprosid", "fp_id", "fantasypros", "fpid"]),
     name: findColumn(headers, ["name", "player_name", "player"]),
   };
-
   if (!_loggedColumns) {
     console.log("[playerIdMap] Discovered columns:", { headers, resolved: col });
     _loggedColumns = true;
   }
-
   if (col.sleeper === -1) {
-    console.warn("[playerIdMap] Couldn't find a sleeper ID column — crosswalk unusable this run.");
-    const empty = { bySleeperId: {} };
-    cacheSet("playerIdMap:crosswalk", empty, CACHE_TTL_MS);
-    return empty;
+    console.warn("[playerIdMap] Couldn't find a sleeper ID column in ffb_ids — seed skipped.");
+    return 0;
   }
-
-  const bySleeperId = {};
+  const out = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     const sleeperId = r[col.sleeper]?.trim();
     if (!sleeperId) continue;
-    bySleeperId[sleeperId] = {
+    // Keep EVERY column (other sites' IDs — Yahoo, CBS, NFL.com, MFL, PFR,
+    // etc.) so they're on hand if the app ever pulls from those sites.
+    const allIds = {};
+    headers.forEach((h, idx) => {
+      const v = r[idx]?.trim();
+      if (h && v) allIds[h.trim()] = v;
+    });
+    out.push({
+      allIds,
+      sleeperId,
       espnId: col.espn >= 0 ? r[col.espn]?.trim() || null : null,
       fantasyprosId: col.fantasypros >= 0 ? r[col.fantasypros]?.trim() || null : null,
       name: col.name >= 0 ? r[col.name]?.trim() || null : null,
-    };
+    });
   }
-
-  const data = { bySleeperId };
-  cacheSet("playerIdMap:crosswalk", data, CACHE_TTL_MS);
-  return data;
+  store.mergeSeedRows(out);
+  store.setState("crosswalk_seeded_at", Date.now());
+  console.log(`[playerIdMap] Crosswalk seeded/merged from ffb_ids: ${out.length} rows, ${headers.length} ID columns kept (table now ${store.crosswalkCount()}).`);
+  return out.length;
 }
 
-/** Returns { espnId, fantasyprosId, name } or null if this Sleeper player isn't in the crosswalk. */
-export async function lookupBySleeperId(sleeperId) {
-  try {
-    const { bySleeperId } = await fetchCrosswalk();
-    return bySleeperId[sleeperId] || null;
-  } catch (err) {
-    console.warn(`[playerIdMap] Crosswalk unavailable: ${err.message}`);
-    return null;
+/** Re-seeds from ffb_ids when the table is empty or the last seed is over a week old. */
+export async function ensureCrosswalk() {
+  const last = store.getState("crosswalk_seeded_at", 0);
+  if (store.crosswalkCount() > 0 && Date.now() - last < SEED_EVERY_MS) return;
+  if (!seeding) {
+    seeding = seedFromFfbIds()
+      .catch((err) => console.warn(`[playerIdMap] Crosswalk seed failed (using the local table as-is): ${err.message}`))
+      .finally(() => {
+        seeding = null;
+      });
   }
+  await seeding;
+}
+
+/** Returns { espnId, fantasyprosId, tank01Id, name } or null if this Sleeper player isn't in the crosswalk. */
+export async function lookupBySleeperId(sleeperId) {
+  await ensureCrosswalk();
+  const row = store.getCrosswalk(sleeperId);
+  if (!row) return null;
+  return { espnId: row.espn_id, fantasyprosId: row.fantasypros_id, tank01Id: row.tank01_id, name: row.name };
 }

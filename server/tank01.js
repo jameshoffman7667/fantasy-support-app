@@ -1,5 +1,6 @@
 import { cacheGet, cacheSet } from "./db.js";
 import { normalizeName } from "./matching.js";
+import * as store from "./projectionStore.js";
 
 /**
  * v2.4: Tank01 NFL API (RapidAPI) — Vegas player props and Tank01's own
@@ -16,10 +17,14 @@ import { normalizeName } from "./matching.js";
  *    No fumble props.
  *  - getNFLProjections with week=N returns ~455 players in one call.
  *
- * NOT VERIFIED FROM THIS CODEBASE (no live call possible while building):
- * the exact nesting of props inside the odds response, the projections
- * response's field names, and whether getNFLPlayerList carries
- * sleeperBotID. The parsers below are written defensively, log one raw
+ * VERIFIED 2026-10-02 with live calls (v2.5): the odds response shape
+ * (see parsePlayerProps), that odds for FINISHED games are still served
+ * (closing lines — what makes the history backfill possible), the
+ * schedule shape, projection stat field names (Passing.passYds/passTD/int,
+ * Rushing.rushYds/rushTD, Receiving.receptions/recYds/recTD, fumblesLost),
+ * and that player info carries sleeperBotID and espnID. Tank01's playerID
+ * is the ESPN player ID. Still unverified: the week-wide projections
+ * wrapper (playerProjections / teamDefenseProjections) and defense fields. The parsers below are written defensively, log one raw
  * sample of each response type on first use, and return nothing (never a
  * guess) when a shape doesn't match — the app then falls back to
  * Sleeper/ESPN for that player.
@@ -77,9 +82,14 @@ let lastCallAt = 0;
 let rateLimitedUntil = 0;
 const _loggedShape = new Set();
 
-async function tankFetch(path, params) {
+// budget: "normal" stops TANK01_RESERVE short of the monthly limit; "full"
+// (history backfill) may use up to the limit itself; "unlimited" (month-end
+// backfill continuation) ignores the app's counter and runs until the API
+// itself rejects the call — safe on the free plan, which rejects rather than bills.
+async function tankFetch(path, params, { budget = "normal" } = {}) {
   if (!isConfigured()) throw new Error("TANK01_API_KEY not set");
-  if (budgetLeft() <= 0) throw new Error(`monthly Tank01 budget reached (${callsThisMonth()} calls this month)`);
+  if (budget === "normal" && budgetLeft() <= 0) throw new Error(`monthly Tank01 budget reached (${callsThisMonth()} calls this month)`);
+  if (budget === "full" && monthlyLimit() - callsThisMonth() <= 0) throw new Error(`monthly Tank01 limit reached (${callsThisMonth()} calls this month)`);
   if (Date.now() < rateLimitedUntil) throw new Error("Tank01 rate-limited — backing off");
   const wait = lastCallAt + PACE_MS - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
@@ -94,6 +104,7 @@ async function tankFetch(path, params) {
   if (!res.ok) throw new Error(`Tank01 ${path} HTTP ${res.status}`);
   const json = await res.json();
   if (json && typeof json.error === "string") throw new Error(`Tank01 ${path}: ${json.error}`);
+  if (json && typeof json.message === "string" && !json.body) throw new Error(`Tank01 ${path}: ${json.message}`); // RapidAPI rejections ("You have exceeded the MONTHLY quota…", "You are not subscribed…")
   if (!_loggedShape.has(path)) {
     _loggedShape.add(path);
     console.log(`[tank01] First ${path} response sample:`, JSON.stringify(json).slice(0, 1500));
@@ -110,6 +121,7 @@ export function normTeam(t) {
 }
 const num = (v) => {
   if (v == null || v === "") return null;
+  if (String(v).trim().toLowerCase() === "even") return 100; // American odds "even" = +100
   const n = Number(String(v).replace(/[^0-9.+-]/g, ""));
   return Number.isFinite(n) ? n : null;
 };
@@ -147,7 +159,7 @@ function parseSchedule(body) {
       const epoch = num(g.gameTime_epoch);
       const [, matchup = ""] = String(g.gameID).split("_");
       const [away, home] = matchup.split("@");
-      return { gameID: g.gameID, away: normTeam(g.away || away), home: normTeam(g.home || home), kickoff: epoch ? epoch * 1000 : null };
+      return { gameID: g.gameID, away: normTeam(g.away || away), home: normTeam(g.home || home), kickoff: epoch ? epoch * 1000 : null, week: g.gameWeek ? Number(String(g.gameWeek).replace(/\D/g, "")) : null };
     });
 }
 
@@ -170,7 +182,11 @@ const PROP_KEYS = ["passyds", "passtd", "intsthrown", "passatt", "comp", "rushyd
 /** Odds response -> { [tank01PlayerID]: { passyds: {line, odds}, ... } } */
 export function parsePlayerProps(body) {
   const out = {};
-  const games = asArray(body);
+  // Verified 2026-10-02 against the live API: a gameID query returns the
+  // game as a single OBJECT (even with itemFormat=list), with
+  // playerProps: [{ playerID, propBets: { recyds: "69.5", anytd: "160", ... } }].
+  // Positive American odds come without a "+". gameDate queries return a list.
+  const games = body && !Array.isArray(body) && (body.playerProps || body.gameID) ? [body] : asArray(body);
   for (const game of games) {
     if (!game || typeof game !== "object") continue;
     const propsField = Object.keys(game).find((k) => /playerprops/i.test(k));
@@ -238,13 +254,22 @@ export function parseProjections(body) {
 function parsePlayerList(body) {
   const bySleeperId = {};
   const byNameTeam = {};
+  const info = {}; // tank01 ID -> { name, pos, team }
+  const tank01Players = [];
   for (const p of asArray(body)) {
     if (!p?.playerID) continue;
+    info[String(p.playerID)] = { name: p.longName || null, pos: p.pos || null, team: normTeam(p.team) };
+    // Every other-site ID Tank01 carries (verified fields: espnID, sleeperBotID,
+    // fantasyProsPlayerID, cbsPlayerID, yahooPlayerID, rotoWirePlayerID, fRefID).
+    const ids = {};
+    for (const [k, v] of Object.entries(p)) if (/(ID|Id)$/.test(k) && k !== "teamID" && v) ids[k] = v;
+    if (p.fRefID) ids.fRefID = p.fRefID;
+    tank01Players.push({ sleeperId: p.sleeperBotID || p.sleeperBotId || null, tank01Id: String(p.playerID), espnId: p.espnID || String(p.playerID), fantasyprosId: p.fantasyProsPlayerID || null, name: p.longName || null, pos: p.pos || null, team: normTeam(p.team), ids });
     const sid = p.sleeperBotID || p.sleeperBotId || p.sleeperID;
     if (sid) bySleeperId[String(sid)] = String(p.playerID);
     if (p.longName && p.pos) byNameTeam[`${normalizeName(p.longName)}|${p.pos}|${normTeam(p.team) || ""}`] = String(p.playerID);
   }
-  return { bySleeperId, byNameTeam, withSleeperIds: Object.keys(bySleeperId).length };
+  return { bySleeperId, byNameTeam, info, tank01Players, withSleeperIds: Object.keys(bySleeperId).length };
 }
 
 /* ---------------- week data with freshness rules ---------------- */
@@ -329,8 +354,15 @@ export async function getIdMap() {
   if (cached && ageMs(cached) < 7 * DAY) return cached;
   try {
     const body = await tankFetch("getNFLPlayerList", {});
-    const map = { fetchedAt: Date.now(), ...parsePlayerList(body) };
-    console.log(`[tank01] Player list: ${map.withSleeperIds} players carry a Sleeper ID.`);
+    const { tank01Players, ...map } = { fetchedAt: Date.now(), ...parsePlayerList(body) };
+    // v2.5: Tank01's list is the primary seed for the local crosswalk's
+    // Sleeper <-> Tank01/ESPN links (ffb_ids fills the gaps).
+    try {
+      store.mergeTank01Players(tank01Players);
+    } catch (err) {
+      console.warn(`[tank01] Couldn't merge the player list into the crosswalk: ${err.message}`);
+    }
+    console.log(`[tank01] Player list: ${tank01Players.length} players, ${map.withSleeperIds} carry a Sleeper ID — merged into the crosswalk.`);
     cacheSet("tank01:idmap", map, 30 * DAY);
     return map;
   } catch (err) {
@@ -398,4 +430,25 @@ export function presetPoints(rec, scoringSettings = {}) {
   const ppr = Number(scoringSettings.rec ?? 0);
   const p = rec?.preset || {};
   return ppr >= 1 ? p.ppr : ppr > 0 ? p.half : p.std;
+}
+
+/* ---------------- history backfill (v2.5) ---------------- */
+/** Errors that mean "stop pulling for now": quota/limit reached, rejected, rate-limited. */
+export function isStopError(err) {
+  return /budget|limit reached|rate-limited|429|quota|not subscribed|exceeded|403|401/i.test(err?.message || "");
+}
+export async function fetchHistorySchedule(season, week, budget) {
+  return parseSchedule(await tankFetch("getNFLGamesForWeek", { week: String(week), seasonType: "reg", season: String(season) }, { budget }));
+}
+/** Tank01 projections for a past week. Past seasons use archiveSeason (per Tank01's docs; not verified live). */
+export async function fetchHistoryProjections(season, week, currentSeason, budget) {
+  const params = { week: String(week) };
+  if (Number(season) !== Number(currentSeason)) params.archiveSeason = String(season);
+  return parseProjections(await tankFetch("getNFLProjections", params, { budget }));
+}
+export async function fetchHistoryOdds(gameID, budget) {
+  return parsePlayerProps(await tankFetch("getNFLBettingOdds", { gameID, playerProps: "true", impliedTotals: "true", itemFormat: "list" }, { budget }));
+}
+export function _resetRateLimitForTests() {
+  rateLimitedUntil = 0;
 }

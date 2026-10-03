@@ -3,6 +3,9 @@ import * as schedule from "./schedule.js";
 import * as slp from "./sleeperProjections.js";
 import * as espn from "./espnProjections.js";
 import * as tank01 from "./tank01.js";
+import * as hub from "./projectionHub.js";
+import * as actuals from "./actuals.js";
+import * as backfill from "./backfill.js";
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -157,6 +160,7 @@ async function preKickoffCheck() {
         const gameIDs = (current?.schedule?.games || []).filter((g) => teams.includes(g.home) || teams.includes(g.away)).map((g) => g.gameID);
         await tank01.getWeekData(season, week, { projections: true, gameIDs });
       }
+      hub.clearCache(); // recompute (and re-record) every source with the fresh numbers
       await refreshAllUsers();
     }
   } catch (err) {
@@ -170,6 +174,11 @@ export function startScheduler() {
   setTimeout(refreshAllUsers, 15 * 1000);
   setInterval(refreshAllUsers, REFRESH_INTERVAL_MS);
   setInterval(preKickoffCheck, PREKICK_CHECK_MS);
+  // v2.5: actual scores for finished weeks (hourly) and the history backfill's
+  // scheduled runs (batch 2 at +40 days; month-end continuation).
+  setInterval(() => actuals.updateActuals().catch((err) => console.warn(`[scheduler] Actuals update failed: ${err.message}`)), REFRESH_INTERVAL_MS);
+  setTimeout(() => actuals.updateActuals().catch(() => {}), 60 * 1000);
+  setInterval(() => backfill.scheduledCheck().catch((err) => console.warn(`[scheduler] Backfill check failed: ${err.message}`)), PREKICK_CHECK_MS);
 }
 
 export { preKickoffCheck as _preKickoffCheckForTests };

@@ -473,6 +473,59 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### Lean calibration, accuracy tracking and history backfill (v2.5)
+
+**Lean calibration.** Players with Vegas props are used to measure how
+each other source (Tank01, Sleeper, ESPN) runs against Vegas, per
+position, in each league's own scoring: factor = Σ Vegas points ÷ Σ
+source points over every player-week that has both, across the last 4
+weeks (current week included). Positions with fewer than 8 overlaps use
+the source's all-positions factor; fewer than that, no adjustment.
+Factors are capped at 0.8–1.2. A player without Vegas props gets his
+first available source × that factor; cards show it, e.g. `SLEEPER ×1.08`.
+DEF has no props, so it's never adjusted. Leans are kept per **scoring
+profile** — points per reception, TE premium and points per passing TD —
+so leagues with identical settings share a sample. (The 1.18 TD vig was
+calibrated against Tank01, so Tank01's factor is partly circular on TDs.)
+
+**Accuracy tracking.** Every source's projection for every player it can
+identify is recorded each week, raw and lean-adjusted, per scoring
+profile (`server/projectionHub.js`, table `proj_records`). Rows keep
+updating until the player's kickoff, then freeze. Actual stat lines come
+from Sleeper's weekly stats once a week finishes (`server/actuals.js`) and
+are scored with the same code. Dashboard → **Accuracy** (all users): bias,
+average miss, RMSE, SD of error, correlation, within-position rank
+correlation, % within ±3/±5 pts, by source × position, for any season /
+scoring profile / week range, plus average miss by week, "same players
+only" and raw-vs-adjusted toggles, and the current lean factors.
+
+**Local player-ID crosswalk.** Table `crosswalk`, keyed by Sleeper ID.
+Tank01's weekly player list (one call) is the primary source for the
+Sleeper ↔ Tank01/ESPN links — Tank01's playerID is the ESPN player ID and
+its list carries each player's Sleeper ID (verified live). The ffb_ids
+GitHub CSV is still loaded in full every week: every one of its ID columns
+(Yahoo, CBS, NFL.com, PFR, etc.) is kept per player in `ext_ids`, ready for
+other sites later, and it fills any link Tank01 lacks. Tank01's own
+other-site IDs (CBS, Yahoo, Rotowire, FantasyPros…) are kept too. Name
+matches fill whatever's left. Each link stores how it was made, and a
+weaker match never overwrites a stronger one (Tank01 > ffb_ids > name).
+
+**History backfill (owner, Accuracy screen → "Backfill history").**
+- Free (no Tank01 calls): Sleeper + ESPN projections and actual scores for
+  concluded 2026 weeks and all of 2025.
+- Tank01 batch 1: concluded 2026 games (newest first), then 2025 weeks
+  18→9 — ~230 calls (one schedule call per season, one projections call
+  per week, one odds call per game). Batch 2: 2025 weeks 8→1, ~140 calls,
+  starts automatically 40 days after batch 1 completes.
+- Month-end: on the last day of each month after 11 pm Eastern, any
+  unfinished due batch continues until Tank01 rejects a call (free plan:
+  rejected, not billed). Each call is tracked in `backfill_items`; nothing
+  is fetched twice and every run resumes where the last stopped.
+- Tank01 serves closing lines for finished games (verified live).
+  Historical Sleeper/ESPN numbers are whatever those sources kept (some may
+  have been edited after kickoff); backfilled weeks are flagged on the
+  dashboard.
+
 ### Projections (v2.4: Vegas props → Tank01 → Sleeper → ESPN)
 
 Each player's projection comes from the first source that has one:
@@ -719,6 +772,11 @@ server/
   sleeper.js             Sleeper API client (no auth needed)
   fantasyPros.js          FantasyPros API client (uses your key, server-only) — consensus rankings (ECR) only
   tank01.js                Tank01 (RapidAPI): Vegas props + Tank01 projections, quota-bounded (v2.4)
+  projectionHub.js         All sources per player, lean factors, recording (v2.5)
+  projectionStore.js       v2.5 tables: crosswalk, scoring profiles, projection records, actuals, backfill items
+  actuals.js               Actual weekly stats from Sleeper for scoring accuracy (v2.5)
+  accuracy.js              Accuracy metrics for the dashboard (v2.5)
+  backfill.js              History backfill: free sources + Tank01 batches (v2.5)
   sleeperProjections.js    Sleeper's weekly projections, scored per league — third source (v2.4)
   espnProjections.js       ESPN weekly fantasy projections — last fallback
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)
@@ -769,8 +827,10 @@ double-check first:
    the server log warning it now prints if the response week doesn't
    match the request is the fastest way to know either way.
 2. **`tank01.js` (v2.4)** — the props and projections response shapes
-   come from the handoff, not a live call; parsers are defensive and the
-   first raw response of each endpoint is logged.
+   come from the handoff; v2.5 verified the odds, schedule, player-info and
+   per-player projection shapes with live calls. The week-wide projections
+   wrapper is still unverified; the first raw response of each endpoint is
+   logged.
 2b. **`sleeperProjections.js` (v2.3)** — unofficial feed; live samples of
    QB/WR/K/DEF rows were inspected through a page reader, but a full
    week's response was never fetched end to end from here. Logs row

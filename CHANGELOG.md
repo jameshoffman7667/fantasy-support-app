@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,46 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.5 — Lean calibration, accuracy dashboard, own crosswalk, history backfill
+
+**Commit (short):** `v2.5: feat: leans, accuracy dashboard, backfill`
+
+**Commit (extended):**
+v2.5 levels the projection sources against Vegas and starts measuring
+them. For each scoring profile (reception points, TE premium, passing-TD
+points), each non-Vegas source's per-position lean is Vegas points over
+source points for players with both, across a rolling 4 weeks, with an
+8-player minimum and a 0.8-1.2 cap. Players without props get their
+source times that factor, shown on the card.
+
+Every source's projection is now recorded per player per week, frozen at
+kickoff, and compared with Sleeper actual stats. A new Accuracy screen
+shows bias, average miss, RMSE, SD, correlation and rank correlation by
+source, position and scoring, plus leans and a weekly trend.
+
+The app keeps its own player-ID crosswalk: Tank01's player list is the
+primary Sleeper/ESPN/Tank01 link source, and the full ffb_ids table is
+still loaded with every site's IDs for future use. An owner
+backfill fills 2026 to date and 2025 from free sources; Tank01 props and
+projections follow in two batches 40 days apart, resuming at month-end
+until the API rejects.
+
+**Details**
+- New: `projectionHub.js` (all sources per player, leans, recording, picking), `projectionStore.js` (tables `crosswalk`, `scoring_profiles`, `proj_records`, `actual_stats`, `actual_weeks`, `backfill_items`, `app_state`), `actuals.js`, `accuracy.js`, `backfill.js`.
+- `buildLeague.js` now takes projections from the hub; `playerIdMap.js` reads the local crosswalk. Crosswalk sources: Tank01's weekly player list (primary links; also its CBS/Yahoo/Rotowire/FantasyPros IDs) and the full ffb_ids CSV weekly (every ID column kept in `ext_ids`); precedence Tank01 > ffb_ids > name match.
+- Routes: `GET /api/accuracy` (any user), `GET/POST /api/admin/backfill` (owner). Scheduler: hourly actuals update; backfill batch 2 / month-end checks every 5 minutes; the pre-kickoff refresh also recomputes and re-records all sources.
+- Tank01, verified live this round (4 test calls): odds for finished games are served (closing lines); a gameID odds query returns a single object; positive odds come without "+"; Tank01 playerID = ESPN ID; player info has `sleeperBotID`; projection field names; archived projections via `archiveSeason` (back to 2023); `getNFLGamesForWeek?week=all` returns a whole season in one call. The odds parser was fixed for the single-object response.
+- UI: Dashboard → Accuracy screen (table, average-miss-by-week chart, lean table, owner backfill panel); source tags show the lean factor.
+
+**Known limitations / what was and wasn't tested**
+- Backfilled Sleeper/ESPN projections are whatever those sources kept and may include post-kickoff edits; backfilled weeks are flagged.
+- If two leagues share a scoring profile but differ elsewhere (e.g. bonuses), the last league built writes that profile's records.
+- Leans need overlapping Vegas players; until a few weeks of props exist (or the backfill runs) most factors show "—" (no adjustment).
+- Actuals are fetched once per finished week; later stat corrections aren't re-pulled.
+- Tested with mocked APIs: lean maths (ratio, pooling, clamp, window, DEF), frozen rows, accuracy metrics, same-players filter, crosswalk precedence, a full backfill (call counts, ordering, batch 2 scheduling at +40 days, idempotent rerun), stop-on-rejection and resume, plus the existing server (44) and browser (28) checks.
 
 ---
 

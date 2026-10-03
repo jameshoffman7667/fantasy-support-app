@@ -24,6 +24,8 @@ import {
   deletePushSubscriptionsForUser,
 } from "./db.js";
 import { startScheduler } from "./scheduler.js";
+import { computeAccuracy } from "./accuracy.js";
+import * as backfill from "./backfill.js";
 import { simulateSeason } from "./simulate.js";
 import { isPushConfigured, getPublicKey, saveSubscription, removeSubscription } from "./push.js";
 import {
@@ -313,6 +315,7 @@ app.use("/api/leagues", requireAuth);
 app.use("/api/faab", requireAuth);
 app.use("/api/season-odds", requireAuth);
 app.use("/api/rankings", requireAuth);
+app.use("/api/accuracy", requireAuth);
 app.use("/api/push", requireAuth);
 
 // Step 1: the logged-in user's Sleeper account -> their leagues for the
@@ -470,6 +473,36 @@ app.post("/api/push/unsubscribe", (req, res) => {
 // Saves the user's drag-ordered ranking for one league (an array of player
 // keys, best first), or clears it (order: null) to go back to the suggested
 // order. Stored per user per league, so it follows them across devices.
+/* ---------------- Projection accuracy (v2.5) ---------------- */
+app.get("/api/accuracy", (req, res) => {
+  try {
+    const q = req.query || {};
+    const result = computeAccuracy({
+      profile: q.profile || undefined,
+      season: Number(q.season) || new Date().getFullYear(),
+      weekFrom: Number(q.weekFrom) || 1,
+      weekTo: Number(q.weekTo) || 18,
+      pos: q.pos && q.pos !== "ALL" ? String(q.pos) : undefined,
+      sameOnly: q.sameOnly === "1" || q.sameOnly === "true",
+      adjusted: q.adjusted === "1" || q.adjusted === "true",
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("[accuracy] failed:", err);
+    res.status(500).json({ error: "Couldn't compute accuracy — check the server logs." });
+  }
+});
+
+/* ---------------- History backfill (v2.5, owner only) ---------------- */
+app.get("/api/admin/backfill", requireOwner, (req, res) => {
+  res.json(backfill.getStatus());
+});
+app.post("/api/admin/backfill", requireOwner, (req, res) => {
+  if (backfill.isRunning()) return res.json({ started: false, message: "A backfill is already running.", status: backfill.getStatus() });
+  backfill.startBatch(1, { budget: "full", reason: `started by ${req.user.username}` });
+  res.json({ started: true, status: backfill.getStatus() });
+});
+
 app.post("/api/rankings", (req, res) => {
   const { leagueId, order } = req.body || {};
   if (typeof leagueId !== "string" || !/^[0-9A-Za-z_-]{1,40}$/.test(leagueId)) {

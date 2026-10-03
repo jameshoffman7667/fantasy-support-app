@@ -241,6 +241,18 @@ Each roster card has a drag handle (pointer events, edge auto-scroll while dragg
 
 ---
 
+### 8.2c Lean calibration, accuracy dashboard, history backfill (v2.5)
+
+**Lean calibration:** for each scoring profile (points per reception, TE premium, points per passing TD — computed in the league's own scoring) and each non-Vegas source × position, factor = Σ Vegas ÷ Σ source over player-weeks with both, rolling 4 weeks incl. current; min 8 overlaps (else the source's all-positions factor, else none); clamp 0.8–1.2; DEF never adjusted. Players without Vegas props get their first source × factor (shown on the card as "×f").
+
+**Accuracy dashboard** (Dashboard → Accuracy, all logged-in users, read-only): per source × position: n, bias, average miss, RMSE, SD of error, correlation, within-position rank correlation, % within ±3/±5; average miss by week chart; current lean factors; filters for season, scoring profile, position, week range; "same players only" and "lean-adjusted" toggles. Projections are frozen at each player's kickoff; actuals from Sleeper's weekly stats, scored with the profile's settings; a projected player with no stat line counts as 0; projections under 0.5 pts are excluded.
+
+**Crosswalk:** local SQLite table keyed by Sleeper ID. Tank01's weekly player list is the primary source for Sleeper ↔ Tank01/ESPN links; the ffb_ids CSV is loaded in full weekly (every site's ID column kept in `ext_ids` for future use) and fills gaps; Tank01's other-site IDs are kept too; name matches last. Method recorded; precedence Tank01 > ffb_ids > name.
+
+**Backfill** (owner button): free sources for 2026-to-date and 2025; Tank01 batch 1 (2026-to-date, 2025 wk 18–9), batch 2 (2025 wk 8–1) automatically 40 days later; month-end continuation until the API rejects; per-call progress tracking.
+
+---
+
 ### 8.3 Waiver Management
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
@@ -398,3 +410,7 @@ Collected here since they cut across multiple sections:
 31. **Sleeper-first projections (v2.3):** Sleeper's own weekly projections (keyed by Sleeper player ID, scored with each league's exact settings) are the primary source after v2.2's ESPN-only build still left players blank; ESPN kept as fallback. Paid APIs considered and not adopted: GridIron Data, Fantasy Nerds, Tank01 (noted as best paid backup), Fantasy Football Analytics.
 32. **Vegas prop-based projections (v2.4):** props-implied stat lines (Tank01 handoff methodology) are the first projection source for players with a full prop set, Tank01's projection for others, then Sleeper and ESPN. Tank01 calls are budgeted under the free tier.
 33. **Refresh timing (v2.4):** hourly rebuilds plus a forced projection pull ~60 minutes before each kickoff slot (James first asked for daily + 90 min, then chose hourly + 60 min).
+34. **Lean calibration (v2.5):** multiplicative, ratio of sums, 4-week rolling, per scoring profile (league scoring), min 8 / pooled fallback, 0.8–1.2 clamp — chosen over a flat point offset because a source's lean scales with volume.
+35. **Accuracy tracking (v2.5):** all sources recorded every week (not just the one shown), frozen at kickoff, compared with Sleeper actual stats; dashboard visible to all users.
+36. **Own crosswalk table (v2.5):** kept (rather than relying on Tank01 alone) as the cache of all matches; Tank01's player list is the primary link source; the full ffb_ids table (all sites' IDs) is still loaded for future use and as a fallback.
+37. **History backfill (v2.5):** 2026-to-date + 2025 wk 9–18 first, 2025 wk 1–8 forty days later, month-end continuation until rejected (James is on the free Tank01 plan, no card).
