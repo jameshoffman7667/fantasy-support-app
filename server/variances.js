@@ -1,0 +1,177 @@
+// v2.8.1 variance report + "clear minor variances".
+//
+// Every yellow (minor) or red (major) flag in a league's pages becomes one
+// variance: { key, leagueId, league, page, rule, subject, text, severity }.
+// The key identifies the issue without its changing numbers (league + week
+// where it matters + page + rule + player/subject), so the same issue with
+// a different points gap or wind speed is still "the same one".
+//
+// Clearing marks the visible minor variances in a pop-up's scope as
+// acknowledged (saved per user on the server). A cleared minor stops
+// colouring its row, page badge and league card. A NEW variance (any key not
+// cleared) colours them again; a cleared minor that becomes major always
+// shows (reds can't be cleared). Acknowledgements for issues that have gone
+// away are pruned, so if the same issue comes back later it's new again.
+//
+// Pure — no React — so it can be unit-tested.
+
+export const PAGES = ["roster", "lineup", "waiver", "trade", "injury"];
+export const PAGE_LABEL = { roster: "Roster", lineup: "Lineup Advice", waiver: "Waivers", trade: "Trade Radar", injury: "Injury Watch" };
+const RANK = { ok: 0, minor: 1, major: 2 };
+export const worst = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
+
+// Week-specific pages carry the week in their keys; waivers, trades and
+// injuries don't (an injury you've cleared stays cleared into next week
+// unless its status changes).
+const WEEKLY = new Set(["roster", "lineup"]);
+export function varianceKey(leagueId, week, page, rule, subject) {
+  return [leagueId, WEEKLY.has(page) ? `W${week ?? "?"}` : "W*", page, rule, subject].join("|");
+}
+export function keyParts(key) {
+  const [leagueId, w, page] = String(key).split("|");
+  return { leagueId, week: w?.slice(1), page };
+}
+
+/**
+ * All variances for one computed league (roster/lineup/waiver/trade/injury
+ * already computed). Roster rows carry `issues` (see App.jsx computeRoster).
+ */
+export function collectVariances(lg) {
+  if (!lg || lg.error) return [];
+  const out = [];
+  const add = (page, rule, subject, severity, text) => {
+    if (severity !== "minor" && severity !== "major") return;
+    out.push({ key: varianceKey(lg.id, lg.week, page, rule, subject), leagueId: lg.id, league: lg.name, page, rule, subject, severity, text: text || subject });
+  };
+
+  // Roster: one variance per rule broken per row.
+  for (const r of lg.roster?.rows || []) {
+    for (const i of r.issues || []) add("roster", i.rule, `${r.slot} ${r.label}`, i.severity, `${r.slot} ${r.label}: ${i.text}`);
+  }
+
+  // Lineup.
+  const L = lg.lineup;
+  if (L) {
+    for (const p of L.zeroStarters || []) add("lineup", "Starter projected for 0 points", p.name, "major", `${p.name} is projected for 0 points`);
+    if (L.custom) {
+      const changed = (L.rows || []).filter((r) => r.changed);
+      if (changed.length) {
+        const swing = changed.reduce((s, r) => s + Math.abs(r.delta), 0);
+        add("lineup", "Lineup differs from your ranking", "Starting lineup", swing < 5 ? "minor" : "major", `Your ranking changes ${changed.length} slot(s) (${swing.toFixed(1)} pts): ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}`);
+      }
+      if ((L.betterDelta ?? 0) > 0.05) add("lineup", "Better lineup than your ranking", "Player Rankings", "minor", `A better projected lineup exists: +${L.betterDelta.toFixed(1)} pts over your ranking`);
+    } else if ((L.delta ?? 0) > 0) {
+      const changed = (L.rows || []).filter((r) => r.changed);
+      add("lineup", "Optimal lineup is better", "Starting lineup", L.delta < 5 ? "minor" : "major", `Optimal lineup gains +${L.delta.toFixed(1)} pts${changed.length ? `: ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}` : ""}`);
+    }
+    for (const p of L.weatherStarters || []) add("lineup", "Weather", p.name, "minor", `${p.name} (${p.team}): ${(p.weather?.reasons || []).join("; ")}`);
+  }
+
+  // Waivers.
+  for (const fa of lg.waiver?.rows || []) {
+    const rule = fa.rankHit && fa.trendHit ? "Top-ranked and trending free agent" : fa.rankHit ? "Top-ranked free agent" : "Trending add";
+    add("waiver", rule, fa.name, fa.severity, `${fa.name} (${fa.pos})${fa.ecr != null ? ` · ECR #${fa.ecr}` : ""}${fa.trendHit ? " · trending" : ""}`);
+  }
+
+  // Trades.
+  for (const t of lg.trade?.rows || []) add("trade", "Trade opportunity", `${t.theirTeam}: give ${t.give}, get ${t.get}`, t.severity, `${t.theirTeam}: give ${t.give}, get ${t.get}`);
+
+  // Injuries.
+  for (const e of lg.injury?.rows || []) {
+    add("injury", e.seen ? "Injury status (seen before)" : "New injury status", `${e.player} (${e.status})`, e.seen ? "minor" : "major", `${e.player}: ${e.status}${e.note ? ` — ${e.note}` : ""}`);
+  }
+  return out;
+}
+
+export const isCleared = (v, acks) => v.severity === "minor" && acks.has(v.key);
+
+/**
+ * Returns a copy of the computed league with acknowledged minors applied:
+ * page statuses and row colours ignore cleared minors, and `variances`
+ * lists every variance with a `cleared` flag.
+ */
+export function applyAcks(lg, acks) {
+  if (!lg || lg.error) return lg;
+  const variances = collectVariances(lg).map((v) => ({ ...v, cleared: isCleared(v, acks) }));
+  const live = variances.filter((v) => !v.cleared);
+  const status = (page) => worst(live.filter((v) => v.page === page).map((v) => v.severity));
+  const clearedKey = (page, rule, subject) => acks.has(varianceKey(lg.id, lg.week, page, rule, subject));
+
+  const rosterRows = (lg.roster.rows || []).map((r) => {
+    const issues = (r.issues || []).map((i) => ({ ...i, cleared: i.severity === "minor" && clearedKey("roster", i.rule, `${r.slot} ${r.label}`) }));
+    const open = issues.filter((i) => !i.cleared);
+    return { ...r, issues, severity: worst(open.map((i) => i.severity)), reason: open.map((i) => i.text).join(" ") || null, clearedNote: issues.some((i) => i.cleared) || undefined };
+  });
+  const lineupCleared = new Set(variances.filter((v) => v.page === "lineup" && v.cleared).map((v) => v.rule + "|" + v.subject));
+  const lineup = {
+    ...lg.lineup,
+    status: status("lineup"),
+    weatherStarters: (lg.lineup.weatherStarters || []).filter((p) => !lineupCleared.has(`Weather|${p.name}`)),
+    betterCleared: lineupCleared.has("Better lineup than your ranking|Player Rankings"),
+  };
+  const waiverRows = (lg.waiver.rows || []).map((fa) => {
+    const v = variances.find((x) => x.page === "waiver" && x.subject === fa.name);
+    return v?.cleared ? { ...fa, severity: "ok", cleared: true } : fa;
+  });
+  const tradeRows = (lg.trade.rows || []).map((t) => {
+    const v = variances.find((x) => x.page === "trade" && x.subject === `${t.theirTeam}: give ${t.give}, get ${t.get}`);
+    return v?.cleared ? { ...t, severity: "ok", cleared: true } : t;
+  });
+  const injuryRows = (lg.injury.rows || []).map((e) => {
+    const v = variances.find((x) => x.page === "injury" && x.subject === `${e.player} (${e.status})`);
+    return v?.cleared ? { ...e, cleared: true } : e;
+  });
+  return {
+    ...lg,
+    variances,
+    roster: { ...lg.roster, rows: rosterRows, status: status("roster") },
+    lineup,
+    waiver: { ...lg.waiver, rows: waiverRows, status: status("waiver") },
+    trade: { ...lg.trade, rows: tradeRows, status: status("trade") },
+    injury: { ...lg.injury, rows: injuryRows, status: status("injury") },
+  };
+}
+
+/** League -> page -> rule -> items, each level with its worst severity (cleared items excluded from the rollup). */
+export function groupTree(variances) {
+  const leagues = [];
+  const byLeague = new Map();
+  for (const v of variances) {
+    if (!byLeague.has(v.leagueId)) {
+      const l = { id: v.leagueId, name: v.league, pages: [], byPage: new Map() };
+      byLeague.set(v.leagueId, l);
+      leagues.push(l);
+    }
+    const l = byLeague.get(v.leagueId);
+    if (!l.byPage.has(v.page)) {
+      const p = { page: v.page, label: PAGE_LABEL[v.page] || v.page, rules: [], byRule: new Map() };
+      l.byPage.set(v.page, p);
+      l.pages.push(p);
+    }
+    const p = l.byPage.get(v.page);
+    if (!p.byRule.has(v.rule)) {
+      const r = { rule: v.rule, items: [] };
+      p.byRule.set(v.rule, r);
+      p.rules.push(r);
+    }
+    p.byRule.get(v.rule).items.push(v);
+  }
+  const sev = (items) => worst(items.filter((v) => !v.cleared).map((v) => v.severity));
+  for (const l of leagues) {
+    l.pages.sort((a, b) => PAGES.indexOf(a.page) - PAGES.indexOf(b.page));
+    for (const p of l.pages) {
+      for (const r of p.rules) r.severity = sev(r.items);
+      p.rules.sort((a, b) => RANK[b.severity] - RANK[a.severity] || a.rule.localeCompare(b.rule));
+      p.severity = worst(p.rules.map((r) => r.severity));
+    }
+    l.severity = worst(l.pages.map((p) => p.severity));
+    delete l.byPage;
+    for (const p of l.pages) delete p.byRule;
+  }
+  return leagues;
+}
+
+/** Keys to acknowledge when "Clear minor variances" is pressed in a scope. */
+export function minorKeys(variances) {
+  return [...new Set(variances.filter((v) => v.severity === "minor" && !v.cleared).map((v) => v.key))];
+}

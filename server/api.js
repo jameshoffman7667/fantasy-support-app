@@ -1,0 +1,184 @@
+// Every call here goes to our own backend (proxied at /api by Vite in
+// dev). The client never holds, sends, or sees the FantasyPros key.
+
+// Raised (as a window event) when a request that should have been logged-in
+// comes back 401 — the session ended, or the owner revoked this user's access.
+// App.jsx listens and sends the person back to the login screen. The login and
+// status calls are exempt: a 401 there just means "wrong password"/"not logged in".
+const UNAUTH_EXEMPT = ["/api/login", "/api/auth/status"];
+
+async function request(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && !UNAUTH_EXEMPT.some((p) => path.startsWith(p))) {
+    window.dispatchEvent(new Event("fm-unauthorized"));
+  }
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  return body;
+}
+
+const jsonPost = (path, payload) =>
+  request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload ?? {}) });
+
+// The logged-in user's own Sleeper account — the server knows who they are.
+export function connect() {
+  return request(`/api/connect`);
+}
+
+export function buildLeagues(sessionId, leagueIds, week) {
+  return request(`/api/leagues/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, leagueIds, week }),
+  });
+}
+
+export function getFaabSuggestions(sessionId, leagueId) {
+  return request(`/api/faab`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, leagueId }),
+  });
+}
+
+// Cookies are sent automatically for these same-origin requests in every
+// deployment mode this app ships (Vite dev proxy, nginx production), so
+// no explicit `credentials` option is needed.
+// Cookies are sent automatically for these same-origin requests in every
+// deployment mode this app ships (Vite dev proxy, nginx production), so
+// no explicit `credentials` option is needed.
+export function login(username, password) {
+  return jsonPost(`/api/login`, { username, password });
+}
+
+export function logout() {
+  return request(`/api/logout`, { method: "POST" });
+}
+
+export function getAuthStatus() {
+  return request(`/api/auth/status`);
+}
+
+export function getSeasonOdds(sessionId, leagueId) {
+  return request(`/api/season-odds`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, leagueId }),
+  });
+}
+
+export function getPushPublicKey() {
+  return request(`/api/push/vapid-public-key`);
+}
+
+export function subscribePush(subscription) {
+  return request(`/api/push/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ subscription }),
+  });
+}
+
+export function unsubscribePush(endpoint) {
+  return request(`/api/push/unsubscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
+export function changePassword(currentPassword, newPassword) {
+  return jsonPost(`/api/account/password`, { currentPassword, newPassword });
+}
+
+// Saves the drag-ordered Player Rankings for one league; order === null resets it.
+export function saveRanking(leagueId, order) {
+  return jsonPost(`/api/rankings`, { leagueId, order });
+}
+
+/* ---------------- Owner administration ---------------- */
+export function adminListUsers() {
+  return request(`/api/admin/users`);
+}
+export function adminCreateUser(username, role, password) {
+  return jsonPost(`/api/admin/users`, { username, role, password });
+}
+export function adminResetPassword(username, password) {
+  return jsonPost(`/api/admin/users/${encodeURIComponent(username)}/reset-password`, { password });
+}
+export function adminSetRole(username, role) {
+  return jsonPost(`/api/admin/users/${encodeURIComponent(username)}/role`, { role });
+}
+export function adminSetAccess(username, active) {
+  return jsonPost(`/api/admin/users/${encodeURIComponent(username)}/access`, { active });
+}
+export function adminDeleteUser(username) {
+  return request(`/api/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+}
+
+/* ---------------- Projection accuracy + history backfill (v2.5) ---------------- */
+export function getAccuracy(params) {
+  return request(`/api/accuracy?${new URLSearchParams(params)}`);
+}
+export function adminBackfillStatus() {
+  return request(`/api/admin/backfill`);
+}
+export function adminStartBackfill() {
+  return jsonPost(`/api/admin/backfill`, {});
+}
+
+/* ---------------- Game Day + source status (v2.6) ---------------- */
+export function getGameDay(week) {
+  return request(`/api/gameday${week ? `?week=${week}` : ""}`);
+}
+export function saveGameDaySettings(settings) {
+  return jsonPost(`/api/gameday/settings`, settings);
+}
+export function getSourceStatus() {
+  return request(`/api/status/sources`);
+}
+
+/* ---------------- Pick'em (v2.7) ---------------- */
+export function getPickem() {
+  return request(`/api/pickem`);
+}
+export function savePickemSettings(settings) {
+  return jsonPost(`/api/pickem/settings`, settings);
+}
+export function markPickemSeen(season, week, gameKey) {
+  return jsonPost(`/api/pickem/seen`, { season, week, gameKey });
+}
+
+/* ---------------- Matchups, weather, images (v2.8) ---------------- */
+export function getDvp(params = {}) {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ""));
+  return request(`/api/dvp${q.toString() ? `?${q}` : ""}`);
+}
+export function getDvpDetail(params) {
+  return request(`/api/dvp/detail?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ""))}`);
+}
+export function saveDvpSettings(settings) {
+  return jsonPost(`/api/dvp/settings`, settings);
+}
+export function getWeather(week) {
+  return request(`/api/weather${week ? `?week=${week}` : ""}`);
+}
+export function getWeatherSettings() {
+  return request(`/api/weather/settings`);
+}
+export function saveWeatherSettings(settings) {
+  return jsonPost(`/api/weather/settings`, settings);
+}
+export const playerImageUrl = (id) => `/api/img/player/${encodeURIComponent(id)}`;
+export const teamLogoUrl = (team) => `/api/img/team/${encodeURIComponent(team)}`;
+
+/* ---------------- Variance report (v2.8.1) ---------------- */
+export function getVarianceAcks() {
+  return request(`/api/variances/acks`);
+}
+export function ackVariances(keys) {
+  return jsonPost(`/api/variances/ack`, { keys });
+}
+export function pruneVarianceAcks(leagueIds, week, present) {
+  return jsonPost(`/api/variances/prune`, { leagueIds, week, present });
+}
