@@ -290,6 +290,28 @@ Straight-up pick'em tab. Win probability: Tank01 no-vig moneylines (avg of books
   - Ranks 1–32 in 5 colour tiers of ~6–7 teams, from the player's point of view (red → dark green).
 - **Analytics → Matchup rankings**: defense-vs-position and offense-by-position tables with the sample and adjust controls (saved per user; they drive the card colours). Tapping a team opens its games, opponents, points, opponent average, adjusted points and weights.
 
+### 8.2g Variance report (v2.8.1)
+- **Buttons and scope:**
+  - Top of the dashboard: all leagues, all pages.
+  - Each league card and the league overview: one league, every page.
+  - Each page (Roster, Lineup, Waivers, Trades, Injury): that page.
+- **Pop-up:**
+  - Grouped league → page → rule broken → items.
+  - Collapsible; default collapsed; Expand all / Collapse all.
+  - Text coloured by severity; each group rolls up to its worst colour.
+- **Rules:**
+  - Roster: empty starting slot, starter on bye, starter out/doubtful/IR, questionable starter, flex lock order, open bench slot, IR-eligible on bench.
+  - Lineup: starter projected 0, optimal lineup better / lineup differs from your ranking (minor < 5 pts, major ≥ 5), better lineup than your ranking, weather.
+  - Waivers: top-ranked and trending (major), top-ranked, trending.
+  - Trades: trade opportunity.
+  - Injury: new injury status (major), injury status seen before (minor).
+- **Clear minor variances:**
+  - Acknowledges the visible minor items in the pop-up's scope, per user, server-side.
+  - Cleared minors no longer colour rows, page badges or league cards.
+  - Any new variance colours them again: a new key, i.e. league + page + rule + subject, and the week for roster/lineup, ignoring numbers. So does a cleared item escalating to major.
+  - Majors can't be cleared.
+  - Clears for issues that no longer exist are pruned after each build.
+
 ### 8.3 Waiver Management
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
@@ -458,3 +480,4 @@ Collected here since they cut across multiple sections:
 42. **Matchup difficulty (v2.8):** computed in-app from Sleeper game stats rather than bought; blended with last season (≈3 games, fading), optional schedule adjustment, 5 colour tiers.
 43. **Matchup display (v2.8):** cards show `[team] @/vs [opp]`, the team coloured by offensive rank and the opponent by defensive rank (kept separate rather than one combined rank), per James.
 44. **Weather (v2.8):** Open-Meteo, outdoor only, owner-editable thresholds; a flag is a minor heads-up, not a swap recommendation; retractable roofs never flagged.
+45. **Variance report (v2.8.1):** clearing applies to minors only and also clears the colours (badges/cards), not just the report; a variance's identity ignores changing numbers; clears follow the user across devices; a cleared minor that escalates or any new variance restores the colour.

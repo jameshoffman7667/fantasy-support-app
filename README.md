@@ -473,6 +473,42 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### Variance report and clearing minor variances (v2.8.1)
+
+A **Variance report** button opens a pop-up listing every yellow (minor)
+and red (major) flag in its scope. The button shows how many variances
+are open and is coloured by the worst one.
+
+- **Top of the main page:** all leagues, all pages.
+- **Each league card** ("Report") **and the league page:** every page for that league.
+- **Each page** (Roster, Lineup Advice, Waivers, Trade Radar, Injury Watch): that page only.
+
+The pop-up groups variances by league, then page, then the rule broken
+(e.g. "Questionable starter", "Flex lock order", "Weather", "Trending
+add"). The items sit under each rule.
+
+- Every group starts collapsed. There are Expand all and Collapse all
+  buttons, and each group opens on its own.
+- Text is coloured by severity, and each heading takes the worst colour
+  beneath it.
+
+**Clear minor variances** clears the yellow items in that pop-up's scope.
+Red items can't be cleared.
+
+- A cleared item stops colouring its row, its page badge and the league card.
+- Anything new turns yellow or red again: a different issue, player or
+  injury status, or a cleared item that turns red (e.g. a lineup gap
+  growing past 5 points).
+- The same issue with a different number stays cleared (e.g. a 3.2 vs
+  4.1 point gap, 18 vs 22 mph wind).
+- Clears are saved per user on the server (`variance_acks:{user}`), so
+  they carry across devices.
+- After each refresh, clears for issues that have gone away are dropped,
+  so if the issue comes back later it shows again.
+- Roster and lineup issues are tied to the week. Waiver, trade and injury
+  issues are not.
+- Cleared items can be shown again in the pop-up ("Show N cleared").
+
 ### Matchups, weather, headshots and stat lines (v2.8)
 
 **Player cards** (Player Rankings, and the compact Lineup rows) now show:
@@ -916,6 +952,7 @@ server/
   dvp.js                   Matchup difficulty: Sleeper game stats, defense/offense rankings by position (v2.8)
   weather.js               Stadium table + Open-Meteo forecasts + weather flags (v2.8)
   images.js                Cached headshot/logo proxy (v2.8)
+  varianceAcks.js          Per-user cleared minor variances for the variance report (v2.8.1)
   sleeperProjections.js    Sleeper's weekly projections, scored per league — third source (v2.4)
   espnProjections.js       ESPN weekly fantasy projections — last fallback
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)

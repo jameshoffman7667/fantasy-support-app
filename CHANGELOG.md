@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,34 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.8.1 — Variance report
+
+**Commit (short):** `v2.8.1: feat: variance report, clear minors`
+
+**Commit (extended):**
+v2.8.1 adds a Variance report button at three levels: the top of the
+main page covers all leagues, each league card and league page covers
+that league, and each page covers just that page. The pop-up lists every
+yellow and red flag grouped by league, then page, then the rule broken.
+Groups start collapsed, with expand-all and collapse-all buttons. Text is
+coloured by severity and each heading takes the worst colour beneath it.
+
+Each pop-up has a Clear minor variances button for its scope. Cleared
+yellow items stop colouring their rows, page badges and league cards
+until something new appears: a different issue, player or injury status,
+or a cleared item that turns red. The same issue with a changed number
+stays cleared, and red items can't be cleared. Clears are saved per user
+on the server so they follow you across devices, and are dropped once
+the issue goes away, so a recurrence shows again.
+
+**Details**
+- New `client/src/variances.js` (pure: collect, key, apply clears, group, roll up) and `server/varianceAcks.js` (stored in `app_state` as `variance_acks:{user}`).
+- Routes: `GET /api/variances/acks`, `POST /api/variances/ack`, `POST /api/variances/prune` (after each build).
+- `computeRoster` now records the rule behind each roster flag. Page statuses are derived from the variances, and match v2.8 exactly when nothing is cleared (unit-tested).
+- Player Rankings still shows its own live highlights (it re-plans as you drag), so cleared items aren't hidden there.
 
 ---
 
