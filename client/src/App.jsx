@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import * as api from "./api.js";
 import { effectiveLineup, isZeroProjection, GROUP_LABEL, hasStarted } from "./lineup.js";
+import { applyAcks, collectVariances, groupTree, minorKeys, PAGE_LABEL } from "./variances.js";
 
 /* ------------------------------------------------------------------ */
 /*  DESIGN TOKENS                                                     */
@@ -72,15 +73,16 @@ const worst = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc),
 const FLEX_ELIGIBLE = { FLEX: ["RB", "WR", "TE"], SFLX: ["QB", "RB", "WR", "TE"] };
 const OUT_LIKE = ["Out", "Doubtful", "IR", "Suspended", "NA"];
 
+// v2.8.1: each row lists the rules it breaks (`issues`), so the variance
+// report can group by rule; severity/reason are derived from them.
 function computeRoster(league) {
+  const iss = (rule, severity, text) => ({ rule, severity, text });
   const starterRows = league.starters.map(({ slot, player }) => {
-    if (!player) return { slot, label: "(empty)", severity: "major", reasons: ["Empty starting roster slot"] };
-    if (player.status === "Bye") return { slot, label: player.name, severity: "major", reasons: ["On bye — guaranteed zero"] };
-    if (OUT_LIKE.includes(player.status))
-      return { slot, label: player.name, severity: "major", reasons: [player.note || `${player.status} — hasn't been swapped`] };
-    if (player.status === "Questionable")
-      return { slot, label: player.name, severity: "minor", reasons: [player.note || "Questionable — game-time decision"] };
-    return { slot, label: player.name, severity: "ok", reasons: [] };
+    if (!player) return { slot, label: "(empty)", issues: [iss("Empty starting slot", "major", "Empty starting roster slot")] };
+    if (player.status === "Bye") return { slot, label: player.name, issues: [iss("Starter on bye", "major", "On bye — guaranteed zero")] };
+    if (OUT_LIKE.includes(player.status)) return { slot, label: player.name, issues: [iss("Starter out / doubtful / IR", "major", player.note || `${player.status} — hasn't been swapped`)] };
+    if (player.status === "Questionable") return { slot, label: player.name, issues: [iss("Questionable starter", "minor", player.note || "Questionable — game-time decision")] };
+    return { slot, label: player.name, issues: [] };
   });
 
   league.starters.forEach(({ slot, player: flexPlayer }, idx) => {
@@ -90,23 +92,31 @@ function computeRoster(league) {
     );
     if (posIdx < 0) return;
     const positional = league.starters[posIdx];
-    starterRows[idx].severity = "major";
-    starterRows[idx].reasons.push(
-      `Locks ${flexPlayer.kickoffLabel} — before ${positional.slot} slot's ${positional.player.name} (${positional.player.kickoffLabel}). Swap these two.`
+    starterRows[idx].issues.push(
+      iss("Flex lock order", "major", `Locks ${flexPlayer.kickoffLabel} — before ${positional.slot} slot's ${positional.player.name} (${positional.player.kickoffLabel}). Swap these two.`)
     );
-    starterRows[posIdx].severity = "major";
-    starterRows[posIdx].reasons.push(`Later kickoff than ${slot}'s ${flexPlayer.name} — swap these two to preserve flexibility.`);
+    starterRows[posIdx].issues.push(iss("Flex lock order", "major", `Later kickoff than ${slot}'s ${flexPlayer.name} — swap these two to preserve flexibility.`));
   });
 
   const benchRows = league.bench.map((p) => {
-    if (!p) return { slot: "BN", label: "(empty)", severity: "minor", reasons: ["Open bench slot — consider a waiver add"] };
-    if (p.irEligible) return { slot: "BN", label: p.name, severity: "minor", reasons: ["IR-eligible — move to an empty IR slot"], usage: p.usage };
-    return { slot: "BN", label: p.name, severity: "ok", reasons: [], usage: p.usage };
+    if (!p) return { slot: "BN", label: "(empty)", issues: [iss("Open bench slot", "minor", "Open bench slot — consider a waiver add")] };
+    if (p.irEligible) return { slot: "BN", label: p.name, issues: [iss("IR-eligible on bench", "minor", "IR-eligible — move to an empty IR slot")], usage: p.usage };
+    return { slot: "BN", label: p.name, issues: [], usage: p.usage };
   });
   const irRows = (league.ir || []).map((p) => ({ slot: "IR", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
   const taxiRows = (league.taxi || []).map((p) => ({ slot: "TAXI", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
 
-  const rows = [...starterRows, ...benchRows].map((r) => ({ ...r, reason: r.reasons.join(" ") || null }));
+  // Open bench slots share a label; number them so each is its own variance.
+  let emptyBench = 0;
+  benchRows.forEach((r) => {
+    if (r.label === "(empty)") r.label = `(empty ${++emptyBench})`;
+  });
+  const rows = [...starterRows, ...benchRows].map((r) => ({
+    ...r,
+    severity: worst(r.issues.map((i) => i.severity)),
+    reasons: r.issues.map((i) => i.text),
+    reason: r.issues.map((i) => i.text).join(" ") || null,
+  }));
   return { rows, irRows, taxiRows, status: worst(rows.map((r) => r.severity)) };
 }
 
@@ -528,6 +538,149 @@ function WeatherModal({ gameKey, week, onClose }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  VARIANCE REPORT (v2.8.1)                                           */
+/* ------------------------------------------------------------------ */
+const SEV_COLOR = (sev, cleared) => (cleared ? C.textFaint : sev === "major" ? C.major : sev === "minor" ? C.minor : C.ok);
+
+// Opens the report for a scope; coloured by the worst live variance in it.
+function VarianceButton({ variances, onOpen, compact = false, label = "Variance report" }) {
+  const live = variances.filter((v) => !v.cleared);
+  const sev = worstSev(live.map((v) => v.severity));
+  const color = SEV_COLOR(sev);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      style={{ color, border: `1px solid ${color}66`, background: sev === "ok" ? "transparent" : STATUS[sev].bg }}
+      className={`${compact ? "text-[11px] px-2 py-1" : "text-xs px-2.5 py-1.5"} rounded-full font-medium flex items-center gap-1 shrink-0`}
+      aria-label={`${label}: ${live.length} variance(s)`}
+    >
+      <ListChecks size={compact ? 11 : 13} />
+      {compact ? "Report" : label}
+      {live.length > 0 && <span style={{ fontVariantNumeric: "tabular-nums" }}>· {live.length}</span>}
+    </button>
+  );
+}
+const worstSev = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
+
+function VarianceReportModal({ title, variances, onClear, onClose }) {
+  const [open, setOpen] = useState(() => new Set()); // default: everything collapsed
+  const [showCleared, setShowCleared] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const shown = showCleared ? variances : variances.filter((v) => !v.cleared);
+  const tree = useMemo(() => groupTree(shown), [shown]);
+  const clearedCount = variances.filter((v) => v.cleared).length;
+  const toClear = minorKeys(variances);
+  const allIds = [];
+  tree.forEach((l) => {
+    allIds.push(`L:${l.id}`);
+    l.pages.forEach((p) => {
+      allIds.push(`P:${l.id}:${p.page}`);
+      p.rules.forEach((r) => allIds.push(`R:${l.id}:${p.page}:${r.rule}`));
+    });
+  });
+  const toggle = (id) =>
+    setOpen((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const Head = ({ id, level, sev, label, count }) => {
+    const isOpen = open.has(id);
+    const color = SEV_COLOR(sev, sev === "ok");
+    return (
+      <button
+        type="button"
+        onClick={() => toggle(id)}
+        aria-expanded={isOpen}
+        data-variance-group={id}
+        style={{ color, paddingLeft: level * 14 }}
+        className={`w-full flex items-center gap-1.5 text-left py-1.5 ${level === 0 ? "text-sm font-semibold" : level === 1 ? "text-[13px] font-medium" : "text-xs"}`}
+      >
+        <ChevronRight size={13} style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 120ms" }} className="shrink-0" />
+        <span className="truncate">{label}</span>
+        <span style={{ color: C.textFaint }} className="text-[11px] font-normal shrink-0">({count})</span>
+      </button>
+    );
+  };
+  const count = (items) => items.filter((v) => !v.cleared).length + (showCleared ? items.filter((v) => v.cleared).length : 0);
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div className="flex items-center gap-1.5 flex-wrap mb-2">
+        <button onClick={() => setOpen(new Set(allIds))} style={{ color: C.brand, border: `1px solid ${C.brand}55` }} className="text-[11px] rounded-md px-2 py-1">
+          Expand all
+        </button>
+        <button onClick={() => setOpen(new Set())} style={{ color: C.brand, border: `1px solid ${C.brand}55` }} className="text-[11px] rounded-md px-2 py-1">
+          Collapse all
+        </button>
+        <button
+          disabled={!toClear.length || clearing}
+          onClick={async () => {
+            setClearing(true);
+            try {
+              await onClear(toClear);
+            } finally {
+              setClearing(false);
+            }
+          }}
+          style={{ color: toClear.length ? C.minor : C.textFaint, border: `1px solid ${toClear.length ? C.minor : C.border}66` }}
+          className="text-[11px] rounded-md px-2 py-1 ml-auto"
+        >
+          {clearing ? "Clearing…" : `Clear minor variances${toClear.length ? ` (${toClear.length})` : ""}`}
+        </button>
+      </div>
+      {clearedCount > 0 && (
+        <button onClick={() => setShowCleared((v) => !v)} style={{ color: C.textMuted }} className="text-[11px] mb-1 underline">
+          {showCleared ? "Hide" : "Show"} {clearedCount} cleared minor variance(s)
+        </button>
+      )}
+      {tree.length === 0 ? (
+        <div style={{ color: C.ok }} className="text-sm py-2 flex items-center gap-1.5">
+          <CheckCircle2 size={15} /> No variances here.
+        </div>
+      ) : (
+        <div>
+          {tree.map((l) => (
+            <div key={l.id} style={{ borderTop: `1px solid ${C.border}` }}>
+              <Head id={`L:${l.id}`} level={0} sev={l.severity} label={l.name} count={count(l.pages.flatMap((p) => p.rules.flatMap((r) => r.items)))} />
+              {open.has(`L:${l.id}`) &&
+                l.pages.map((p) => (
+                  <div key={p.page}>
+                    <Head id={`P:${l.id}:${p.page}`} level={1} sev={p.severity} label={p.label} count={count(p.rules.flatMap((r) => r.items))} />
+                    {open.has(`P:${l.id}:${p.page}`) &&
+                      p.rules.map((r) => (
+                        <div key={r.rule}>
+                          <Head id={`R:${l.id}:${p.page}:${r.rule}`} level={2} sev={r.severity} label={r.rule} count={count(r.items)} />
+                          {open.has(`R:${l.id}:${p.page}:${r.rule}`) && (
+                            <ul style={{ paddingLeft: 48 }} className="pb-1 space-y-0.5">
+                              {r.items.map((v) => (
+                                <li key={v.key} style={{ color: SEV_COLOR(v.severity, v.cleared) }} className="text-xs" data-variance={v.severity}>
+                                  {v.text}
+                                  {v.cleared ? " (cleared)" : ""}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                ))}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ color: C.textFaint }} className="text-[10px] mt-3">
+        Clearing hides the yellow (minor) items listed here until a new one appears. Red items can't be cleared. A cleared item that turns red shows again.
+      </div>
+    </Modal>
+  );
+}
+
 function WeekPicker({ week, onChange, disabled }) {
   if (week == null) return null;
   return (
@@ -689,9 +842,13 @@ function PushToggle() {
 /* ------------------------------------------------------------------ */
 /*  SCREENS                                                            */
 /* ------------------------------------------------------------------ */
-function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, onOpenAccuracy, sleeperUser }) {
+function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, onOpenAccuracy, sleeperUser, onOpenVariances }) {
+  const allVariances = computed.flatMap((lg) => lg.variances || []);
   return (
     <div className="px-4 py-3">
+      <div className="flex justify-end pb-2">
+        <VarianceButton variances={allVariances} onOpen={() => onOpenVariances({})} label="Variance report — all leagues" />
+      </div>
       <div className="flex items-center justify-between flex-wrap gap-y-2 pb-3">
         <PushToggle />
         <div className="flex items-center gap-3 flex-wrap">
@@ -722,7 +879,7 @@ function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues,
               <ChevronRight size={18} style={{ color: C.textFaint }} className="shrink-0" />
             </button>
             {!lg.error && (
-              <div className="flex items-center gap-1 px-4 pb-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.border}` }}>
+              <div className="flex items-center gap-1 flex-wrap px-4 pb-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.border}` }}>
                 {STATUS_BADGE_TABS.map((key) => (
                   <StatusBadge key={key} status={lg[key].status} label={TAB_META[key].short} compact onClick={() => onOpenTab(lg.id, key)} />
                 ))}
@@ -730,6 +887,7 @@ function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues,
                   <Trophy size={11} />
                   Outlook
                 </button>
+                <VarianceButton compact variances={lg.variances || []} onOpen={() => onOpenVariances({ leagueId: lg.id })} />
               </div>
             )}
           </div>
@@ -751,7 +909,7 @@ function ErrorScreen({ message }) {
   );
 }
 
-function LeagueOverview({ league, onOpenTab }) {
+function LeagueOverview({ league, onOpenTab, onOpenVariances }) {
   if (league.error) return <ErrorScreen message={league.error} />;
   const summaries = {
     roster: league.roster.rows.some((r) => r.severity !== "ok")
@@ -778,6 +936,9 @@ function LeagueOverview({ league, onOpenTab }) {
 
   return (
     <div className="px-4 py-3 space-y-2.5">
+      <div className="flex justify-end">
+        <VarianceButton variances={league.variances || []} onOpen={() => onOpenVariances({ leagueId: league.id })} label="Variance report — this league" />
+      </div>
       {league.stale && (
         <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2">
           Showing cached data — a live refresh just failed. Try refreshing again shortly.
@@ -1239,7 +1400,7 @@ function LineupTab({ league, onSaveRanking }) {
   [...(league.starters || []).map((s) => s.player), ...(league.bench || []), ...(league.ir || []), ...(league.taxi || []), ...(league.freeAgents || [])].forEach((p) => p && !byName.has(p.name) && byName.set(p.name, p));
   const rows = L.rows || [];
   const suggestedLabel = custom ? "Your ranking" : "Optimal";
-  const better = custom && L.betterDelta > 0.05;
+  const better = custom && L.betterDelta > 0.05 && !L.betterCleared;
   return (
     <div className="px-4 py-3">
       {league.dataWarnings?.length > 0 && (
@@ -1538,7 +1699,7 @@ function InjuryTab({ league }) {
       ) : (
         <div className="space-y-1.5">
           {league.injury.rows.map((e) => {
-            const sev = e.seen ? "minor" : "major";
+            const sev = e.cleared ? "ok" : e.seen ? "minor" : "major";
             const s = STATUS[sev];
             return (
               <div key={e.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-3.5 py-3 flex items-center gap-3">
@@ -1547,7 +1708,7 @@ function InjuryTab({ league }) {
                   <div style={{ color: C.text }} className="text-sm font-medium">{e.player}</div>
                   <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{e.status}{e.note ? ` — ${e.note}` : ""}</div>
                 </div>
-                <div style={{ color: C.textFaint }} className="text-xs shrink-0">{e.seen ? "Seen before" : "New"}</div>
+                <div style={{ color: C.textFaint }} className="text-xs shrink-0">{e.cleared ? "Cleared" : e.seen ? "Seen before" : "New"}</div>
               </div>
             );
           })}
@@ -3018,7 +3179,7 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  const computed = useMemo(
+  const rawComputed = useMemo(
     () =>
       liveLeagues.map((lg) =>
         lg.error
@@ -3034,6 +3195,10 @@ export default function App() {
       ),
     [liveLeagues]
   );
+  // v2.8.1: cleared minor variances (per user, server-side) are applied on
+  // top — they stop colouring rows, page badges and league cards.
+  const [acks, setAcks] = useState(() => new Set());
+  const computed = useMemo(() => rawComputed.map((lg) => applyAcks(lg, acks)), [rawComputed, acks]);
 
   const activeLeague = useMemo(() => computed.find((l) => l.id === (view.leagueId || null)), [computed, view.leagueId]);
 
@@ -3275,6 +3440,37 @@ export default function App() {
     return () => clearInterval(id);
   }, [authUser]);
 
+  // v2.8.1: load cleared variances; after each build, drop clears for issues
+  // that have gone away (so if one comes back it's new again).
+  useEffect(() => {
+    if (!authUser || authUser.mustChangePassword) return;
+    api.getVarianceAcks().then((r) => setAcks(new Set(r.keys || []))).catch(() => {});
+  }, [authUser]);
+  useEffect(() => {
+    if (!authUser || authUser.mustChangePassword) return;
+    const built = rawComputed.filter((lg) => !lg.error);
+    if (!built.length) return;
+    const present = built.flatMap((lg) => collectVariances(lg).map((v) => v.key));
+    api
+      .pruneVarianceAcks(built.map((lg) => lg.id), built[0].week, present)
+      .then((r) => setAcks(new Set(r.keys || [])))
+      .catch(() => {});
+  }, [rawComputed, authUser]);
+  const clearVariances = useCallback(async (keys) => {
+    setAcks((prev) => new Set([...prev, ...keys])); // optimistic
+    try {
+      const r = await api.ackVariances(keys);
+      setAcks(new Set(r.keys || []));
+    } catch {
+      setAcks((prev) => {
+        const n = new Set(prev);
+        keys.forEach((k) => n.delete(k));
+        return n;
+      });
+    }
+  }, []);
+  const openVariances = useCallback((scope) => setModal({ type: "variances", scope }), []);
+
   // v2.8: fetch the matchup table for each scoring profile in use; re-fetch
   // when the Analytics sample/adjust settings change.
   const profileKeys = useMemo(() => [...new Set(liveLeagues.map((l) => l.scoringProfile).filter(Boolean))].sort(), [liveLeagues]);
@@ -3326,6 +3522,13 @@ export default function App() {
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="max-w-lg mx-auto">
       {modal?.type === "dvp" && <DvpDetailModal params={modal.params} onClose={closeModal} />}
       {modal?.type === "weather" && <WeatherModal gameKey={modal.key} week={modal.week} onClose={closeModal} />}
+      {modal?.type === "variances" && (() => {
+        const sc = modal.scope || {};
+        const lg = sc.leagueId ? computed.find((l) => l.id === sc.leagueId) : null;
+        const list = computed.flatMap((l) => l.variances || []).filter((v) => (!sc.leagueId || v.leagueId === sc.leagueId) && (!sc.page || v.page === sc.page));
+        const title = sc.page ? `Variances · ${lg?.name || ""} · ${PAGE_LABEL[sc.page]}` : sc.leagueId ? `Variances · ${lg?.name || ""}` : "Variances · all leagues";
+        return <VarianceReportModal title={title} variances={list} onClear={clearVariances} onClose={closeModal} />;
+      })()}
       <TopBar
         crumbs={crumbs}
         onRefresh={showRefresh ? handleRefresh : undefined}
@@ -3360,6 +3563,7 @@ export default function App() {
           onEditLeagues={handleEditLeagues}
           onOpenAccount={() => navigate({ screen: "account" })}
           sleeperUser={sleeperUser}
+          onOpenVariances={openVariances}
         />
       )}
       {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
@@ -3372,12 +3576,22 @@ export default function App() {
         <SelectLeaguesScreen leagues={availableLeagues} selectedIds={selectedIds} onToggle={handleToggleLeague} onConfirm={handleConfirmSelection} loading={loadingLeagues || connecting} error={connectError} />
       )}
       {view.screen === "league" && activeLeague && (
-        <LeagueOverview league={activeLeague} onOpenTab={(tab) => navigate({ screen: "tab", leagueId: activeLeague.id, tab })} />
+        <LeagueOverview league={activeLeague} onOpenVariances={openVariances} onOpenTab={(tab) => navigate({ screen: "tab", leagueId: activeLeague.id, tab })} />
       )}
       {view.screen === "tab" && activeLeague && (() => {
         if (activeLeague.error) return <ErrorScreen message={activeLeague.error} />;
         const Comp = TAB_COMPONENTS[view.tab];
-        return <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} />;
+        const pageVariances = (activeLeague.variances || []).filter((v) => v.page === view.tab);
+        return (
+          <>
+            {STATUS_BADGE_TABS.includes(view.tab) && (
+              <div className="flex justify-end px-4 pt-3 -mb-1">
+                <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: view.tab })} label="Variance report — this page" />
+              </div>
+            )}
+            <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} />
+          </>
+        );
       })()}
     </div>
     </CardCtx.Provider>

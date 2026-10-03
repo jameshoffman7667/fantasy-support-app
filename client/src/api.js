@@ -171,3 +171,14 @@ export function saveWeatherSettings(settings) {
 }
 export const playerImageUrl = (id) => `/api/img/player/${encodeURIComponent(id)}`;
 export const teamLogoUrl = (team) => `/api/img/team/${encodeURIComponent(team)}`;
+
+/* ---------------- Variance report (v2.8.1) ---------------- */
+export function getVarianceAcks() {
+  return request(`/api/variances/acks`);
+}
+export function ackVariances(keys) {
+  return jsonPost(`/api/variances/ack`, { keys });
+}
+export function pruneVarianceAcks(leagueIds, week, present) {
+  return jsonPost(`/api/variances/prune`, { leagueIds, week, present });
+}
