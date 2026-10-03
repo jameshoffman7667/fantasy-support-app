@@ -218,7 +218,11 @@ const STAT_MAP = {
 export function parseProjections(body) {
   const players = {};
   const defenses = {};
-  const pp = body?.playerProjections || {};
+  // Map format (default): { playerProjections: { id: {...} }, teamDefenseProjections: {...} }.
+  // Also accept the list format and a bare array, in case Tank01 returns those.
+  let pp = body?.playerProjections || body?.players || {};
+  if (Array.isArray(body)) pp = body;
+  if (Array.isArray(pp)) pp = Object.fromEntries(pp.filter((x) => x?.playerID).map((x) => [String(x.playerID), x]));
   for (const [id, p] of Object.entries(pp)) {
     if (!p || typeof p !== "object") continue;
     const stats = {};
@@ -239,7 +243,8 @@ export function parseProjections(body) {
       preset: { std: num(d.standard), half: num(d.halfPPR), ppr: num(d.PPR) },
     };
   }
-  const tdp = body?.teamDefenseProjections || {};
+  let tdp = body?.teamDefenseProjections || body?.teamDefense || {};
+  if (Array.isArray(tdp)) tdp = Object.fromEntries(tdp.filter((x) => x?.teamAbv || x?.teamID).map((x) => [String(x.teamAbv || x.teamID), x]));
   for (const [id, t] of Object.entries(tdp)) {
     const team = normTeam(t?.teamAbv || id);
     if (!team) continue;
@@ -449,6 +454,22 @@ export async function fetchHistoryProjections(season, week, currentSeason, budge
 export async function fetchHistoryOdds(gameID, budget) {
   return parsePlayerProps(await tankFetch("getNFLBettingOdds", { gameID, playerProps: "true", impliedTotals: "true", itemFormat: "list" }, { budget }));
 }
+/** v2.6: status of the stored Tank01 data for a week (no API call). */
+export function weekStatus(season, week) {
+  const data = cacheGet(`tank01:week:${season}:${week}`);
+  const odds = Object.values(data?.odds || {});
+  return {
+    configured: isConfigured(),
+    callsThisMonth: callsThisMonth(),
+    projectionsAt: data?.projections?.fetchedAt ?? null,
+    projectionPlayers: data?.projections ? Object.keys(data.projections.players || {}).length : 0,
+    oddsGames: odds.length,
+    oddsWithProps: odds.filter((g) => g && Object.keys(g.props || {}).length > 0).length,
+    oddsAt: odds.reduce((mx, g) => Math.max(mx, g?.fetchedAt || 0), 0) || null,
+    rateLimited: Date.now() < rateLimitedUntil,
+  };
+}
+
 export function _resetRateLimitForTests() {
   rateLimitedUntil = 0;
 }

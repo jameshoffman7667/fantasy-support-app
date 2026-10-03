@@ -30,7 +30,7 @@ import {
   Copy,
 } from "lucide-react";
 import * as api from "./api.js";
-import { effectiveLineup, isZeroProjection, GROUP_LABEL } from "./lineup.js";
+import { effectiveLineup, isZeroProjection, GROUP_LABEL, hasStarted } from "./lineup.js";
 
 /* ------------------------------------------------------------------ */
 /*  DESIGN TOKENS                                                     */
@@ -355,10 +355,6 @@ function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues,
       <div className="flex items-center justify-between flex-wrap gap-y-2 pb-3">
         <PushToggle />
         <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={onOpenAccuracy} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
-            <TrendingUp size={13} />
-            Accuracy
-          </button>
           <button onClick={onOpenAccount} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
             <UserCog size={13} />
             Account
@@ -616,6 +612,11 @@ function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, o
             <span style={{ color: C.minor, border: `1px solid ${C.minor}55` }} className="text-[10px] rounded px-1.5 py-0.5">{p.status}</span>
           )}
           {p.trending && <span style={{ color: C.brand }} className="text-[10px]">Trending add</span>}
+          {hasStarted(p) && (
+            <span style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="text-[10px] rounded px-1.5 py-0.5">
+              {p.played ? "Played" : "Game started"} — locked
+            </span>
+          )}
           <UsageBadge usage={p.usage} />
         </div>
         {zero && <div style={{ color: C.major }} className="text-xs mt-1">Projected for 0 points</div>}
@@ -1839,6 +1840,243 @@ function AccuracyScreen({ authUser }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  GAME DAY (v2.6)                                                     */
+/* ------------------------------------------------------------------ */
+const CAT_COLOR = { for: C.ok, balanced: C.minor, against: C.major };
+const CAT_LABEL = { for: "Cheer for", balanced: "Balanced", against: "Cheer against" };
+
+function GameDaySettings({ data, onSaved }) {
+  const [s, setS] = useState(() => ({
+    ratio: data.settings.ratio,
+    closeWeighting: data.settings.closeWeighting,
+    closeMargin: data.settings.closeMargin,
+    closeFloor: data.settings.closeFloor,
+    leagues: Object.fromEntries(data.leagues.map((l) => [l.id, { importance: l.importance ?? 1, include: l.include !== false }])),
+  }));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const field = { background: C.surface, border: `1px solid ${C.border}`, color: C.text };
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.saveGameDaySettings(s);
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const setLeague = (id, patch) => setS((prev) => ({ ...prev, leagues: { ...prev.leagues, [id]: { ...prev.leagues[id], ...patch } } }));
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-3">
+      <div style={{ color: C.textMuted }} className="text-xs">
+        Importance weights each league (league dues, or any relative numbers). A player who counts 200 for you and 2 × 100 against you is balanced.
+      </div>
+      <div className="space-y-1.5">
+        {data.leagues.map((l) => (
+          <div key={l.id} className="flex items-center gap-2">
+            <input type="checkbox" checked={s.leagues[l.id]?.include !== false} onChange={(e) => setLeague(l.id, { include: e.target.checked })} aria-label={`Include ${l.name}`} />
+            <span style={{ color: C.text }} className="text-xs flex-1 truncate">{l.name}</span>
+            <input
+              type="number"
+              min="0"
+              value={s.leagues[l.id]?.importance ?? 1}
+              onChange={(e) => setLeague(l.id, { importance: e.target.value })}
+              style={field}
+              className="w-20 rounded px-2 py-1 text-xs text-right"
+              aria-label={`Importance for ${l.name}`}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-[11px]" style={{ color: C.textMuted }}>
+        <label className="flex flex-col gap-0.5">
+          For/against ratio (×)
+          <input type="number" step="0.1" min="1" value={s.ratio} onChange={(e) => setS({ ...s, ratio: e.target.value })} style={field} className="rounded px-2 py-1 text-xs" />
+        </label>
+        <label className="flex items-center gap-2 pt-4">
+          <input type="checkbox" checked={s.closeWeighting} onChange={(e) => setS({ ...s, closeWeighting: e.target.checked })} />
+          Close-matchup weighting
+        </label>
+        <label className="flex flex-col gap-0.5">
+          Close margin (%)
+          <input type="number" min="1" value={s.closeMargin} onChange={(e) => setS({ ...s, closeMargin: e.target.value })} style={field} className="rounded px-2 py-1 text-xs" disabled={!s.closeWeighting} />
+        </label>
+        <label className="flex flex-col gap-0.5">
+          Blowout minimum (0–1)
+          <input type="number" step="0.05" min="0" max="1" value={s.closeFloor} onChange={(e) => setS({ ...s, closeFloor: e.target.value })} style={field} className="rounded px-2 py-1 text-xs" disabled={!s.closeWeighting} />
+        </label>
+      </div>
+      <div style={{ color: C.textFaint }} className="text-[11px]">
+        "For" when a player's for-weight is at least {s.ratio}× his against-weight; "against" the other way round; otherwise balanced. With close-matchup weighting, a league within the close margin counts fully and a blowout drops toward the minimum.
+      </div>
+      {error && <div style={{ color: C.major }} className="text-xs">{error}</div>}
+      <PrimaryButton onClick={save} loading={busy}>{busy ? "Saving…" : "Save settings"}</PrimaryButton>
+    </div>
+  );
+}
+
+function CheerRow({ p, ratio }) {
+  const color = CAT_COLOR[p.category];
+  const x = Math.min(94, Math.max(6, (1 - p.lean) * 100));
+  const forEdge = (1 / (Number(ratio) + 1)) * 100; // lean ≥ ratio/(ratio+1) => x ≤ 1/(ratio+1)
+  const live = p.state === "in";
+  return (
+    <div className="py-2" style={{ borderTop: `1px solid ${C.border}` }}>
+      <div className="relative h-7 rounded" style={{ background: C.surface }}>
+        <div className="absolute inset-y-0 left-0 rounded-l" style={{ width: `${forEdge}%`, background: C.okBg }} />
+        <div className="absolute inset-y-0 right-0 rounded-r" style={{ width: `${forEdge}%`, background: C.majorBg }} />
+        <div className="absolute inset-y-0" style={{ left: "50%", width: 1, background: C.border }} />
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px]"
+          style={{ left: `${x}%`, background: C.bg, border: `1px solid ${color}`, color: C.text, fontWeight: p.stake >= 2 ? 600 : 400, opacity: 0.55 + Math.min(0.45, p.stake / 10) }}
+          title={`For ${p.F} · Against ${p.A}`}
+        >
+          {p.name}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap mt-1 px-0.5">
+        <span style={{ color: C.textFaint }} className="text-[10px]">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.opponent ? ` vs ${p.opponent}` : ""}</span>
+        <span style={{ color: live ? C.brand : C.textFaint }} className="text-[10px]">{p.statusDetail || p.kickoffLabel || ""}</span>
+        <span style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-[11px] font-medium">
+          {p.points != null ? `${p.points.toFixed(1)} pts` : p.proj != null ? `proj ${p.proj.toFixed(1)}` : ""}
+        </span>
+        {p.leagues.map((l, i) => (
+          <span key={i} style={{ color: l.side === "for" ? C.ok : C.major, border: `1px solid ${l.side === "for" ? C.ok : C.major}55` }} className="text-[10px] rounded px-1.5 py-0.5">
+            {l.side === "for" ? "+" : "−"} {l.league} ({l.weight})
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GameDayScreen() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [slot, setSlot] = useState("all");
+  const [cat, setCat] = useState("all");
+  const load = useCallback(() => {
+    api
+      .getGameDay()
+      .then((d) => {
+        setData(d);
+        setError(null);
+      })
+      .catch((err) => setError(err.message));
+  }, []);
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 60 * 1000); // live points during games (Sleeper + ESPN, no Tank01 calls)
+    return () => clearInterval(id);
+  }, [load]);
+
+  if (error && !data) return <div className="px-4 py-6"><ErrorScreen message={error} /></div>;
+  if (!data) return <BootstrapScreen />;
+  const slots = [...new Set(data.players.map((p) => p.kickoffLabel).filter(Boolean))];
+  const shown = data.players.filter((p) => (slot === "all" || p.kickoffLabel === slot) && (cat === "all" || p.category === cat));
+  const counts = { for: 0, balanced: 0, against: 0 };
+  data.players.forEach((p) => counts[p.category]++);
+
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div style={{ color: C.textMuted }} className="text-xs">Week {data.week} · updated {new Date(data.updatedAt).toLocaleTimeString()}</div>
+        <button onClick={() => setShowSettings((v) => !v)} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
+          <Settings2 size={13} /> {showSettings ? "Hide settings" : "Settings"}
+        </button>
+      </div>
+      {showSettings && (
+        <GameDaySettings
+          data={data}
+          onSaved={() => {
+            setShowSettings(false);
+            load();
+          }}
+        />
+      )}
+      <div className="space-y-1.5">
+        {data.leagues.map((l) => (
+          <div key={l.id} style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: l.include === false ? 0.5 : 1 }} className="rounded-md px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span style={{ color: C.text }} className="text-xs font-medium truncate">{l.name}</span>
+              <span style={{ color: C.textFaint }} className="text-[10px] shrink-0">×{l.importance ?? 1}{data.settings.closeWeighting && l.closeFactor != null ? ` · close ×${l.closeFactor}` : ""}</span>
+            </div>
+            {l.note ? (
+              <div style={{ color: C.textFaint }} className="text-[11px]">{l.note}</div>
+            ) : (
+              <div style={{ color: C.textMuted, fontVariantNumeric: "tabular-nums" }} className="text-[11px]">
+                {l.myTeam} {l.myPoints?.toFixed(1)} – {l.oppPoints?.toFixed(1)} {l.oppTeam} · proj {l.myProjected?.toFixed(1)} – {l.oppProjected?.toFixed(1)}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2 items-center">
+        <Select label="Game slot" value={slot} onChange={setSlot} options={[{ value: "all", label: "All games" }, ...slots.map((s) => ({ value: s, label: s }))]} />
+        <div className="flex gap-1.5 pt-3.5">
+          {["all", "for", "balanced", "against"].map((c) => (
+            <Toggle key={c} checked={cat === c} onChange={() => setCat(c)}>
+              {c === "all" ? `All ${data.players.length}` : `${CAT_LABEL[c]} ${counts[c]}`}
+            </Toggle>
+          ))}
+        </div>
+      </div>
+      <div className="flex justify-between text-[10px] uppercase tracking-wide px-1" style={{ color: C.textFaint }}>
+        <span style={{ color: C.ok }}>← Cheer for</span>
+        <span>Balanced</span>
+        <span style={{ color: C.major }}>Cheer against →</span>
+      </div>
+      {shown.length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No players for these filters.</div>
+      ) : (
+        <div>{shown.map((p) => <CheerRow key={p.id} p={p} ratio={data.settings.ratio} />)}</div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  TABS (v2.6)                                                         */
+/* ------------------------------------------------------------------ */
+const TABS = [
+  { key: "leagues", label: "League Management", Icon: ListChecks },
+  { key: "gameday", label: "Game Day", Icon: Trophy },
+  { key: "analytics", label: "Analytics", Icon: TrendingUp },
+];
+function TabBar({ active, onSelect }) {
+  return (
+    <div className="flex" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+      {TABS.map(({ key, label, Icon }) => (
+        <button
+          key={key}
+          onClick={() => onSelect(key)}
+          style={{ color: active === key ? C.text : C.textMuted, borderBottom: `2px solid ${active === key ? C.brand : "transparent"}` }}
+          className="flex-1 py-2 text-xs font-medium flex items-center justify-center gap-1.5"
+          aria-current={active === key ? "page" : undefined}
+        >
+          <Icon size={13} />
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Real projection-source status for the header (replaces fixed text).
+function sourceStatusLabel(st) {
+  const p = st?.projections;
+  if (!p) return "Projections: not loaded yet";
+  const parts = [`Vegas ${p.counts.V}`, `Tank01 ${p.counts.T}`, `Sleeper ${p.counts.S}`, `ESPN ${p.counts.E}`];
+  const t = st.tank01;
+  const tank = !t?.configured ? " · Tank01 key not set" : t.rateLimited ? " · Tank01 paused (rate limit)" : t.projectionsAt ? ` · Tank01 data ${new Date(t.projectionsAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}, props for ${t.oddsWithProps}/${t.oddsGames} games` : " · no Tank01 data yet";
+  return `Projections (players): ${parts.join(" · ")}${tank}`;
+}
+
 function SelectLeaguesScreen({ leagues, selectedIds, onToggle, onConfirm, loading, error }) {
   return (
     <div className="px-4 py-3">
@@ -1896,6 +2134,11 @@ export default function App() {
   const [view, setView] = useState({ screen: "bootstrapping" });
   const [refreshing, setRefreshing] = useState(false);
   const [syncedAt, setSyncedAt] = useState("just now");
+  const [sourceStatus, setSourceStatus] = useState(null);
+  // v2.6: refresh the real source-status line whenever the "synced" time changes.
+  useEffect(() => {
+    api.getSourceStatus().then(setSourceStatus).catch(() => {});
+  }, [syncedAt, refreshing]);
 
   const [authUser, setAuthUser] = useState(null);
   const [username, setUsername] = useState("");
@@ -2185,7 +2428,8 @@ export default function App() {
     if (view.screen === "login") return [{ label: "Fantasy Manager" }];
     if (view.screen === "forceChange") return [{ label: "Change password" }];
     if (view.screen === "account") return [root, { label: "Account" }];
-    if (view.screen === "accuracy") return [root, { label: "Projection accuracy" }];
+    if (view.screen === "analytics") return [{ label: "Analytics" }];
+    if (view.screen === "gameday") return [{ label: "Game Day" }];
     if (view.screen === "admin") return [root, { label: "Account", onClick: () => navigate({ screen: "account" }) }, { label: "Manage users" }];
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
     if (view.screen === "dashboard") return [{ label: root.label }];
@@ -2203,11 +2447,21 @@ export default function App() {
         crumbs={crumbs}
         onRefresh={showRefresh ? handleRefresh : undefined}
         refreshing={refreshing}
-        syncedLabel={showRefresh ? `Synced ${syncedAt} · Vegas props + Tank01/Sleeper/ESPN projections (live)` : null}
+        syncedLabel={showRefresh ? `Synced ${syncedAt} · ${sourceStatusLabel(sourceStatus)}` : null}
         week={week}
         onWeekChange={handleWeekChange}
         showWeek={showWeek}
       />
+      {authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange"].includes(view.screen) && (
+        <TabBar
+          active={view.screen === "gameday" ? "gameday" : view.screen === "analytics" ? "analytics" : "leagues"}
+          onSelect={(tab) => {
+            if (tab === "gameday") navigate({ screen: "gameday" });
+            else if (tab === "analytics") navigate({ screen: "analytics" });
+            else navigate(liveLeagues.length ? { screen: "dashboard" } : { screen: "select" });
+          }}
+        />
+      )}
       {view.screen === "bootstrapping" && <BootstrapScreen />}
       {view.screen === "login" && (
         <LoginScreen username={username} setUsername={setUsername} password={password} setPassword={setPassword} onSubmit={handleLoginSubmit} loading={loggingIn} error={loginError} />
@@ -2220,12 +2474,12 @@ export default function App() {
           onLogout={handleLogout}
           onEditLeagues={handleEditLeagues}
           onOpenAccount={() => navigate({ screen: "account" })}
-          onOpenAccuracy={() => navigate({ screen: "accuracy" })}
           sleeperUser={sleeperUser}
         />
       )}
       {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
-      {view.screen === "accuracy" && <AccuracyScreen authUser={authUser} />}
+      {view.screen === "analytics" && <AccuracyScreen authUser={authUser} />}
+      {view.screen === "gameday" && <GameDayScreen />}
       {view.screen === "account" && <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />}
       {view.screen === "admin" && authUser?.role === "owner" && <AdminScreen authUser={authUser} />}
       {view.screen === "select" && (

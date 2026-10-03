@@ -238,6 +238,11 @@ export function toRecords({ season, week, profile, all, leans, kickoffFor, backf
 
 /* ---------------- live entry point for buildLeague ---------------- */
 const cache = new Map(); // `${season}|${week}|${profile}` -> { at, result }
+let lastSummary = null;
+/** v2.6: what the last projection computation actually got from each source (for the header status). */
+export function getLastSummary() {
+  return lastSummary;
+}
 
 /**
  * Everything buildLeague needs for one league: per-player sources (raw), the
@@ -278,6 +283,7 @@ export async function getWeek({ season, week, settings, sleeperPlayers, force = 
   for (const e of all.values()) for (const s of Object.keys(counts)) if (e[s] != null) counts[s]++;
   console.log(`[projectionHub] ${season} wk${week} ${profile.label}: ${all.size} players — Vegas ${counts.V}, Tank01 ${counts.T}, Sleeper ${counts.S}, ESPN ${counts.E}. Leans: ${leanSummary(leans)}`);
 
+  lastSummary = { season: Number(season), week: Number(week), profile: profile.label, players: all.size, counts, at: Date.now(), tank01: Boolean(tankWeek), sleeper: Boolean(sleeperPool), espn: Boolean(espnPool) };
   const result = { profile, all, leans };
   cache.set(key, { at: Date.now(), result });
   return result;

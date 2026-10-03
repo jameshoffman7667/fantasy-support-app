@@ -27,6 +27,15 @@ export const GROUP_LABEL = { starter: "Starter", bench: "Bench", ir: "IR", taxi:
 // Below this many points a "better lineup" isn't worth flagging — it's rounding noise.
 const BETTER_EPSILON = 0.05;
 
+/**
+ * v2.6: a player whose game has kicked off can't be swapped in or out any
+ * more — starters stay locked in their slot and everyone else (bench, IR,
+ * taxi, free agents) drops out of every recommendation.
+ */
+export function hasStarted(player, now = Date.now()) {
+  return Boolean(player && (player.played || player.started || (player.kickoff != null && player.kickoff <= now)));
+}
+
 export function playerKey(player) {
   return `${player.name}|${player.pos}`;
 }
@@ -152,18 +161,19 @@ export function effectiveLineup(league, orderKeysOverride) {
   const custom = Array.isArray(rankingKeys) && rankingKeys.length > 0;
 
   const rosterByKey = new Map(roster.map((e) => [e.key, e]));
-  const lockedByIndex = (league.starters || []).map((s) => (s.player?.played ? rosterByKey.get(playerKey(s.player)) ?? null : null));
+  const lockedByIndex = (league.starters || []).map((s) => (hasStarted(s.player) ? rosterByKey.get(playerKey(s.player)) ?? null : null));
+  const notStarted = (e) => !hasStarted(e.player);
 
   const rosterOrder = custom ? applySavedOrder(roster, rankingKeys) : defaultOrder(roster);
   // IR and taxi players can't start without a roster move. With the suggested
   // (default) order they're left out entirely, matching the server's optimizer;
   // with the user's own ranking they're honoured — they arranged it that way —
   // and flagged as needing a move on the lineup rows and cards.
-  const startable = roster.filter((e) => e.group === "starter" || e.group === "bench");
+  const startable = roster.filter((e) => (e.group === "starter" || e.group === "bench") && notStarted(e));
   const startableKeys = new Set(startable.map((e) => e.key));
-  const rankedPicks = fillSlots(slots, custom ? rosterOrder : rosterOrder.filter((e) => startableKeys.has(e.key)), lockedByIndex);
+  const rankedPicks = fillSlots(slots, custom ? rosterOrder.filter(notStarted) : rosterOrder.filter((e) => startableKeys.has(e.key)), lockedByIndex);
 
-  const bestPicks = fillSlots(slots, defaultOrder([...startable, ...freeAgents]), lockedByIndex);
+  const bestPicks = fillSlots(slots, defaultOrder([...startable, ...freeAgents.filter(notStarted)]), lockedByIndex);
 
   const rankedTotal = totalOf(rankedPicks);
   const bestTotal = totalOf(bestPicks);
@@ -209,7 +219,7 @@ export function effectiveLineup(league, orderKeysOverride) {
               proj: pick.player.proj ?? null,
               projSource: pick.player.projSource,
               note: locked
-                ? "Already played — locked to the actual result"
+                ? (lockedByIndex[i]?.player?.played ? "Already played — locked to the actual result" : "Game has started — locked")
                 : needsMove
                 ? `On your ${GROUP_LABEL[pick.group]} — needs a roster move before they can start`
                 : undefined,

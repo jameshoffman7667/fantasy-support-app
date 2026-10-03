@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,43 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.6 — Tabs, Game Day, lineup lock-out, real source status
+
+**Commit (short):** `v2.6: feat: tabs, Game Day, lineup lock-out`
+
+**Commit (extended):**
+v2.6 reorganises the app into three tabs: League Management (the
+existing screens), Game Day, and Analytics (accuracy dashboard, leans
+and the owner backfill).
+
+Game Day shows who to cheer for and against across every tracked league.
+Your starters count for you and your opponent's starters against you,
+each weighted by a per-league importance such as dues. Each player's lean
+is for-weight over total weight, drawn as one line per player from cheer
+for (left) through balanced to cheer against (right). The band ratio, an
+optional close-matchup weighting with its margin and floor, and per-league
+include toggles are settings. Live points and game status refresh every
+minute from Sleeper and ESPN, with no Tank01 calls.
+
+Players whose game has kicked off are no longer recommended anywhere;
+started starters stay locked. The header now shows what projections
+actually came from, per source, and Tank01 data age, replacing fixed
+text.
+
+**Details**
+- New `server/gameday.js` + `GET /api/gameday`, `GET/POST /api/gameday/settings` (per user, stored in `app_state`). `schedule.js` now carries game state/status/score and has a 60-second "live" mode.
+- `buildLeague.js`: players get `started` (kickoff passed); started starters lock, started bench/free agents leave the candidate pool. `lineup.js`: same rule for Player Rankings, best-lineup and yellow checks (`hasStarted`).
+- `GET /api/status/sources` + `projectionHub.getLastSummary()` + `tank01.weekStatus()` feed the header line. `tank01.parseProjections` accepts list/array responses too.
+- UI: tab bar; Game Day screen (league score cards, filters, cheer-for/against lines, settings); Accuracy moved to Analytics.
+
+**Known limitations / what was and wasn't tested**
+- The "all projections show as Sleeper" report is not resolved — the new header status should show which source is missing; the server log lines requested earlier are still needed.
+- Game Day's projected final for games in progress uses the larger of points so far and the projection (rough). Uses Sleeper `matchups` starters; median/bye weeks show a note instead of an opponent.
+- Game status depends on ESPN's scoreboard; kickoff times decide the lineup lock.
+- Tested with mocked APIs: Game Day maths (200 for vs 2×100 against = balanced, ratio bands, ratio change, close-matchup factor, excluded league), lineup lock-out (client and server), plus all earlier suites (44 server checks) and 34 browser checks including tabs, Game Day layout order, filters and settings save.
 
 ---
 

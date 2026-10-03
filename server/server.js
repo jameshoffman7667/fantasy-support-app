@@ -26,6 +26,9 @@ import {
 import { startScheduler } from "./scheduler.js";
 import { computeAccuracy } from "./accuracy.js";
 import * as backfill from "./backfill.js";
+import * as gameday from "./gameday.js";
+import * as tank01 from "./tank01.js";
+import { getLastSummary } from "./projectionHub.js";
 import { simulateSeason } from "./simulate.js";
 import { isPushConfigured, getPublicKey, saveSubscription, removeSubscription } from "./push.js";
 import {
@@ -316,6 +319,8 @@ app.use("/api/faab", requireAuth);
 app.use("/api/season-odds", requireAuth);
 app.use("/api/rankings", requireAuth);
 app.use("/api/accuracy", requireAuth);
+app.use("/api/gameday", requireAuth);
+app.use("/api/status", requireAuth);
 app.use("/api/push", requireAuth);
 
 // Step 1: the logged-in user's Sleeper account -> their leagues for the
@@ -491,6 +496,26 @@ app.get("/api/accuracy", (req, res) => {
     console.error("[accuracy] failed:", err);
     res.status(500).json({ error: "Couldn't compute accuracy — check the server logs." });
   }
+});
+
+/* ---------------- Game Day (v2.6) ---------------- */
+app.get("/api/gameday", async (req, res) => {
+  try {
+    res.json(await gameday.getGameDay(req.user.username, { week: req.query.week }));
+  } catch (err) {
+    console.error("[gameday] failed:", err);
+    res.status(502).json({ error: err.message || "Couldn't load Game Day." });
+  }
+});
+app.get("/api/gameday/settings", (req, res) => res.json(gameday.getSettings(req.user.username)));
+app.post("/api/gameday/settings", (req, res) => res.json(gameday.saveSettings(req.user.username, req.body || {})));
+
+/* ---------------- Data-source status (v2.6) ---------------- */
+// What the projections are actually coming from right now — replaces the
+// old fixed "Vegas + Tank01/Sleeper/ESPN (live)" text in the header.
+app.get("/api/status/sources", async (req, res) => {
+  const last = getLastSummary();
+  res.json({ projections: last, tank01: last ? tank01.weekStatus(last.season, last.week) : { configured: tank01.isConfigured(), callsThisMonth: tank01.callsThisMonth() } });
 });
 
 /* ---------------- History backfill (v2.5, owner only) ---------------- */

@@ -28,8 +28,10 @@ function normalizeTeam(abbr) {
 
 const CACHE_TTL_MS = 15 * 60 * 1000; // schedules don't change once the week is set, but flex/TNF flexes and weather delays do get reflected here over time
 
-export async function getWeekSchedule(season, week) {
-  const cacheKey = `espn-schedule:${season}-${week}`;
+export async function getWeekSchedule(season, week, { live = false } = {}) {
+  // live: Game Day polls this during games, so it uses a 60-second cache
+  // instead of the usual 15 minutes (ESPN's scoreboard is free, no key).
+  const cacheKey = `espn-schedule:${live ? "live:" : ""}${season}-${week}`;
   const cached = cacheGet(cacheKey);
   if (cached !== null) return cached;
 
@@ -76,12 +78,19 @@ export async function getWeekSchedule(season, week) {
         kickoffMillis: Date.parse(isoDate),
         kickoffLabel,
         opponent: normalizeTeam(opponent?.team?.abbreviation) || null,
+        // v2.6: game status for Game Day — "pre" | "in" | "post", plus ESPN's
+        // short text ("Q3 4:12", "Final", "Sun 1:00 PM") and the score.
+        state: event.status?.type?.state || competition?.status?.type?.state || null,
+        statusDetail: event.status?.type?.shortDetail || competition?.status?.type?.shortDetail || null,
+        score: comp.score != null ? Number(comp.score) : null,
+        opponentScore: opponent?.score != null ? Number(opponent.score) : null,
+        homeAway: comp.homeAway || null,
       };
     }
   }
 
   const data = { byTeam, teamsPlaying: [...teamsPlaying], weekNumber: json.week?.number ?? week };
-  cacheSet(cacheKey, data, CACHE_TTL_MS);
+  cacheSet(cacheKey, data, live ? 60 * 1000 : CACHE_TTL_MS);
   return data;
 }
 

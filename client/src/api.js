@@ -126,3 +126,14 @@ export function adminBackfillStatus() {
 export function adminStartBackfill() {
   return jsonPost(`/api/admin/backfill`, {});
 }
+
+/* ---------------- Game Day + source status (v2.6) ---------------- */
+export function getGameDay(week) {
+  return request(`/api/gameday${week ? `?week=${week}` : ""}`);
+}
+export function saveGameDaySettings(settings) {
+  return jsonPost(`/api/gameday/settings`, settings);
+}
+export function getSourceStatus() {
+  return request(`/api/status/sources`);
+}

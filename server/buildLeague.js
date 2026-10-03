@@ -285,6 +285,9 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       projSource,
       projFactor: projSource === "actual" ? null : projFactor ?? null,
       played: Boolean(played),
+      // v2.6: a player whose game has kicked off can't be moved in or out of a
+      // lineup any more, so he's out of every recommendation from then on.
+      started: kickoff != null && kickoff <= Date.now(),
       ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null,
       irEligible: meta?.injury_status === "IR" || meta?.injury_status === "PUP",
       note: meta?.injury_status && meta?.injury_body_part ? `${meta.injury_status} — ${meta.injury_body_part}` : undefined,
@@ -325,12 +328,18 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
         ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
       }
       const { proj, projSource, projFactor } = await resolveProjection(t.player_id);
-      return { name, pos, proj, projSource, projFactor: projFactor ?? null, ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null, trending: true, origin: "waiver" };
+      const faKickoff = kickoffFor(meta?.team).kickoff;
+      const faStarted = faKickoff != null && faKickoff <= Date.now();
+      return { name, pos, proj, projSource, projFactor: projFactor ?? null, kickoff: faKickoff, started: faStarted, ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null, trending: true, origin: "waiver" };
     })
   );
 
-  const lockedByIndex = starters.map((s) => (s.player?.played ? s.player : null));
-  const optimalPicks = solveOptimalLineup(startingSlots.map(slotLabel), [...rosterPool, ...trendingFreeAgents], lockedByIndex);
+  // v2.6: lock every starter whose game has kicked off (not only once Sleeper
+  // reports his points), and drop any bench player or free agent whose game
+  // has started from the candidate pool — neither can be swapped any more.
+  const lockedByIndex = starters.map((s) => (s.player && (s.player.played || s.player.started) ? s.player : null));
+  const candidatePool = [...rosterPool, ...trendingFreeAgents].filter((p) => !p.started);
+  const optimalPicks = solveOptimalLineup(startingSlots.map(slotLabel), candidatePool, lockedByIndex);
 
   // --- Lineup Advice: side-by-side current vs. optimal, per slot ---
   // solveOptimalLineup's greedy fill order finds the best-scoring SET of
@@ -386,7 +395,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
             proj: optimal.proj ?? null,
             projSource: optimal.projSource,
             projFactor: optimal.projFactor ?? null,
-            note: locked ? "Already played — locked to the actual result" : optimal.origin === "waiver" ? "Available on waivers — not currently on your roster" : undefined,
+            note: locked ? (lockedByIndex[idx]?.played ? "Already played — locked to the actual result" : "Game has started — locked") : optimal.origin === "waiver" ? "Available on waivers — not currently on your roster" : undefined,
           }
         : null,
       changed,

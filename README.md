@@ -473,6 +473,38 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### Tabs, Game Day, lineup lock-out, source status (v2.6)
+
+**Tabs:** League Management (leagues, lineup, waivers, trades, account),
+**Game Day**, and **Analytics** (the accuracy dashboard, lean factors and
+the owner's history backfill — moved off the dashboard).
+
+**Game Day** (`server/gameday.js`, `GET /api/gameday`): for this week,
+across every tracked league, your starters count *for* you and your
+matchup opponent's starters count *against* you, each weighted by the
+league's **importance** (dues or any relative number, set per league in
+Game Day → Settings, with an include toggle). Per player F = Σ for-weights,
+A = Σ against-weights, lean = F ÷ (F + A). One line per player, placed
+left (cheer for) to right (cheer against); "for" if F ≥ ratio × A,
+"against" if A ≥ ratio × F, else balanced — the ratio (default 2) is a
+setting. Optional **close-matchup weighting**: a league within the close
+margin (default 20%) counts fully, a blowout drops toward the minimum
+(default 0.25), using live points plus remaining projections. Live
+points/status refresh every 60 s while the tab is open (Sleeper matchups +
+ESPN scoreboard, no Tank01 calls). Filters by game slot and category.
+
+**Lineup lock-out:** once a player's game has kicked off he's out of every
+recommendation — starters stay locked in their slot; bench, IR/taxi and
+free agents whose game has started can't be suggested (suggested lineup,
+Player Rankings, the yellow "better lineup" check, swap alerts).
+Previously only starters with Sleeper-reported points were locked.
+
+**Header status:** the old fixed "Vegas + Tank01/Sleeper/ESPN (live)" text
+is replaced with what the projections actually came from (players per
+source), whether a Tank01 key is set, and when Tank01 data was last pulled
+(`GET /api/status/sources`). Tank01's week-wide projections parser also
+now accepts list-format responses.
+
 ### Lean calibration, accuracy tracking and history backfill (v2.5)
 
 **Lean calibration.** Players with Vegas props are used to measure how
@@ -777,6 +809,7 @@ server/
   actuals.js               Actual weekly stats from Sleeper for scoring accuracy (v2.5)
   accuracy.js              Accuracy metrics for the dashboard (v2.5)
   backfill.js              History backfill: free sources + Tank01 batches (v2.5)
+  gameday.js               Game Day cheer for/against across leagues (v2.6)
   sleeperProjections.js    Sleeper's weekly projections, scored per league — third source (v2.4)
   espnProjections.js       ESPN weekly fantasy projections — last fallback
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)

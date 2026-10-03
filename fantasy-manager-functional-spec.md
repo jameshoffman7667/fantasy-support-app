@@ -253,6 +253,18 @@ Each roster card has a drag handle (pointer events, edge auto-scroll while dragg
 
 ---
 
+### 8.2d Tabs, Game Day and lineup lock-out (v2.6)
+
+**Tabs:** League Management (existing screens), Game Day, Analytics (accuracy dashboard, leans, owner backfill).
+
+**Game Day:** per tracked league this week, the user's starters count for (+importance) and the matchup opponent's starters against. Per player F, A, lean = F/(F+A); one line per player positioned left (for) → middle (balanced) → right (against); bands by an editable ratio (default 2: for if F ≥ 2A, against if A ≥ 2F). Per-league importance + include toggle; optional close-matchup weighting (within close margin % → 1, else max(floor, margin/close-margin); defaults 20%, 0.25) from live points + remaining projections. Shows each league's live score and projected final, each player's game status, live points/projection, and per-league for/against chips. Polls every 60 s; no Tank01 calls.
+
+**Lineup lock-out:** a player whose game has kicked off is excluded from all recommendations; started starters stay locked ("Game has started — locked").
+
+**Header status:** real per-source projection counts and Tank01 data age instead of fixed text.
+
+---
+
 ### 8.3 Waiver Management
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
@@ -414,3 +426,6 @@ Collected here since they cut across multiple sections:
 35. **Accuracy tracking (v2.5):** all sources recorded every week (not just the one shown), frozen at kickoff, compared with Sleeper actual stats; dashboard visible to all users.
 36. **Own crosswalk table (v2.5):** kept (rather than relying on Tank01 alone) as the cache of all matches; Tank01's player list is the primary link source; the full ffb_ids table (all sites' IDs) is still loaded for future use and as a fallback.
 37. **History backfill (v2.5):** 2026-to-date + 2025 wk 9–18 first, 2025 wk 1–8 forty days later, month-end continuation until rejected (James is on the free Tank01 plan, no card).
+38. **Tabs (v2.6):** League Management / Game Day / Analytics.
+39. **Game Day weighting (v2.6):** ratio-based (lean = F/(F+A)) rather than additive, adjustable band ratio, optional close-matchup weighting, per-league importance (e.g. dues).
+40. **Lineup lock-out (v2.6):** kickoff time, not reported points, decides when a player can no longer be recommended.
