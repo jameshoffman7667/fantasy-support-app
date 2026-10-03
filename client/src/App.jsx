@@ -2041,14 +2041,232 @@ function GameDayScreen() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  PICK'EM (v2.7)                                                      */
+/* ------------------------------------------------------------------ */
+// Team colours [main, alternate] — the alternate is used when both teams' main colours look alike.
+const TEAM_COLORS = {
+  ARI: ["#97233F", "#FFB612"], ATL: ["#A71930", "#000000"], BAL: ["#241773", "#9E7C0C"], BUF: ["#00338D", "#C60C30"],
+  CAR: ["#0085CA", "#101820"], CHI: ["#0B162A", "#C83803"], CIN: ["#FB4F14", "#000000"], CLE: ["#311D00", "#FF3C00"],
+  DAL: ["#003594", "#869397"], DEN: ["#FB4F14", "#002244"], DET: ["#0076B6", "#B0B7BC"], GB: ["#203731", "#FFB612"],
+  HOU: ["#03202F", "#A71930"], IND: ["#002C5F", "#A2AAAD"], JAX: ["#006778", "#D7A22A"], KC: ["#E31837", "#FFB81C"],
+  LV: ["#000000", "#A5ACAF"], LAC: ["#0080C6", "#FFC20E"], LAR: ["#003594", "#FFA300"], MIA: ["#008E97", "#FC4C02"],
+  MIN: ["#4F2683", "#FFC62F"], NE: ["#002244", "#C60C30"], NO: ["#D3BC8D", "#101820"], NYG: ["#0B2265", "#A71930"],
+  NYJ: ["#125740", "#FFFFFF"], PHI: ["#004C54", "#A5ACAF"], PIT: ["#FFB612", "#101820"], SF: ["#AA0000", "#B3995D"],
+  SEA: ["#002244", "#69BE28"], TB: ["#D50A0A", "#34302B"], TEN: ["#0C2340", "#4B92DB"], WAS: ["#5A1414", "#FFB612"],
+};
+function hexDist(a, b) {
+  const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return Math.sqrt(x.reduce((s, v, i) => s + (v - y[i]) ** 2, 0));
+}
+function luminance(h) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+function barColors(away, home) {
+  const a = TEAM_COLORS[away] || ["#5E7570", "#8FA39E"];
+  const h = TEAM_COLORS[home] || ["#4A8FC2", "#8FA39E"];
+  // A near-black main colour disappears on the dark card, so use the alternate.
+  let ac = luminance(a[0]) < 0.08 ? a[1] : a[0];
+  let hc = luminance(h[0]) < 0.08 ? h[1] : h[0];
+  if (hexDist(ac, hc) < 90) hc = h[1]; // too similar — home switches to its alternate colour
+  if (hexDist(ac, hc) < 90) ac = a[1];
+  return { away: ac, home: hc };
+}
+const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+
+function RedDot({ title }) {
+  return <span title={title} aria-label={title} className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: C.major }} />;
+}
+
+function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct }) {
+  const colors = barColors(g.away, g.home);
+  const awayP = g.homeProb == null ? 0.5 : 1 - g.homeProb;
+  const textOn = (hex) => (luminance(hex) > 0.6 ? "#10171A" : "#FFFFFF");
+  const final = g.state === "post";
+  return (
+    <div
+      onClick={() => g.changed && onSeen(g.key)}
+      style={{ background: C.surface, border: `1px solid ${g.changed ? C.major : C.border}` }}
+      className="rounded-lg px-3.5 py-3 space-y-2"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {g.changed && <RedDot title="Recommendation changed" />}
+          <span style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-sm">{g.away} @ {g.home}</span>
+        </div>
+        <span style={{ color: g.state === "in" ? C.brand : C.textFaint }} className="text-[11px] shrink-0">
+          {final || g.state === "in" ? `${g.awayScore ?? ""}–${g.homeScore ?? ""} · ${g.statusDetail || ""}` : g.kickoffLabel}
+        </span>
+      </div>
+
+      <div>
+        <div className="flex h-6 rounded overflow-hidden text-[11px] font-semibold" role="img" aria-label={`Win chance: ${g.away} ${pct(awayP)}, ${g.home} ${pct(g.homeProb)}`}>
+          <div style={{ width: `${awayP * 100}%`, background: colors.away, color: textOn(colors.away) }} className="flex items-center pl-2 min-w-[2.5rem]">{g.away} {pct(awayP)}</div>
+          <div style={{ width: `${(1 - awayP) * 100}%`, background: colors.home, color: textOn(colors.home) }} className="flex items-center justify-end pr-2 min-w-[2.5rem]">{pct(g.homeProb)} {g.home}</div>
+        </div>
+        <div style={{ color: C.textFaint }} className="text-[10px] mt-0.5 flex justify-between">
+          <span>{g.source || "no line yet"}{g.homeSpread != null ? ` · ${g.home} ${g.homeSpread > 0 ? "+" : ""}${Math.round(g.homeSpread * 2) / 2}` : ""}</span>
+          <span>ESPN FPI: {g.fpiHomeProb != null ? `${g.home} ${pct(g.fpiHomeProb)}` : "—"}</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        {g.pick ? (
+          <span style={{ background: g.leverage ? C.minorBg : C.okBg, color: g.leverage ? C.minor : C.ok }} className="text-xs font-semibold rounded px-2 py-0.5">
+            Pick: {g.pick}{g.leverage ? " (leverage)" : ""}
+          </span>
+        ) : (
+          <span style={{ color: C.textFaint }} className="text-xs">No pick yet</span>
+        )}
+        {g.changed && g.prevPick && <span style={{ color: C.major }} className="text-[11px]">changed from {g.prevPick} — tap to dismiss</span>}
+      </div>
+      {g.reason && g.leverage && <div style={{ color: C.textMuted }} className="text-[11px]">{g.reason}</div>}
+
+      {g.underdog && (
+        <div>
+          <div className="flex justify-between text-[10px]" style={{ color: C.textMuted }}>
+            <span>Upset potential ({g.underdog})</span>
+            <span title={`odds ${g.upsetParts?.base} · line move ${g.upsetParts?.shift} · articles ${g.upsetParts?.gemini}`}>{g.upsetPotential}/100</span>
+          </div>
+          <div className="h-1.5 rounded mt-0.5" style={{ background: C.surfaceRaised }}>
+            <div className="h-1.5 rounded" style={{ width: `${g.upsetPotential}%`, background: g.upsetPotential >= 60 ? C.major : g.upsetPotential >= 35 ? C.minor : C.textFaint }} />
+          </div>
+          <div style={{ color: C.textFaint }} className="text-[10px] mt-0.5">
+            {Math.abs(g.dogShift) >= 0.005
+              ? `Line moved ${g.dogShift > 0 ? "toward" : "away from"} ${g.underdog} by ${Math.abs(Math.round(g.dogShift * 100))}% since ${g.openedAt ? new Date(g.openedAt).toLocaleDateString([], { weekday: "short" }) : "the first snapshot"}`
+              : "No line movement yet"}
+            {g.gemini ? ` · ${g.gemini.upsetMentions} article(s) picking the upset` : ""}
+          </div>
+        </div>
+      )}
+      {g.gemini?.note && (
+        <div style={{ color: C.textMuted }} className="text-[11px]">
+          {g.gemini.note}
+          {g.gemini.sources?.length > 0 && <span style={{ color: C.textFaint }}> — {g.gemini.sources.join(", ")}</span>}
+        </div>
+      )}
+      {leverageOn && !g.started && (
+        <label className="flex items-center gap-2 text-[10px]" style={{ color: C.textFaint }} onClick={(e) => e.stopPropagation()}>
+          Pool % on {g.home} (optional)
+          <input
+            type="number" min="0" max="100" defaultValue={publicPct ?? ""}
+            onBlur={(e) => onPublicPct(g.key, e.target.value)}
+            style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }}
+            className="w-16 rounded px-1.5 py-0.5 text-xs"
+          />
+        </label>
+      )}
+    </div>
+  );
+}
+
+function PickemScreen({ onChangedCount }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const load = useCallback(() => {
+    api.getPickem().then((d) => {
+      setData(d);
+      setError(null);
+      onChangedCount?.(d.changedCount);
+    }).catch((err) => setError(err.message));
+  }, [onChangedCount]);
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [load]);
+  const saveSettings = async (patch) => {
+    await api.savePickemSettings({ ...data.settings, ...patch });
+    load();
+  };
+  const seen = async (gameKey) => {
+    await api.markPickemSeen(data.season, data.week, gameKey);
+    load();
+  };
+  if (error && !data) return <div className="px-4 py-6"><ErrorScreen message={error} /></div>;
+  if (!data) return <BootstrapScreen />;
+  const s = data.settings;
+  const r = data.record;
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div style={{ color: C.textMuted }} className="text-xs flex items-center gap-2">
+          Week {data.week} · straight-up
+          {data.changedCount > 0 && (
+            <button onClick={() => seen(null)} className="flex items-center gap-1" style={{ color: C.major }}>
+              <RedDot title="Changed picks" /> {data.changedCount} changed — dismiss all
+            </button>
+          )}
+        </div>
+        <button onClick={() => setShowSettings((v) => !v)} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
+          <Settings2 size={13} /> {showSettings ? "Hide settings" : "Settings"}
+        </button>
+      </div>
+      {showSettings && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-2 text-xs" >
+          <label className="flex items-center gap-2" style={{ color: C.text }}>
+            <input type="checkbox" checked={s.leverage} onChange={(e) => saveSettings({ leverage: e.target.checked })} />
+            Weekly leverage picks (for the weekly prize)
+          </label>
+          <div className="grid grid-cols-2 gap-2" style={{ color: C.textMuted }}>
+            <label className="flex flex-col gap-0.5">How many upsets
+              <input type="number" min="0" max="8" defaultValue={s.leverageCount} onBlur={(e) => saveSettings({ leverageCount: e.target.value })} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="rounded px-2 py-1" />
+            </label>
+            <label className="flex flex-col gap-0.5">Min underdog win chance (%)
+              <input type="number" min="20" max="50" defaultValue={Math.round(s.minDogProb * 100)} onBlur={(e) => saveSettings({ minDogProb: Number(e.target.value) / 100 })} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="rounded px-2 py-1" />
+            </label>
+          </div>
+          <label className="flex items-center gap-2" style={{ color: C.text }}>
+            <input type="checkbox" checked={s.notify} onChange={(e) => saveSettings({ notify: e.target.checked })} />
+            Push alert when a recommendation changes before kickoff
+          </label>
+          <div style={{ color: C.textFaint }} className="text-[11px]">
+            Default picks are the betting favourite in every game (best for the season prize). Leverage swaps in up to {s.leverageCount} near-coin-flip underdogs the pool is likely to fade, to give you a shot at the weekly prize — at some cost to the season standings.
+          </div>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2">
+          <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Season record</div>
+          <div style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-sm font-semibold">{r.correct}/{r.games} <span style={{ color: C.textFaint }} className="text-[11px] font-normal">favourites {r.favoritesCorrect}/{r.games}</span></div>
+          <div style={{ color: C.textFaint }} className="text-[10px]">This week {r.weekCorrect}/{r.weekGames}</div>
+        </div>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2">
+          <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Tiebreaker</div>
+          {data.tiebreaker ? (
+            <>
+              <div style={{ color: C.text }} className="text-sm font-semibold">{data.tiebreaker.total} total pts</div>
+              <div style={{ color: C.textFaint }} className="text-[10px]">{data.tiebreaker.game} · Vegas over/under</div>
+            </>
+          ) : (
+            <div style={{ color: C.textFaint }} className="text-xs">No total posted yet</div>
+          )}
+        </div>
+      </div>
+      <div style={{ color: C.textFaint }} className="text-[10px] px-1">
+        {data.gemini.configured ? (data.gemini.at ? `Article scan (Gemini) ${new Date(data.gemini.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "Article scan pending") : "Article scan off — set GEMINI_API_KEY to add upset mentions and game notes"}
+      </div>
+      <div className="space-y-2.5">
+        {data.games.map((g) => (
+          <PickCard key={g.key} g={g} onSeen={seen} leverageOn={s.leverage} publicPct={s.publicPct?.[g.key]} onPublicPct={(k, v) => saveSettings({ publicPct: { [k]: v } })} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  TABS (v2.6)                                                         */
 /* ------------------------------------------------------------------ */
 const TABS = [
   { key: "leagues", label: "League Management", Icon: ListChecks },
   { key: "gameday", label: "Game Day", Icon: Trophy },
+  { key: "pickem", label: "Pick'em", Icon: CheckCircle2 },
   { key: "analytics", label: "Analytics", Icon: TrendingUp },
 ];
-function TabBar({ active, onSelect }) {
+function TabBar({ active, onSelect, dots = {} }) {
   return (
     <div className="flex" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }}>
       {TABS.map(({ key, label, Icon }) => (
@@ -2061,6 +2279,7 @@ function TabBar({ active, onSelect }) {
         >
           <Icon size={13} />
           {label}
+          {dots[key] ? <span className="inline-block w-2 h-2 rounded-full" style={{ background: C.major }} aria-label="Changed picks" /> : null}
         </button>
       ))}
     </div>
@@ -2135,6 +2354,8 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [syncedAt, setSyncedAt] = useState("just now");
   const [sourceStatus, setSourceStatus] = useState(null);
+  // v2.7: red dot on the Pick'em tab when a recommendation changed before kickoff.
+  const [pickemChanged, setPickemChanged] = useState(0);
   // v2.6: refresh the real source-status line whenever the "synced" time changes.
   useEffect(() => {
     api.getSourceStatus().then(setSourceStatus).catch(() => {});
@@ -2420,6 +2641,15 @@ export default function App() {
     }
   }, [liveLeagues, navigate]);
 
+  // v2.7: keep the Pick'em tab's red dot current even when the tab isn't open.
+  useEffect(() => {
+    if (!authUser || authUser.mustChangePassword) return undefined;
+    const check = () => api.getPickem().then((d) => setPickemChanged(d.changedCount || 0)).catch(() => {});
+    check();
+    const id = setInterval(check, 15 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [authUser]);
+
   // Breadcrumb trail: username > League Name > Sub tab name. Every level
   // but the current one is clickable.
   const crumbs = useMemo(() => {
@@ -2430,6 +2660,7 @@ export default function App() {
     if (view.screen === "account") return [root, { label: "Account" }];
     if (view.screen === "analytics") return [{ label: "Analytics" }];
     if (view.screen === "gameday") return [{ label: "Game Day" }];
+    if (view.screen === "pickem") return [{ label: "Pick'em" }];
     if (view.screen === "admin") return [root, { label: "Account", onClick: () => navigate({ screen: "account" }) }, { label: "Manage users" }];
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
     if (view.screen === "dashboard") return [{ label: root.label }];
@@ -2454,9 +2685,11 @@ export default function App() {
       />
       {authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange"].includes(view.screen) && (
         <TabBar
-          active={view.screen === "gameday" ? "gameday" : view.screen === "analytics" ? "analytics" : "leagues"}
+          active={["gameday", "analytics", "pickem"].includes(view.screen) ? view.screen : "leagues"}
+          dots={{ pickem: pickemChanged > 0 }}
           onSelect={(tab) => {
             if (tab === "gameday") navigate({ screen: "gameday" });
+            else if (tab === "pickem") navigate({ screen: "pickem" });
             else if (tab === "analytics") navigate({ screen: "analytics" });
             else navigate(liveLeagues.length ? { screen: "dashboard" } : { screen: "select" });
           }}
@@ -2480,6 +2713,7 @@ export default function App() {
       {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
       {view.screen === "analytics" && <AccuracyScreen authUser={authUser} />}
       {view.screen === "gameday" && <GameDayScreen />}
+      {view.screen === "pickem" && <PickemScreen onChangedCount={setPickemChanged} />}
       {view.screen === "account" && <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />}
       {view.screen === "admin" && authUser?.role === "owner" && <AdminScreen authUser={authUser} />}
       {view.screen === "select" && (

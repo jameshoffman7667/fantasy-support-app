@@ -265,6 +265,12 @@ Each roster card has a drag handle (pointer events, edge auto-scroll while dragg
 
 ---
 
+### 8.2e Pick'em (v2.7)
+
+Straight-up pick'em tab. Win probability: Tank01 no-vig moneylines (avg of books) → ESPN moneylines → spread (Normal, σ 13.5) → ESPN FPI; FPI shown as a second opinion. Card: team-coloured win bar, pick, upset-potential bar (dog win chance ≤30 + line move toward dog since first weekly snapshot ≤30 + Gemini upset mentions ≤40), Gemini note. Default pick = favourite; optional weekly leverage (N underdogs ≥ min win chance, ranked by dog win chance − estimated/entered pool share on the dog + upset potential/400). Recommendation changes before kickoff → red dot (card + tab) until tapped, plus push notification if enabled. Tiebreaker = Vegas total of the last game. Record vs always-favourite baseline. Snapshots hourly; Gemini daily; no extra Tank01 calls. Spread mode not built (no line-based pools yet).
+
+---
+
 ### 8.3 Waiver Management
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
@@ -429,3 +435,4 @@ Collected here since they cut across multiple sections:
 38. **Tabs (v2.6):** League Management / Game Day / Analytics.
 39. **Game Day weighting (v2.6):** ratio-based (lean = F/(F+A)) rather than additive, adjustable band ratio, optional close-matchup weighting, per-league importance (e.g. dues).
 40. **Lineup lock-out (v2.6):** kickoff time, not reported points, decides when a player can no longer be recommended.
+41. **Pick'em (v2.7):** market-driven straight-up picks; Gemini used only to count public upset picks and summarise news, not to choose picks; weekly-leverage underdogs optional; changes flagged and pushed.

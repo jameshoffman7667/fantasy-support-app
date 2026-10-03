@@ -208,6 +208,47 @@ export function parsePlayerProps(body) {
   return out;
 }
 
+/**
+ * v2.7: game lines from the same odds response (no extra call) — moneylines,
+ * spreads and totals from every sportsbook in it, averaged. Verified shape
+ * (2026-10-02): body.sportsBooks[].odds = { homeTeamML, awayTeamML,
+ * homeTeamSpread, totalOver, ... } with "even" for +100.
+ * Returns { home, away, homeML, awayML, homeSpread, total, books } or null.
+ */
+export function parseGameLines(body) {
+  const game = body && !Array.isArray(body) ? body : asArray(body)[0];
+  const books = Array.isArray(game?.sportsBooks) ? game.sportsBooks : [];
+  const mls = [];
+  const spreads = [];
+  const totals = [];
+  for (const b of books) {
+    const o = b?.odds || {};
+    const h = num(o.homeTeamML);
+    const a = num(o.awayTeamML);
+    if (h != null && a != null) mls.push([h, a]);
+    const sp = num(o.homeTeamSpread);
+    if (sp != null) spreads.push(sp);
+    const t = num(o.totalOver ?? o.totalUnder);
+    if (t != null) totals.push(t);
+  }
+  if (!mls.length && !spreads.length) return null;
+  const avg = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
+  // No-vig home win probability per book, then averaged across books.
+  const probs = mls.map(([h, a]) => {
+    const ph = impliedProb(h);
+    const pa = impliedProb(a);
+    return ph != null && pa != null ? ph / (ph + pa) : null;
+  }).filter((x) => x != null);
+  return {
+    home: normTeam(game?.homeTeam),
+    away: normTeam(game?.awayTeam),
+    homeWinProb: probs.length ? avg(probs) : null,
+    homeSpread: avg(spreads),
+    total: avg(totals),
+    books: books.length,
+  };
+}
+
 const STAT_MAP = {
   Passing: { passYds: "pass_yd", passTD: "pass_td", int: "pass_int", passInt: "pass_int" },
   Rushing: { rushYds: "rush_yd", rushTD: "rush_td" },
@@ -335,7 +376,7 @@ async function refresh(season, week, force) {
     if (!due) continue;
     try {
       const body = await tankFetch("getNFLBettingOdds", { gameID: g.gameID, playerProps: "true", impliedTotals: "true", itemFormat: "list" });
-      data.odds[g.gameID] = { fetchedAt: Date.now(), props: parsePlayerProps(body) };
+      data.odds[g.gameID] = { fetchedAt: Date.now(), props: parsePlayerProps(body), lines: parseGameLines(body) };
       changed = true;
       oddsCalls++;
       save(); // save per game so a mid-pass failure keeps what was fetched
@@ -450,6 +491,10 @@ export async function fetchHistoryProjections(season, week, currentSeason, budge
   const params = { week: String(week) };
   if (Number(season) !== Number(currentSeason)) params.archiveSeason = String(season);
   return parseProjections(await tankFetch("getNFLProjections", params, { budget }));
+}
+export async function fetchHistoryOddsFull(gameID, budget) {
+  const body = await tankFetch("getNFLBettingOdds", { gameID, playerProps: "true", impliedTotals: "true", itemFormat: "list" }, { budget });
+  return { props: parsePlayerProps(body), lines: parseGameLines(body) };
 }
 export async function fetchHistoryOdds(gameID, budget) {
   return parsePlayerProps(await tankFetch("getNFLBettingOdds", { gameID, playerProps: "true", impliedTotals: "true", itemFormat: "list" }, { budget }));

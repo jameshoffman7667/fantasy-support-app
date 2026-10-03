@@ -473,6 +473,39 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### Pick'em tab (v2.7)
+
+Straight-up pick'em recommendations (built for a CBS pool: no confidence
+points, weekly + season prizes, 40–50 entrants). Tab: **Pick'em**.
+
+- **Win probability per game:** Tank01 sportsbook moneylines (no-vig,
+  averaged across books — taken from the odds the app already pulls, no
+  extra Tank01 calls), else ESPN's listed moneylines, else the spread
+  (margin ~ Normal(−spread, 13.5)), else ESPN FPI. ESPN's FPI is always
+  shown as a second opinion (free).
+- **Card:** a win-percentage bar in the two teams' colours (alternate
+  colour when they clash or are near-black), the pick, spread/source, an
+  **upset potential** bar (0–100 = underdog's win chance up to 30 + line
+  movement toward the underdog since the week's first snapshot up to 30 +
+  Gemini article mentions up to 40), and Gemini's short game note.
+- **Picks:** the favourite in every game by default (season prize).
+  Optional **weekly leverage** (Settings): up to N near-coin-flip
+  underdogs (default 1–2, dog ≥ 40%) the pool is likely to fade, using an
+  estimate of the pool's pick % from the market or a % you type in.
+- **Changes:** if a recommendation changes before that game's kickoff, a
+  red dot shows on the card and on the Pick'em tab until tapped, and — if
+  push alerts are enabled — a notification is sent.
+- **Tiebreaker:** the Vegas over/under for the week's last game.
+- **Record:** your recommended picks vs "always the favourite", season and
+  week.
+- **Gemini (optional, `GEMINI_API_KEY`, `GEMINI_MODEL`):** one grounded
+  Google Search call a day (cached 20 h) reads public pick'em and
+  upset-pick articles and counts how many pick each underdog. Free tier:
+  Gemini 3.5 Flash-Lite, 5,000 grounded requests/month; Google may use
+  free-tier content to improve its products. The default model id
+  `gemini-3.5-flash-lite` couldn't be verified from the build sandbox —
+  check Google AI Studio and override `GEMINI_MODEL` if needed.
+
 ### Tabs, Game Day, lineup lock-out, source status (v2.6)
 
 **Tabs:** League Management (leagues, lineup, waivers, trades, account),
@@ -810,6 +843,8 @@ server/
   accuracy.js              Accuracy metrics for the dashboard (v2.5)
   backfill.js              History backfill: free sources + Tank01 batches (v2.5)
   gameday.js               Game Day cheer for/against across leagues (v2.6)
+  pickem.js                Pick'em board, recommendations, change tracking, record (v2.7)
+  gemini.js                Gemini grounded article scan for upset picks (v2.7)
   sleeperProjections.js    Sleeper's weekly projections, scored per league — third source (v2.4)
   espnProjections.js       ESPN weekly fantasy projections — last fallback
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)

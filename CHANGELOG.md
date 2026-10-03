@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,40 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.7 — Pick'em tab
+
+**Commit (short):** `v2.7: feat: Pick'em tab with upset tracking`
+
+**Commit (extended):**
+v2.7 adds a straight-up Pick'em tab. Each game's win probability comes
+from the sportsbook moneylines the app already pulls from Tank01, no-vig
+and averaged across books, falling back to ESPN's lines, the spread, then
+ESPN's FPI, which is also shown as a second opinion.
+
+Each card shows a win bar in the two teams' colours, the recommended
+pick, and an upset-potential bar that grows with the underdog's chance,
+line movement toward the underdog through the week, and how many public
+pick'em articles Gemini finds picking the upset, with a short game note.
+
+Picks default to the favourite for the season prize; an optional weekly
+leverage mode swaps in near-coin-flip underdogs the pool is likely to
+fade. A recommendation that changes before kickoff gets a red dot on the
+card and tab and a push alert. The tab also suggests the tiebreaker total
+and tracks the record against always picking favourites.
+
+**Details**
+- New `server/pickem.js` (tables `pickem_snapshots`, `pickem_recs`; per-user settings in `app_state`), `server/gemini.js`; routes `GET /api/pickem`, `POST /api/pickem/settings`, `POST /api/pickem/seen`; scheduler recomputes recommendations hourly and after each pre-kickoff refresh (push on change).
+- `tank01.js` now also keeps each game's sportsbook lines from the odds response it already fetches (`parseGameLines`); `schedule.js` returns per-game ESPN event ids, odds, status and scores.
+- Config: `GEMINI_API_KEY`, `GEMINI_MODEL` (compose files and `.env.example`s).
+
+**Known limitations / what was and wasn't tested**
+- Gemini wasn't reachable from the build sandbox: the default model id and live response were not verified (the parser accepts fenced or bare JSON; failures are logged and the tab works without it).
+- Pool pick % is estimated from the market unless typed in (CBS hides pool picks until lock). Upset-potential weights are a first cut, to be tuned.
+- Push on a changed pick uses the existing Web Push setup; the push path itself wasn't exercised in tests (no VAPID keys in the test environment).
+- Tested with mocked APIs: no-vig probabilities, source fallbacks, FPI, tiebreaker, Gemini parsing and daily caching, leverage picks, change detection and dismissal, line-movement upset growth; plus all earlier suites (44 server checks) and 41 browser checks including the Pick'em card, colours and red dots.
 
 ---
 

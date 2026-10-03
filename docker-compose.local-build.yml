@@ -26,6 +26,9 @@ services:
       - TANK01_API_KEY=${TANK01_API_KEY:-}
       - TANK01_MONTHLY_LIMIT=${TANK01_MONTHLY_LIMIT:-}
       - TANK01_RESERVE=${TANK01_RESERVE:-}
+      # v2.7 Pick'em article scan (optional): Google AI Studio key + model id.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-}
       - PORT=4000
       # Web Push (v2, pre-kickoff alerts) — optional; see docker-compose.yml.
       - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}

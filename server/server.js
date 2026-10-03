@@ -27,6 +27,7 @@ import { startScheduler } from "./scheduler.js";
 import { computeAccuracy } from "./accuracy.js";
 import * as backfill from "./backfill.js";
 import * as gameday from "./gameday.js";
+import * as pickem from "./pickem.js";
 import * as tank01 from "./tank01.js";
 import { getLastSummary } from "./projectionHub.js";
 import { simulateSeason } from "./simulate.js";
@@ -320,6 +321,7 @@ app.use("/api/season-odds", requireAuth);
 app.use("/api/rankings", requireAuth);
 app.use("/api/accuracy", requireAuth);
 app.use("/api/gameday", requireAuth);
+app.use("/api/pickem", requireAuth);
 app.use("/api/status", requireAuth);
 app.use("/api/push", requireAuth);
 
@@ -509,6 +511,22 @@ app.get("/api/gameday", async (req, res) => {
 });
 app.get("/api/gameday/settings", (req, res) => res.json(gameday.getSettings(req.user.username)));
 app.post("/api/gameday/settings", (req, res) => res.json(gameday.saveSettings(req.user.username, req.body || {})));
+
+/* ---------------- Pick'em (v2.7) ---------------- */
+app.get("/api/pickem", async (req, res) => {
+  try {
+    res.json(await pickem.getPickem(req.user.username));
+  } catch (err) {
+    console.error("[pickem] failed:", err);
+    res.status(502).json({ error: err.message || "Couldn't load Pick'em." });
+  }
+});
+app.post("/api/pickem/settings", (req, res) => res.json(pickem.saveSettings(req.user.username, req.body || {})));
+app.post("/api/pickem/seen", (req, res) => {
+  const { season, week, gameKey } = req.body || {};
+  pickem.markSeen(req.user.username, Number(season), Number(week), gameKey || null);
+  res.json({ ok: true });
+});
 
 /* ---------------- Data-source status (v2.6) ---------------- */
 // What the projections are actually coming from right now — replaces the

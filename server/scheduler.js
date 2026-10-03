@@ -6,6 +6,7 @@ import * as tank01 from "./tank01.js";
 import * as hub from "./projectionHub.js";
 import * as actuals from "./actuals.js";
 import * as backfill from "./backfill.js";
+import * as pickem from "./pickem.js";
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -162,6 +163,7 @@ async function preKickoffCheck() {
       }
       hub.clearCache(); // recompute (and re-record) every source with the fresh numbers
       await refreshAllUsers();
+      await pickem.updateAllUsers(); // final pre-kickoff recommendations (flags/pushes any change)
     }
   } catch (err) {
     console.warn(`[scheduler] Pre-kickoff check failed: ${err.message}`);
@@ -178,6 +180,8 @@ export function startScheduler() {
   // scheduled runs (batch 2 at +40 days; month-end continuation).
   setInterval(() => actuals.updateActuals().catch((err) => console.warn(`[scheduler] Actuals update failed: ${err.message}`)), REFRESH_INTERVAL_MS);
   setTimeout(() => actuals.updateActuals().catch(() => {}), 60 * 1000);
+  // v2.7: Pick'em recommendations hourly (red-dot flags + push on changes before kickoff).
+  setInterval(() => pickem.updateAllUsers().catch((err) => console.warn(`[scheduler] Pick'em update failed: ${err.message}`)), REFRESH_INTERVAL_MS);
   setInterval(() => backfill.scheduledCheck().catch((err) => console.warn(`[scheduler] Backfill check failed: ${err.message}`)), PREKICK_CHECK_MS);
 }
 

@@ -137,3 +137,14 @@ export function saveGameDaySettings(settings) {
 export function getSourceStatus() {
   return request(`/api/status/sources`);
 }
+
+/* ---------------- Pick'em (v2.7) ---------------- */
+export function getPickem() {
+  return request(`/api/pickem`);
+}
+export function savePickemSettings(settings) {
+  return jsonPost(`/api/pickem/settings`, settings);
+}
+export function markPickemSeen(season, week, gameKey) {
+  return jsonPost(`/api/pickem/seen`, { season, week, gameKey });
+}

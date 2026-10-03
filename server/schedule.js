@@ -60,6 +60,7 @@ export async function getWeekSchedule(season, week, { live = false } = {}) {
 
   const byTeam = {}; // normalized team abbr -> { kickoffISO, kickoffLabel, opponent }
   const teamsPlaying = new Set();
+  const games = []; // v2.7: one entry per game, for Pick'em
 
   for (const event of json.events || []) {
     const competition = event.competitions?.[0];
@@ -68,6 +69,39 @@ export async function getWeekSchedule(season, week, { live = false } = {}) {
     const kickoffLabel = formatKickoff(isoDate);
 
     const competitors = competition?.competitors || [];
+    // v2.7: per-game record for Pick'em — ESPN event id (for the free FPI
+    // predictor), home/away, status, score and ESPN's listed odds as a
+    // fallback when there's no Tank01 line. Odds fields read defensively.
+    {
+      const home = competitors.find((c) => c.homeAway === "home");
+      const away = competitors.find((c) => c.homeAway === "away");
+      const o = competition?.odds?.[0] || null;
+      const ml = (x) => (x?.moneyLine != null ? Number(x.moneyLine) : null);
+      if (home && away) {
+        games.push({
+          espnId: event.id || competition?.id || null,
+          home: normalizeTeam(home.team?.abbreviation),
+          away: normalizeTeam(away.team?.abbreviation),
+          homeName: home.team?.displayName || null,
+          awayName: away.team?.displayName || null,
+          kickoffMillis: Date.parse(isoDate),
+          kickoffLabel,
+          state: event.status?.type?.state || null,
+          statusDetail: event.status?.type?.shortDetail || null,
+          homeScore: home.score != null ? Number(home.score) : null,
+          awayScore: away.score != null ? Number(away.score) : null,
+          espnOdds: o
+            ? {
+                details: o.details || null,
+                homeSpread: o.spread != null ? Number(o.spread) : null,
+                total: o.overUnder != null ? Number(o.overUnder) : null,
+                homeML: ml(o.homeTeamOdds),
+                awayML: ml(o.awayTeamOdds),
+              }
+            : null,
+        });
+      }
+    }
     for (const comp of competitors) {
       const abbr = normalizeTeam(comp.team?.abbreviation);
       if (!abbr) continue;
@@ -89,7 +123,7 @@ export async function getWeekSchedule(season, week, { live = false } = {}) {
     }
   }
 
-  const data = { byTeam, teamsPlaying: [...teamsPlaying], weekNumber: json.week?.number ?? week };
+  const data = { byTeam, games, teamsPlaying: [...teamsPlaying], weekNumber: json.week?.number ?? week };
   cacheSet(cacheKey, data, live ? 60 * 1000 : CACHE_TTL_MS);
   return data;
 }
