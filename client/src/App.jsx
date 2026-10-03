@@ -28,6 +28,11 @@ import {
   KeyRound,
   UserPlus,
   Copy,
+  Wind,
+  CloudRain,
+  CloudSnow,
+  Cloud,
+  X,
 } from "lucide-react";
 import * as api from "./api.js";
 import { effectiveLineup, isZeroProjection, GROUP_LABEL, hasStarted } from "./lineup.js";
@@ -185,6 +190,341 @@ function SourceTag({ source, factor }) {
       {SOURCE_TAG[source] || source}
       {factor ? ` ×${factor}` : ""}
     </span>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  v2.8 PLAYER-CARD PIECES: headshots, logos, matchup, weather, stats */
+/* ------------------------------------------------------------------ */
+// Matchup tiers from the player's point of view: 0 = hardest (red) … 4 = easiest (dark green).
+const TIER_COLORS = ["#D6533B", "#E8833A", "#D9C021", "#9CC23A", "#2E9E4F"];
+const TIER_LABELS = ["Hardest", "Hard", "Middle", "Good", "Best"];
+const ordinal = (n) => {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+const SAMPLE_LABEL = { blended: "Blended (incl. last season)", current: "This season only", last4: "Last 4 games" };
+
+// What player cards need from the App: the matchup tables and the pop-ups.
+const CardCtx = React.createContext({ dvpRow: () => null, openDvp: () => {}, openWeather: () => {} });
+
+function initials(name) {
+  return String(name || "?")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase();
+}
+
+function Headshot({ player, size = 32 }) {
+  const [failed, setFailed] = useState(false);
+  const isDef = player?.pos === "DEF";
+  const src = !player?.id ? null : isDef ? api.teamLogoUrl(player.id) : api.playerImageUrl(player.id);
+  useEffect(() => setFailed(false), [src]);
+  if (!src || failed) {
+    return (
+      <div
+        style={{ width: size, height: size, background: C.surfaceRaised, color: C.textMuted, fontSize: Math.max(9, size * 0.34) }}
+        className="rounded-full flex items-center justify-center shrink-0 font-semibold"
+        aria-hidden="true"
+      >
+        {isDef ? player?.id : initials(player?.name)}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+      width={size}
+      height={size}
+      style={{ width: size, height: size, objectFit: isDef ? "contain" : "cover", background: C.surfaceRaised }}
+      className="rounded-full shrink-0"
+    />
+  );
+}
+
+function TeamLogo({ team, size = 20 }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [team]);
+  if (!team) return null;
+  if (failed) {
+    return (
+      <span style={{ width: size, height: size, fontSize: Math.max(8, size * 0.36), color: C.textMuted, background: C.surfaceRaised }} className="inline-flex items-center justify-center rounded shrink-0 font-semibold">
+        {team}
+      </span>
+    );
+  }
+  return <img src={api.teamLogoUrl(team)} alt={team} loading="lazy" onError={() => setFailed(true)} width={size} height={size} style={{ width: size, height: size, objectFit: "contain" }} className="shrink-0" />;
+}
+
+// v2.8: "[NYJ] @ [MIA]" — the player's team coloured by its offensive rank at
+// his position, the opponent by its defensive rank against that position.
+// Each team opens the games behind its own rank.
+const normTeam = (t) => ({ JAX: "JAC", WSH: "WAS", LA: "LAR" }[t] || t);
+function TeamPill({ team, row, side, pos, profile }) {
+  const ctx = React.useContext(CardCtx);
+  const color = row ? TIER_COLORS[row.tier] : C.textMuted;
+  const what = side === "off" ? `${team} ${pos}s score ${row?.value} pts/game — ${row ? ordinal(row.rank) : ""} best offense` : `${team} allows ${row?.value} pts/game to ${pos}s — ${row ? ordinal(row.rank) : ""} toughest defense`;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (row) ctx.openDvp({ profile, side, team, pos });
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      style={{ color, border: `1px solid ${color}88`, background: row ? `${color}22` : "transparent" }}
+      className="text-[10px] rounded px-1.5 py-0.5 font-semibold"
+      title={row ? `${what} (${TIER_LABELS[row.tier].toLowerCase()} for your player)` : team}
+      aria-label={row ? what : team}
+    >
+      {team}
+    </button>
+  );
+}
+function MatchupChip({ player, profile }) {
+  const ctx = React.useContext(CardCtx);
+  const m = player?.matchup;
+  if (!m?.opp) return null;
+  const own = normTeam(m.team || player.team);
+  const opp = normTeam(m.opp);
+  const offRow = ctx.dvpRow(profile, "off", player.pos, own);
+  const defRow = ctx.dvpRow(profile, "def", player.pos, opp);
+  return (
+    <span className="inline-flex items-center gap-1" data-matchup={`${own}${m.home ? " vs " : " @ "}${opp}`}>
+      <TeamPill team={own} row={offRow} side="off" pos={player.pos} profile={profile} />
+      <span style={{ color: C.textFaint }} className="text-[10px]">{m.home ? "vs" : "@"}</span>
+      <TeamPill team={opp} row={defRow} side="def" pos={player.pos} profile={profile} />
+    </span>
+  );
+}
+
+function weatherIcon(w) {
+  if (w.precipType === "snow") return CloudSnow;
+  if (w.precipType) return CloudRain;
+  if ((w.wind ?? 0) >= 12 || (w.gust ?? 0) >= 20) return Wind;
+  return Cloud;
+}
+function WeatherChip({ player }) {
+  const ctx = React.useContext(CardCtx);
+  const w = player?.weather;
+  // Domes get nothing; games with no forecast yet get nothing.
+  if (!w || w.indoor || w.temp == null) return null;
+  const Icon = weatherIcon(w);
+  const color = w.flag ? C.minor : C.textMuted;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        ctx.openWeather(w.key);
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      style={{ color, border: `1px solid ${color}66`, background: w.flag ? C.minorBg : "transparent" }}
+      className="text-[10px] rounded px-1.5 py-0.5 inline-flex items-center gap-1"
+      title={w.flag ? w.reasons.join("; ") : "Game-time forecast"}
+    >
+      <Icon size={11} />
+      {Math.round(w.temp)}° · {Math.round(w.wind ?? 0)} mph{w.precipProb >= 30 ? ` · ${w.precipProb}%` : ""}
+      {w.roofNote ? " · roof" : ""}
+    </button>
+  );
+}
+
+const STAT_LABEL = {
+  pass_yd: "pass yd", pass_td: "pass TD", pass_int: "INT", rush_att: "car", rush_yd: "rush yd", rush_td: "rush TD",
+  rec_tgt: "tgt", rec: "rec", rec_yd: "rec yd", rec_td: "rec TD", fgm: "FG", xpm: "XP", kick_pts: "kick pts",
+  sack: "sack", int: "INT", fum_rec: "fum rec", def_td: "TD", pts_allow: "pts allowed", yds_allow: "yds allowed",
+};
+function formatStatLine(stats) {
+  if (!stats) return "";
+  const whole = (k) => k.endsWith("_yd") || k === "yds_allow" || k === "pts_allow";
+  return Object.entries(stats)
+    .map(([k, v]) => `${whole(k) ? Math.round(v) : Math.round(v * 10) / 10} ${STAT_LABEL[k] || k}`)
+    .join(" · ");
+}
+function StatLine({ player }) {
+  if (!player?.projStats || player.projSource === "actual") return null;
+  const src = SOURCE_TAG[player.projSource] || player.projSource;
+  return (
+    <div style={{ color: C.textFaint }} className="text-[10px] mt-1 leading-snug">
+      Proj ({src}): {formatStatLine(player.projStats)}
+      {player.projSource === "E" ? " — ESPN only gives receptions and pass TDs" : ""}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div role="dialog" aria-modal="true" aria-label={title} onClick={onClose} style={{ background: "rgba(0,0,0,0.6)" }} className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-t-xl sm:rounded-xl p-4">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-base">{title}</div>
+          <button onClick={onClose} aria-label="Close" style={{ color: C.textMuted }} className="p-1">
+            <X size={18} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DvpDetailModal({ params, onClose }) {
+  const [d, setD] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    api.getDvpDetail(params).then(setD).catch((err) => setError(err.message));
+  }, [params]);
+  const isDef = params.side !== "off";
+  const title = isDef ? `${params.team} vs ${params.pos}` : `${params.team} offense — ${params.pos}`;
+  const th = "text-left font-medium px-1.5 py-1";
+  const td = "px-1.5 py-1";
+  return (
+    <Modal title={title} onClose={onClose}>
+      {error && <div style={{ color: C.major }} className="text-xs">{error}</div>}
+      {!d && !error && <Loader2 size={18} className="animate-spin" style={{ color: C.brand }} />}
+      {d && (
+        <>
+          <div className="flex items-center gap-3 mb-2">
+            <TeamLogo team={d.team} size={36} />
+            <div>
+              {d.row ? (
+                <div style={{ color: TIER_COLORS[d.row.tier] }} className="text-sm font-semibold">
+                  {ordinal(d.row.rank)} of {d.of} · {d.row.value} pts/game{d.adjusted ? " (adjusted)" : ""} · {TIER_LABELS[d.row.tier]} matchup
+                </div>
+              ) : (
+                <div style={{ color: C.textMuted }} className="text-sm">Not enough games yet.</div>
+              )}
+              <div style={{ color: C.textMuted }} className="text-[11px]">
+                {isDef ? `Fantasy points ${d.pos}s scored against ${d.team}` : `Fantasy points ${d.team}'s ${d.pos}s scored`} · league avg {d.leagueAvg} · {SAMPLE_LABEL[d.mode]}
+                {d.adjusted ? " · schedule adjusted" : ""} · {d.profileLabel}
+              </div>
+            </div>
+          </div>
+          <table className="w-full text-xs" style={{ color: C.text }}>
+            <thead style={{ color: C.textFaint }}>
+              <tr>
+                <th className={th}>Game</th>
+                <th className={th}>Opp</th>
+                <th className={th}>Pts</th>
+                <th className={th} title={isDef ? "That offense's average at this position" : "What that defense allows at this position"}>Opp avg</th>
+                {d.adjusted && <th className={th} title="Points after removing the opponent's strength">Adj</th>}
+                <th className={th}>Weight</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.games.map((g, i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${C.border}`, color: g.season < d.season ? C.textMuted : C.text }}>
+                  <td className={td}>{g.season < d.season ? `'${String(g.season).slice(2)} ` : ""}Wk {g.week}</td>
+                  <td className={td}>
+                    <span className="inline-flex items-center gap-1">
+                      <TeamLogo team={g.opp} size={16} />
+                      {g.opp}
+                    </span>
+                  </td>
+                  <td className={td}>{g.pts}</td>
+                  <td className={td}>{g.oppAvg ?? "—"}</td>
+                  {d.adjusted && <td className={td}>{g.adjPts}</td>}
+                  <td className={td}>{g.weight}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ color: C.textFaint }} className="text-[10px] mt-2">
+            {isDef
+              ? "Rank 1 = allows the fewest points (toughest). Adjusted: each game counts as points minus how far that offense usually runs above or below average."
+              : "Rank 1 = scores the most. Adjusted: each game counts as points minus how far that defense usually allows above or below average."}
+            {d.mode === "blended" ? " Last season's games share a combined weight that fades as this season goes on." : ""}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function WeatherModal({ gameKey, week, onClose }) {
+  const [g, setG] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    api
+      .getWeather(week)
+      .then((d) => {
+        const hit = (d.games || []).find((x) => x.key === gameKey);
+        if (hit) setG(hit);
+        else setError("No forecast for this game.");
+      })
+      .catch((err) => setError(err.message));
+  }, [gameKey, week]);
+  const roofLabel = { open: "Open air", dome: "Dome", retractable: "Retractable roof" };
+  const th = "text-left font-medium px-1 py-1";
+  const td = "px-1 py-1 whitespace-nowrap";
+  return (
+    <Modal title={`Weather · ${gameKey.replace("@", " @ ")}`} onClose={onClose}>
+      {error && <div style={{ color: C.major }} className="text-xs">{error}</div>}
+      {!g && !error && <Loader2 size={18} className="animate-spin" style={{ color: C.brand }} />}
+      {g && (
+        <>
+          <div style={{ color: C.textMuted }} className="text-xs mb-2">
+            {g.stadium || "Stadium unknown"} · {roofLabel[g.roof] || "Roof unknown"} · {g.kickoffLabel}
+          </div>
+          {g.note && <div style={{ color: C.textMuted }} className="text-xs mb-2">{g.note}</div>}
+          {g.temp != null && (
+            <div
+              style={{ background: g.flag ? C.minorBg : C.surfaceRaised, border: `1px solid ${g.flag ? `${C.minor}66` : C.border}`, color: g.flag ? C.minor : C.text }}
+              className="text-xs rounded-md px-3 py-2 mb-2"
+            >
+              {g.flag ? <div className="font-semibold">Flagged: {g.reasons.join("; ")}</div> : <div>Not flagged — {g.whyNot}</div>}
+              {g.roofNote && <div className="mt-0.5">{g.roofNote}{g.reasons?.length ? ` (would have been: ${g.reasons.join("; ")})` : ""}</div>}
+              <div style={{ color: C.textMuted }} className="mt-1">
+                At kickoff: {g.temp}° (feels {g.feelsLike}°) · {g.conditions || ""} · wind {g.wind} mph {g.windDir || ""}, gusts {g.gust} · precip {g.precipProb}%
+                {g.precipTotal ? ` · ${g.precipTotal}" over the game` : ""}
+                {g.snowTotal ? ` · snow ${g.snowTotal}"` : ""}
+              </div>
+            </div>
+          )}
+          {g.hourly?.length > 0 && (
+            <table className="w-full text-[11px]" style={{ color: C.text }}>
+              <thead style={{ color: C.textFaint }}>
+                <tr>
+                  <th className={th}>Time</th>
+                  <th className={th}>Temp</th>
+                  <th className={th}>Wind</th>
+                  <th className={th}>Precip</th>
+                  <th className={th}>Sky</th>
+                </tr>
+              </thead>
+              <tbody>
+                {g.hourly.map((h) => {
+                  const kick = h.time === Math.floor(g.kickoff / 3600e3) * 3600e3;
+                  return (
+                    <tr key={h.time} style={{ borderTop: `1px solid ${C.border}`, background: kick ? C.surfaceRaised : "transparent" }}>
+                      <td className={td}>{new Date(h.time).toLocaleTimeString([], { hour: "numeric" })}{kick ? " ▸" : ""}</td>
+                      <td className={td}>{Math.round(h.temp)}° <span style={{ color: C.textFaint }}>({Math.round(h.feelsLike)}°)</span></td>
+                      <td className={td}>{Math.round(h.wind)} <span style={{ color: C.textFaint }}>g{Math.round(h.gust)}</span> {h.windDir}</td>
+                      <td className={td}>{h.precipProb ?? 0}%{h.precip ? ` ${h.precip}"` : ""}{h.type ? ` ${h.type}` : ""}</td>
+                      <td className={td} style={{ color: C.textMuted }}>{h.conditions || ""}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          <div style={{ color: C.textFaint }} className="text-[10px] mt-2">Forecast: Open-Meteo, mph / °F / inches. Wind is measured 10 m up, not inside the bowl.</div>
+        </>
+      )}
+    </Modal>
   );
 }
 
@@ -562,7 +902,7 @@ const GROUP_STYLE = {
   fa: { color: C.ok },
 };
 
-function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, onHandleDown, onHandleKey, cardRef }) {
+function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, onHandleDown, onHandleKey, cardRef, profile }) {
   const p = entry.player;
   const zero = isZeroProjection(p);
   const g = GROUP_STYLE[entry.group];
@@ -598,6 +938,7 @@ function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, o
           {rank}
         </div>
       )}
+      <Headshot player={p} size={36} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5 min-w-0">
           <span style={{ color: C.text }} className="text-sm font-medium truncate">{p.name}</span>
@@ -619,6 +960,15 @@ function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, o
           )}
           <UsageBadge usage={p.usage} />
         </div>
+        {(p.matchup || p.weather) && (
+          <div className="flex items-center gap-1 flex-wrap mt-1">
+            <MatchupChip player={p} profile={profile} />
+            {p.matchup?.kickoffLabel && <span style={{ color: C.textFaint }} className="text-[10px]">{p.matchup.kickoffLabel}</span>}
+            <WeatherChip player={p} />
+          </div>
+        )}
+        {p.weather?.flag && !hasStarted(p) && <div style={{ color: C.minor }} className="text-[11px] mt-1">Weather: {p.weather.reasons.join("; ")}</div>}
+        <StatLine player={p} />
         {zero && <div style={{ color: C.major }} className="text-xs mt-1">Projected for 0 points</div>}
         {yellowNote && <div style={{ color: C.minor }} className="text-xs mt-1">{yellowNote}</div>}
         {needsMove && <div style={{ color: C.textMuted }} className="text-xs mt-1">On your {GROUP_LABEL[entry.group]} — needs a roster move before they can start.</div>}
@@ -809,6 +1159,15 @@ function PlayerRankings({ league, onSaveRanking, onBack }) {
           <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-lg font-semibold">{eff.bestTotal.toFixed(1)}</div>
         </div>
       </div>
+      {eff.weatherStarters?.length > 0 && (
+        <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2 mb-2 space-y-0.5">
+          {eff.weatherStarters.map((p) => (
+            <div key={p.id || p.name}>
+              Weather: {p.name} ({p.team}) — {p.weather.reasons.join("; ")}
+            </div>
+          ))}
+        </div>
+      )}
       {better && (
         <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2 mb-2">
           A better projected lineup exists: +{eff.betterDelta.toFixed(1)} pts over this ranking. The players involved are highlighted yellow.
@@ -822,6 +1181,7 @@ function PlayerRankings({ league, onSaveRanking, onBack }) {
         {eff.rosterOrder.map((entry, i) => (
           <RankingCard
             key={entry.key}
+            profile={league.scoringProfile}
             entry={entry}
             rank={i + 1}
             startsAt={eff.startsAt.get(entry.key)}
@@ -847,10 +1207,21 @@ function PlayerRankings({ league, onSaveRanking, onBack }) {
       ) : (
         <div className="space-y-1.5">
           {eff.freeAgents.map((entry) => (
-            <RankingCard key={entry.key} entry={entry} rank={null} startsAt={null} yellowNote={eff.yellow.get(entry.key)} />
+            <RankingCard key={entry.key} entry={entry} rank={null} startsAt={null} yellowNote={eff.yellow.get(entry.key)} profile={league.scoringProfile} />
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Matchup + weather chips for the compact lineup rows.
+function RowChips({ player, profile }) {
+  if (!player || (!player.matchup && !player.weather)) return null;
+  return (
+    <div className="flex items-center gap-1 flex-wrap mt-1">
+      <MatchupChip player={player} profile={profile} />
+      <WeatherChip player={player} />
     </div>
   );
 }
@@ -863,6 +1234,9 @@ function LineupTab({ league, onSaveRanking }) {
 
   const L = league.lineup;
   const { currentTotal, optimalTotal, delta, custom } = L;
+  // v2.8: full player objects by name, for headshots / matchup / weather on the rows.
+  const byName = new Map();
+  [...(league.starters || []).map((s) => s.player), ...(league.bench || []), ...(league.ir || []), ...(league.taxi || []), ...(league.freeAgents || [])].forEach((p) => p && !byName.has(p.name) && byName.set(p.name, p));
   const rows = L.rows || [];
   const suggestedLabel = custom ? "Your ranking" : "Optimal";
   const better = custom && L.betterDelta > 0.05;
@@ -889,6 +1263,15 @@ function LineupTab({ league, onSaveRanking }) {
       {L.zeroStarters.length > 0 && (
         <div style={{ background: C.majorBg, border: `1px solid ${C.major}55`, color: C.major }} className="text-xs rounded-md px-3 py-2 mb-2">
           Projected for 0 points: {L.zeroStarters.map((p) => p.name).join(", ")}
+        </div>
+      )}
+      {L.weatherStarters?.length > 0 && (
+        <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2 mb-2 space-y-0.5">
+          {L.weatherStarters.map((p) => (
+            <div key={p.id || p.name}>
+              Weather: {p.name} ({p.team}) — {p.weather.reasons.join("; ")}
+            </div>
+          ))}
         </div>
       )}
       {better && (
@@ -931,18 +1314,26 @@ function LineupTab({ league, onSaveRanking }) {
                   style={{ background: curZero ? C.majorBg : c.changed ? C.majorBg : "transparent", borderRight: `1px solid ${C.border}` }}
                   className="relative px-3 py-2.5 pb-4"
                 >
-                  <div style={{ color: curZero || c.changed ? C.major : C.text }} className="text-sm font-medium truncate">{c.current?.name ?? "(empty)"}</div>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {c.current && <Headshot player={byName.get(c.current.name) || c.current} size={22} />}
+                    <div style={{ color: curZero || c.changed ? C.major : C.text }} className="text-sm font-medium truncate">{c.current?.name ?? "(empty)"}</div>
+                  </div>
                   <div style={{ color: curZero ? C.major : C.textMuted }} className="text-xs mt-0.5">
                     {c.current?.proj != null ? c.current.proj.toFixed(1) : "—"}{curZero ? " · projected 0" : ""}
                   </div>
+                  <RowChips player={byName.get(c.current?.name)} profile={league.scoringProfile} />
                   <SourceTag source={c.current?.projSource} factor={c.current?.projFactor} />
                 </div>
                 <div style={{ background: optZero ? C.majorBg : c.changed ? C.okBg : "transparent" }} className="relative px-3 py-2.5 pb-4">
-                  <div style={{ color: optZero ? C.major : c.changed ? C.ok : C.text }} className="text-sm font-medium truncate">{c.optimal?.name ?? "(none available)"}</div>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {c.optimal && <Headshot player={byName.get(c.optimal.name) || c.optimal} size={22} />}
+                    <div style={{ color: optZero ? C.major : c.changed ? C.ok : C.text }} className="text-sm font-medium truncate">{c.optimal?.name ?? "(none available)"}</div>
+                  </div>
                   <div style={{ color: optZero ? C.major : C.textMuted }} className="text-xs mt-0.5">
                     {c.optimal?.proj != null ? c.optimal.proj.toFixed(1) : "—"}{optZero ? " · projected 0" : ""}
                   </div>
                   {c.optimal?.note && <div style={{ color: C.brand }} className="text-[10px] mt-0.5">{c.optimal.note}</div>}
+                  {c.changed && <RowChips player={byName.get(c.optimal?.name)} profile={league.scoringProfile} />}
                   <SourceTag source={c.optimal?.projSource} factor={c.optimal?.projFactor} />
                 </div>
               </div>
@@ -1690,6 +2081,233 @@ function BackfillPanel() {
   );
 }
 
+// v2.8: Analytics has two views — projection accuracy and matchup rankings.
+function AnalyticsScreen({ authUser, onDvpChange }) {
+  const [view, setView] = useState("matchups");
+  return (
+    <div>
+      <div className="flex gap-1.5 px-4 pt-3">
+        {[
+          ["matchups", "Matchup rankings"],
+          ["accuracy", "Projection accuracy"],
+        ].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setView(k)}
+            style={{ background: view === k ? C.brand : C.surfaceRaised, color: view === k ? C.text : C.textMuted }}
+            className="text-xs rounded-md px-3 py-1.5 font-medium"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {view === "accuracy" ? <AccuracyScreen authUser={authUser} /> : <MatchupRankings onDvpChange={onDvpChange} authUser={authUser} />}
+    </div>
+  );
+}
+
+function loadedSummary(loaded, season) {
+  if (!loaded?.length) return "No game data loaded yet — it loads in the background after start-up.";
+  const by = (s) => loaded.filter((w) => w.season === s);
+  const fmt = (s) => {
+    const full = by(s).filter((w) => !w.partial).map((w) => w.week);
+    const part = by(s).filter((w) => w.partial).map((w) => w.week);
+    if (!full.length && !part.length) return null;
+    const range = full.length ? `wk ${Math.min(...full)}–${Math.max(...full)}` : "";
+    return `${s} ${range}${part.length ? `${range ? " + " : ""}finished wk ${part.join(", ")} games` : ""}`;
+  };
+  return `Data: ${[fmt(season - 1), fmt(season)].filter(Boolean).join(" · ")}`;
+}
+
+function MatchupRankings({ onDvpChange, authUser }) {
+  const ctx = React.useContext(CardCtx);
+  const [side, setSide] = useState("def");
+  const [pos, setPos] = useState("WR");
+  const [profile, setProfile] = useState("");
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError(null);
+    api
+      .getDvp(profile ? { profile } : {})
+      .then((d) => {
+        if (cancelled) return;
+        setData(d);
+        if (!profile && d.profile) setProfile(d.profile);
+      })
+      .catch((err) => !cancelled && setError(err.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [profile, reload]);
+
+  // Sample and schedule-adjust are saved per user and also colour the player cards.
+  const saveSettings = async (patch) => {
+    setData((d) => (d ? { ...d, ...patch } : d));
+    try {
+      await api.saveDvpSettings(patch);
+    } catch (err) {
+      setError(err.message);
+    }
+    setReload((r) => r + 1);
+    onDvpChange?.();
+  };
+
+  const rows = (side === "def" ? data?.defense : data?.offense)?.[pos] || [];
+  const th = "text-left font-medium px-1.5 py-1";
+  const td = "px-1.5 py-1.5";
+  return (
+    <div className="px-4 py-3">
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Fantasy points per game by position, in your league's scoring, from Sleeper's game stats. Your sample and adjustment choices here also colour the matchups on player cards.
+      </div>
+      <div className="flex flex-wrap gap-2 items-end mb-2">
+        <Select label="Scoring" value={profile} onChange={setProfile} options={(data?.profiles || []).map((p) => ({ value: p.profile, label: p.label }))} />
+        <Select label="Sample" value={data?.mode || "blended"} onChange={(v) => saveSettings({ mode: v })} options={Object.entries(SAMPLE_LABEL).map(([value, label]) => ({ value, label }))} />
+        <Toggle checked={Boolean(data?.adjusted)} onChange={(v) => saveSettings({ adjusted: v })}>Schedule adjusted</Toggle>
+      </div>
+      <div className="flex gap-1.5 mb-2">
+        {[
+          ["def", "Defense vs position"],
+          ["off", "Offense by position"],
+        ].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setSide(k)}
+            style={{ border: `1px solid ${side === k ? C.brand : C.border}`, color: side === k ? C.brand : C.textMuted }}
+            className="text-[11px] rounded-md px-2.5 py-1"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-1 mb-2">
+        {["QB", "RB", "WR", "TE", "K", "DEF"].map((p) => (
+          <button
+            key={p}
+            onClick={() => setPos(p)}
+            style={{ background: pos === p ? C.surfaceRaised : "transparent", border: `1px solid ${pos === p ? C.textMuted : C.border}`, color: pos === p ? C.text : C.textMuted }}
+            className="text-[11px] rounded px-2 py-1 flex-1"
+          >
+            {p}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-1 mb-2" aria-label="Colour key">
+        {TIER_LABELS.map((l, i) => (
+          <span key={l} style={{ background: `${TIER_COLORS[i]}33`, color: TIER_COLORS[i] }} className="text-[10px] rounded px-1.5 py-0.5 flex-1 text-center">
+            {l}
+          </span>
+        ))}
+      </div>
+      <div style={{ color: C.textFaint }} className="text-[10px] px-1 pb-2">
+        {side === "def"
+          ? pos === "DEF"
+            ? "DEF: points opposing D/STs score against this offense. Rank 1 = fewest (toughest for your defense)."
+            : `Points ${pos}s score against this defense. Rank 1 = fewest allowed (toughest for your ${pos}).`
+          : pos === "DEF"
+          ? "DEF: points this team's own D/ST scores. Rank 1 = most."
+          : `Points this team's ${pos}s score. Rank 1 = most (best for your ${pos}).`}
+        {" "}Tap a team for the games behind it.
+      </div>
+      {error && <div style={{ color: C.major }} className="text-xs pb-2">{error}</div>}
+      {data?.note && <div style={{ color: C.textMuted }} className="text-xs pb-2">{data.note}</div>}
+      {!data && !error && <Loader2 size={18} className="animate-spin" style={{ color: C.brand }} />}
+      {rows.length > 0 && (
+        <table className="w-full text-xs" style={{ color: C.text }}>
+          <thead style={{ color: C.textFaint }}>
+            <tr>
+              <th className={th}>#</th>
+              <th className={th}>Team</th>
+              <th className={th}>Pts/g</th>
+              {data.adjusted && <th className={th}>Raw</th>}
+              <th className={th}>Games</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr
+                key={r.team}
+                onClick={() => ctx.openDvp({ profile: data.profile, side, team: r.team, pos, mode: data.mode, adjusted: data.adjusted ? "1" : "0" })}
+                style={{ borderTop: `1px solid ${C.border}`, background: `${TIER_COLORS[r.tier]}1c`, cursor: "pointer" }}
+              >
+                <td className={td} style={{ color: TIER_COLORS[r.tier], fontWeight: 600 }}>{r.rank}</td>
+                <td className={td}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <TeamLogo team={r.team} size={18} />
+                    {r.team}
+                  </span>
+                </td>
+                <td className={td} style={{ fontVariantNumeric: "tabular-nums" }}>{r.value}</td>
+                {data.adjusted && <td className={td} style={{ color: C.textMuted }}>{r.raw}</td>}
+                <td className={td} style={{ color: C.textMuted }}>{r.games}{r.weight !== r.games ? ` (wt ${r.weight})` : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {data && <div style={{ color: C.textFaint }} className="text-[10px] px-1 pt-2">{loadedSummary(data.loaded, data.season)}</div>}
+      {authUser?.role === "owner" && <WeatherSettingsPanel />}
+    </div>
+  );
+}
+
+// Owner-only: the app-wide thresholds for flagging weather on the lineup page.
+function WeatherSettingsPanel() {
+  const [s, setS] = useState(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    api.getWeatherSettings().then(setS).catch(() => {});
+  }, []);
+  if (!s) return null;
+  const field = (k, label, step = 1) => (
+    <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide" style={{ color: C.textFaint }}>
+      {label}
+      <input
+        type="number"
+        step={step}
+        value={s[k]}
+        onChange={(e) => {
+          setSaved(false);
+          setS({ ...s, [k]: e.target.value });
+        }}
+        style={{ background: C.surfaceRaised, border: `1px solid ${C.border}`, color: C.text }}
+        className="w-20 text-xs rounded-md px-2 py-1 normal-case"
+      />
+    </label>
+  );
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg px-3.5 py-3 mt-4">
+      <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm mb-1 flex items-center gap-1.5">
+        <Wind size={14} style={{ color: C.brand }} /> Weather flags (all users)
+      </div>
+      <div style={{ color: C.textMuted }} className="text-[11px] mb-2">Outdoor games over the kickoff hour and the 3 after it. A flag marks the starter "minor" on the lineup page.</div>
+      <div className="flex flex-wrap gap-2 mb-2">
+        {field("windMph", "Wind mph")}
+        {field("gustMph", "Gust mph")}
+        {field("precipProbPct", "Rain chance %")}
+        {field("minPrecipIn", 'Min in/hr', 0.01)}
+        {field("heavyPrecipIn", 'Heavy in/hr', 0.01)}
+        {field("snowIn", 'Snow in', 0.05)}
+      </div>
+      <div className="flex items-center gap-2">
+        <Toggle checked={s.enabled !== false} onChange={(v) => setS({ ...s, enabled: v })}>Flags on</Toggle>
+        <button
+          onClick={() => api.saveWeatherSettings(s).then((n) => { setS(n); setSaved(true); })}
+          style={{ background: C.brand, color: C.text }}
+          className="text-xs rounded-md px-3 py-1.5"
+        >
+          Save
+        </button>
+        {saved && <span style={{ color: C.ok }} className="text-[11px]">Saved — applies on the next refresh</span>}
+      </div>
+    </div>
+  );
+}
+
 function AccuracyScreen({ authUser }) {
   const thisSeason = new Date().getFullYear();
   const [f, setF] = useState({ season: String(thisSeason), profile: "", pos: "ALL", weekFrom: "1", weekTo: "18", sameOnly: false, adjusted: false });
@@ -1939,6 +2557,7 @@ function CheerRow({ p, ratio }) {
         </div>
       </div>
       <div className="flex items-center gap-2 flex-wrap mt-1 px-0.5">
+        <Headshot player={p} size={20} />
         <span style={{ color: C.textFaint }} className="text-[10px]">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.opponent ? ` vs ${p.opponent}` : ""}</span>
         <span style={{ color: live ? C.brand : C.textFaint }} className="text-[10px]">{p.statusDetail || p.kickoffLabel || ""}</span>
         <span style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-[11px] font-medium">
@@ -2093,7 +2712,9 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct }) {
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           {g.changed && <RedDot title="Recommendation changed" />}
+          <TeamLogo team={g.away} size={22} />
           <span style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-sm">{g.away} @ {g.home}</span>
+          <TeamLogo team={g.home} size={22} />
         </div>
         <span style={{ color: g.state === "in" ? C.brand : C.textFaint }} className="text-[11px] shrink-0">
           {final || g.state === "in" ? `${g.awayScore ?? ""}–${g.homeScore ?? ""} · ${g.statusDetail || ""}` : g.kickoffLabel}
@@ -2356,6 +2977,10 @@ export default function App() {
   const [sourceStatus, setSourceStatus] = useState(null);
   // v2.7: red dot on the Pick'em tab when a recommendation changed before kickoff.
   const [pickemChanged, setPickemChanged] = useState(0);
+  // v2.8: matchup-difficulty tables per scoring profile (colour the cards) and the card pop-ups.
+  const [dvpTables, setDvpTables] = useState({});
+  const [dvpVersion, setDvpVersion] = useState(0);
+  const [modal, setModal] = useState(null);
   // v2.6: refresh the real source-status line whenever the "synced" time changes.
   useEffect(() => {
     api.getSourceStatus().then(setSourceStatus).catch(() => {});
@@ -2650,6 +3275,30 @@ export default function App() {
     return () => clearInterval(id);
   }, [authUser]);
 
+  // v2.8: fetch the matchup table for each scoring profile in use; re-fetch
+  // when the Analytics sample/adjust settings change.
+  const profileKeys = useMemo(() => [...new Set(liveLeagues.map((l) => l.scoringProfile).filter(Boolean))].sort(), [liveLeagues]);
+  const profileSig = JSON.stringify(profileKeys); // profile keys contain "|", so no string joining
+  useEffect(() => {
+    if (!authUser || authUser.mustChangePassword) return;
+    for (const p of JSON.parse(profileSig)) {
+      api.getDvp({ profile: p }).then((t) => setDvpTables((prev) => ({ ...prev, [p]: t }))).catch(() => {});
+    }
+  }, [profileSig, dvpVersion, authUser]);
+  const cardCtx = useMemo(
+    () => ({
+      dvpRow: (profile, side, pos, team) => {
+        const t = dvpTables[profile];
+        if (!t || t.profile !== profile) return null;
+        return (side === "off" ? t.offense : t.defense)?.[pos]?.find((r) => r.team === team) || null;
+      },
+      openDvp: (params) => setModal({ type: "dvp", params }),
+      openWeather: (key) => setModal({ type: "weather", key, week }),
+    }),
+    [dvpTables, week]
+  );
+  const closeModal = useCallback(() => setModal(null), []);
+
   // Breadcrumb trail: username > League Name > Sub tab name. Every level
   // but the current one is clickable.
   const crumbs = useMemo(() => {
@@ -2673,7 +3322,10 @@ export default function App() {
   const showWeek = showRefresh && week != null;
 
   return (
+    <CardCtx.Provider value={cardCtx}>
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="max-w-lg mx-auto">
+      {modal?.type === "dvp" && <DvpDetailModal params={modal.params} onClose={closeModal} />}
+      {modal?.type === "weather" && <WeatherModal gameKey={modal.key} week={modal.week} onClose={closeModal} />}
       <TopBar
         crumbs={crumbs}
         onRefresh={showRefresh ? handleRefresh : undefined}
@@ -2711,7 +3363,7 @@ export default function App() {
         />
       )}
       {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
-      {view.screen === "analytics" && <AccuracyScreen authUser={authUser} />}
+      {view.screen === "analytics" && <AnalyticsScreen authUser={authUser} onDvpChange={() => setDvpVersion((v) => v + 1)} />}
       {view.screen === "gameday" && <GameDayScreen />}
       {view.screen === "pickem" && <PickemScreen onChangedCount={setPickemChanged} />}
       {view.screen === "account" && <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />}
@@ -2728,5 +3380,6 @@ export default function App() {
         return <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} />;
       })()}
     </div>
+    </CardCtx.Provider>
   );
 }

@@ -271,6 +271,25 @@ Straight-up pick'em tab. Win probability: Tank01 no-vig moneylines (avg of books
 
 ---
 
+### 8.2f Matchups, weather, headshots, stat lines (v2.8)
+- **Player cards** (Player Rankings; compact on Lineup rows) show:
+  - a headshot (Sleeper → ESPN → initials; logo for DEF);
+  - the matchup as `[TEAM] @/vs [OPP]`. TEAM is coloured by its offensive rank at the player's position, OPP by its defensive rank against that position. Tapping either opens that team's sample;
+  - kickoff time;
+  - a weather chip for outdoor games (tap for the hourly pop-up);
+  - the projected stat line from the projection's own source (ESPN: rec and pass TD only).
+- **Weather** (Open-Meteo, kickoff hour + 3):
+  - Flag when wind ≥ 15 mph or gusts ≥ 25, rain likely (≥ 60% and ≥ 0.02"/hr) or heavy (≥ 0.1"/hr), or snow ≥ 0.1". The owner can edit these app-wide.
+  - A flagged, not-yet-started starter makes the Lineup tab **minor** and shows the reason.
+  - Domes: none. Retractable roofs: forecast plus "roof may be closed", never flagged. Neutral site: none.
+- **Matchup difficulty**:
+  - Built from Sleeper weekly game stats (team + opponent per row), scored per league scoring profile.
+  - Loaded: last season once; this season's finished weeks, with corrections for ~9 days; the current week's finished games hourly.
+  - Samples: Blended (last season's games share a combined weight of 3 games, fading to 0 between this season's games 4 and 14), This season, Last 4 games.
+  - Optional schedule adjustment: additive, SRS-style, iterated jointly with offense ratings.
+  - Ranks 1–32 in 5 colour tiers of ~6–7 teams, from the player's point of view (red → dark green).
+- **Analytics → Matchup rankings**: defense-vs-position and offense-by-position tables with the sample and adjust controls (saved per user; they drive the card colours). Tapping a team opens its games, opponents, points, opponent average, adjusted points and weights.
+
 ### 8.3 Waiver Management
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
@@ -436,3 +455,6 @@ Collected here since they cut across multiple sections:
 39. **Game Day weighting (v2.6):** ratio-based (lean = F/(F+A)) rather than additive, adjustable band ratio, optional close-matchup weighting, per-league importance (e.g. dues).
 40. **Lineup lock-out (v2.6):** kickoff time, not reported points, decides when a player can no longer be recommended.
 41. **Pick'em (v2.7):** market-driven straight-up picks; Gemini used only to count public upset picks and summarise news, not to choose picks; weekly-leverage underdogs optional; changes flagged and pushed.
+42. **Matchup difficulty (v2.8):** computed in-app from Sleeper game stats rather than bought; blended with last season (≈3 games, fading), optional schedule adjustment, 5 colour tiers.
+43. **Matchup display (v2.8):** cards show `[team] @/vs [opp]`, the team coloured by offensive rank and the opponent by defensive rank (kept separate rather than one combined rank), per James.
+44. **Weather (v2.8):** Open-Meteo, outdoor only, owner-editable thresholds; a flag is a minor heads-up, not a swap recommendation; retractable roofs never flagged.

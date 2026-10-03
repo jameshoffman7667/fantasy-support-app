@@ -253,6 +253,10 @@ export function effectiveLineup(league, orderKeysOverride) {
     status = delta === 0 ? "ok" : delta < 5 ? "minor" : "major";
   }
   if (zeroStarters.length > 0) status = "major";
+  // v2.8: a starter whose outdoor game is forecast for significant wind,
+  // rain or snow is a "minor" heads-up (not a swap recommendation).
+  const weatherStarters = (league.starters || []).map((s) => s.player).filter((p) => p?.weather?.flag && !hasStarted(p));
+  if (weatherStarters.length > 0 && status === "ok") status = "minor";
 
   return {
     custom,
@@ -271,5 +275,6 @@ export function effectiveLineup(league, orderKeysOverride) {
     yellow,
     freeAgents: defaultOrder(freeAgents),
     zeroStarters,
+    weatherStarters,
   };
 }

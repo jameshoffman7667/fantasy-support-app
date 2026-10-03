@@ -5,6 +5,8 @@ import * as hub from "./projectionHub.js"; // v2.5: all projection sources, lean
 import { lookupBySleeperId } from "./playerIdMap.js";
 import { buildFpIndex, lookupFpMulti } from "./matching.js";
 import { checkAndRecordInjury, clearInjurySeen, getInjurySeenForLeague } from "./db.js";
+import * as weather from "./weather.js"; // v2.8
+import * as store from "./projectionStore.js";
 import { getSnapShareForWeek, getUsageStatsForWeek, lookupUsage } from "./nflverseUsage.js";
 
 // Slot labels as they appear AFTER slotLabel() (SUPER_FLEX -> "SFLX"). Before
@@ -163,6 +165,12 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     getUsageStatsForWeek(season, usageWeek),
   ]);
 
+  // v2.8: game-day forecasts for outdoor stadiums (Open-Meteo, keyless).
+  const weekWeather = await weather.getWeekWeather(season, week, weekSchedule).catch((err) => {
+    console.warn(`[buildLeague] Weather unavailable: ${err.message}`);
+    return null;
+  });
+
   const scoring = fpScoringParam(league.scoring_settings);
   // v2.5: projectionHub works out every source (Vegas props → Tank01 →
   // Sleeper → ESPN) for every player, records them for accuracy tracking,
@@ -259,7 +267,12 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
     }
     const { kickoff, kickoffLabel, onBye } = kickoffFor(meta?.team);
-    let { proj, projSource, projFactor } = await resolveProjection(id);
+    let { proj, projSource, projFactor, projStats } = await resolveProjection(id);
+    // v2.8: this week's matchup and forecast, for the player card.
+    const nt = meta?.team ? schedule.normalizeTeam(meta.team) : null;
+    const g = nt && weekSchedule ? weekSchedule.byTeam[nt] : null;
+    const matchup = g ? { team: nt, opp: g.opponent, home: g.homeAway === "home", kickoff: g.kickoffMillis, kickoffLabel: g.kickoffLabel } : null;
+    const wx = nt && weekWeather ? weekWeather.byTeam[nt] || null : null;
 
     // "Once players have played, update their projection to their actual
     // score." Two signals required together, not either alone: a
@@ -275,9 +288,13 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     }
 
     return {
+      id: String(id),
       name,
       pos,
       team: meta?.team || "FA",
+      matchup,
+      weather: wx,
+      projStats: projSource === "actual" ? null : projStats || null,
       status: onBye && (!meta?.injury_status || meta.injury_status === "Healthy") ? "Bye" : mapPlayerStatus(meta),
       kickoff,
       kickoffLabel,
@@ -581,6 +598,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     teamName,
     week,
     scoring: scoringLabel(league.scoring_settings),
+    scoringProfile: store.profileOf(league.scoring_settings).key, // v2.8: which matchup-difficulty table to colour with
     superflex,
     lockLabel: weekSchedule ? `Week ${week} — live kickoff times from ESPN` : "Live from Sleeper",
     dataSource: "live",

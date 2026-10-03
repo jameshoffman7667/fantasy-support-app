@@ -473,6 +473,74 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### Matchups, weather, headshots and stat lines (v2.8)
+
+**Player cards** (Player Rankings, and the compact Lineup rows) now show:
+
+- **Headshot**: Sleeper's CDN by Sleeper ID, else ESPN's by the ESPN ID in
+  the crosswalk, else the player's initials. Team defenses show the logo.
+  Images go through the server (`/api/img/player/:id`, `/api/img/team/:abbr`)
+  and are cached on disk under `DATA_DIR/img` (30 days; misses are retried
+  after a day).
+- **Matchup**: `[NYJ] @ [MIA]` (`vs` at home), with kickoff time. The
+  player's team is coloured by its **offensive** rank at his position, and
+  the opponent by its **defensive** rank against that position. Tap either
+  team to see the games behind its rank.
+- **Weather** (outdoor stadiums only): temperature, wind and rain chance at
+  kickoff. Tap it for the hour-by-hour forecast around kickoff (temp and
+  feels-like, wind and gusts and direction, precipitation chance, amount
+  and type), the stadium and roof type, and why the game was or wasn't
+  flagged.
+- **Projected stat line** from whichever source produced the projection:
+  Vegas props, Tank01 or Sleeper give a full line; ESPN gives receptions
+  and pass TDs only.
+
+**Weather flags.** Forecasts come from Open-Meteo (free, no key) for the
+kickoff hour and the 3 hours after it. A game is flagged when sustained
+wind ≥ 15 mph or gusts ≥ 25, rain is likely (≥ 60% and ≥ 0.02"/hr), heavy
+(≥ 0.1"/hr) or snow totals ≥ 0.1". A flagged starter makes the Lineup tab
+**minor** (yellow) and the reason is shown. Domes get no forecast.
+Retractable roofs (ARI, ATL, DAL, HOU, IND) show the forecast with "roof
+may be closed" and are never flagged. Neutral-site games get no forecast.
+The owner can change the thresholds under Analytics → Matchup rankings.
+The stadium table includes Buffalo's new Highmark Stadium.
+
+**Matchup difficulty** is built in-app from Sleeper's weekly game stats
+(`api.sleeper.com/stats/nfl/{season}/{week}`). Each row carries the
+player's team and opponent, so fantasy points per game can be totalled
+by offense × defense × position in each league's own scoring.
+
+- **Positions:** QB/RB/WR/TE/K. For DEF, the defense column ranks
+  offenses by the points opposing D/STs score against them.
+- **Loading:** last season (weeks 1–18) is loaded once. This season's
+  finished weeks are loaded, then re-pulled daily for about 9 days to pick
+  up stat corrections. The current week's finished games are refreshed
+  hourly.
+- **Samples:**
+  - **Blended** (default): this season plus last season. Last season's
+    games together count as 3 games until a team has 4 games this season,
+    then fade to zero by game 14.
+  - **This season only.**
+  - **Last 4 games.**
+- **Schedule adjusted** (SRS-style, additive, iterated): a defense's figure
+  becomes the average of (points allowed − how far that offense usually
+  runs above or below league average at the position), solved together
+  with the offensive ratings. A blowout by an offense that does that to
+  everyone counts less, and vice versa.
+- **Five colour tiers**, about 6–7 teams each, from the player's point of
+  view: red, orange, yellow, yellow-green, dark green. Defensive rank 1 =
+  allows the fewest points (red). Offensive rank 1 = scores the most
+  (dark green).
+- **Analytics → Matchup rankings** shows the defense and offense tables by
+  position with the sample selector and the Schedule adjusted toggle. Tap a
+  team for its games, opponents, points, opponent average and adjusted
+  points. These choices are saved per user and also colour the cards.
+
+**Unverified from the build sandbox:** the sandbox can't reach Open-Meteo
+or the Sleeper/ESPN image CDNs, so those requests follow the documented or
+commonly used URL patterns and fail soft (no forecast, initials).
+Sleeper's stats feed was checked live (2026 weeks 1–3, 2025 week 10).
+
 ### Pick'em tab (v2.7)
 
 Straight-up pick'em recommendations (built for a CBS pool: no confidence
@@ -845,6 +913,9 @@ server/
   gameday.js               Game Day cheer for/against across leagues (v2.6)
   pickem.js                Pick'em board, recommendations, change tracking, record (v2.7)
   gemini.js                Gemini grounded article scan for upset picks (v2.7)
+  dvp.js                   Matchup difficulty: Sleeper game stats, defense/offense rankings by position (v2.8)
+  weather.js               Stadium table + Open-Meteo forecasts + weather flags (v2.8)
+  images.js                Cached headshot/logo proxy (v2.8)
   sleeperProjections.js    Sleeper's weekly projections, scored per league — third source (v2.4)
   espnProjections.js       ESPN weekly fantasy projections — last fallback
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)

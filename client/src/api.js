@@ -148,3 +148,26 @@ export function savePickemSettings(settings) {
 export function markPickemSeen(season, week, gameKey) {
   return jsonPost(`/api/pickem/seen`, { season, week, gameKey });
 }
+
+/* ---------------- Matchups, weather, images (v2.8) ---------------- */
+export function getDvp(params = {}) {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ""));
+  return request(`/api/dvp${q.toString() ? `?${q}` : ""}`);
+}
+export function getDvpDetail(params) {
+  return request(`/api/dvp/detail?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ""))}`);
+}
+export function saveDvpSettings(settings) {
+  return jsonPost(`/api/dvp/settings`, settings);
+}
+export function getWeather(week) {
+  return request(`/api/weather${week ? `?week=${week}` : ""}`);
+}
+export function getWeatherSettings() {
+  return request(`/api/weather/settings`);
+}
+export function saveWeatherSettings(settings) {
+  return jsonPost(`/api/weather/settings`, settings);
+}
+export const playerImageUrl = (id) => `/api/img/player/${encodeURIComponent(id)}`;
+export const teamLogoUrl = (team) => `/api/img/team/${encodeURIComponent(team)}`;

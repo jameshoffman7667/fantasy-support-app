@@ -90,6 +90,11 @@ export async function getWeekSchedule(season, week, { live = false } = {}) {
           statusDetail: event.status?.type?.shortDetail || null,
           homeScore: home.score != null ? Number(home.score) : null,
           awayScore: away.score != null ? Number(away.score) : null,
+          // v2.8: for weather — neutral-site games (London, etc.) aren't at
+          // the home team's stadium; ESPN's venue indoor flag when present.
+          neutralSite: Boolean(competition?.neutralSite),
+          venue: competition?.venue?.fullName || null,
+          venueIndoor: competition?.venue?.indoor ?? null,
           espnOdds: o
             ? {
                 details: o.details || null,

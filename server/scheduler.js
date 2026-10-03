@@ -5,6 +5,7 @@ import * as espn from "./espnProjections.js";
 import * as tank01 from "./tank01.js";
 import * as hub from "./projectionHub.js";
 import * as actuals from "./actuals.js";
+import * as dvp from "./dvp.js";
 import * as backfill from "./backfill.js";
 import * as pickem from "./pickem.js";
 import { buildFullLeague } from "./buildLeague.js";
@@ -182,6 +183,9 @@ export function startScheduler() {
   setTimeout(() => actuals.updateActuals().catch(() => {}), 60 * 1000);
   // v2.7: Pick'em recommendations hourly (red-dot flags + push on changes before kickoff).
   setInterval(() => pickem.updateAllUsers().catch((err) => console.warn(`[scheduler] Pick'em update failed: ${err.message}`)), REFRESH_INTERVAL_MS);
+  // v2.8: matchup-difficulty stats — finished games hourly; last season once.
+  setTimeout(() => dvp.ensureLoaded().catch((err) => console.warn(`[scheduler] Matchup stats load failed: ${err.message}`)), 20 * 1000);
+  setInterval(() => dvp.ensureLoaded().catch((err) => console.warn(`[scheduler] Matchup stats load failed: ${err.message}`)), REFRESH_INTERVAL_MS);
   setInterval(() => backfill.scheduledCheck().catch((err) => console.warn(`[scheduler] Backfill check failed: ${err.message}`)), PREKICK_CHECK_MS);
 }
 

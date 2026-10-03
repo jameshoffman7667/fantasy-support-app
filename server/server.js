@@ -28,6 +28,9 @@ import { computeAccuracy } from "./accuracy.js";
 import * as backfill from "./backfill.js";
 import * as gameday from "./gameday.js";
 import * as pickem from "./pickem.js";
+import * as dvp from "./dvp.js";
+import * as weather from "./weather.js";
+import { getImage } from "./images.js";
 import * as tank01 from "./tank01.js";
 import { getLastSummary } from "./projectionHub.js";
 import { simulateSeason } from "./simulate.js";
@@ -324,6 +327,9 @@ app.use("/api/gameday", requireAuth);
 app.use("/api/pickem", requireAuth);
 app.use("/api/status", requireAuth);
 app.use("/api/push", requireAuth);
+app.use("/api/dvp", requireAuth);
+app.use("/api/weather", requireAuth);
+app.use("/api/img", requireAuth);
 
 // Step 1: the logged-in user's Sleeper account -> their leagues for the
 // current season. (v2.1: the username comes from the login, not from a form
@@ -526,6 +532,53 @@ app.post("/api/pickem/seen", (req, res) => {
   const { season, week, gameKey } = req.body || {};
   pickem.markSeen(req.user.username, Number(season), Number(week), gameKey || null);
   res.json({ ok: true });
+});
+
+/* ---------------- Matchup difficulty (v2.8) ---------------- */
+app.get("/api/dvp", async (req, res) => {
+  try {
+    res.json(await dvp.getTable(req.user.username, { profile: req.query.profile, mode: req.query.mode, adjusted: req.query.adjusted }));
+  } catch (err) {
+    console.error("[dvp] failed:", err);
+    res.status(502).json({ error: err.message || "Couldn't load matchup rankings." });
+  }
+});
+app.get("/api/dvp/detail", async (req, res) => {
+  try {
+    const { profile, side, team, pos, mode, adjusted } = req.query;
+    res.json(await dvp.getDetail(req.user.username, { profile, side: side === "off" ? "off" : "def", team, pos, mode, adjusted }));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Couldn't load that matchup." });
+  }
+});
+app.get("/api/dvp/settings", (req, res) => res.json(dvp.getSettings(req.user.username)));
+app.post("/api/dvp/settings", (req, res) => res.json(dvp.saveSettings(req.user.username, req.body || {})));
+
+/* ---------------- Weather (v2.8) ---------------- */
+app.get("/api/weather", async (req, res) => {
+  try {
+    const nfl = await sleeper.getState();
+    const week = Number(req.query.week) || Number(nfl.week);
+    const w = await weather.getWeekWeather(nfl.season, week);
+    res.json({ season: Number(nfl.season), week, games: w.games, settings: w.settings });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't load the weather." });
+  }
+});
+app.get("/api/weather/settings", (req, res) => res.json(weather.getSettings()));
+app.post("/api/weather/settings", requireOwner, (req, res) => res.json(weather.saveSettings(req.body || {})));
+
+/* ---------------- Headshots & logos (v2.8, cached) ---------------- */
+app.get("/api/img/:kind/:id", async (req, res) => {
+  try {
+    const img = await getImage(req.params.kind, req.params.id);
+    if (!img) return res.status(404).end();
+    res.set("Content-Type", img.type);
+    res.set("Cache-Control", "private, max-age=604800");
+    res.send(img.buf);
+  } catch {
+    res.status(404).end();
+  }
 });
 
 /* ---------------- Data-source status (v2.6) ---------------- */

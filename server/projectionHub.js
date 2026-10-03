@@ -121,18 +121,28 @@ export function computeAllSources({ pools, settings, sleeperPlayers }) {
       const vegas = tank01.propsStatLine(props, p, proj);
       if (vegas) {
         const pts = vegas.points ?? slp.scoreStats({ pos: p, stats: vegas.stats }, settings);
-        if (pts != null) e.V = round(pts);
+        if (pts != null) {
+          e.V = round(pts);
+          setLine(e, "V", vegas.stats || (vegas.points != null ? { kick_pts: vegas.points } : null));
+        }
       }
       if (proj) {
         const hasStats = proj.stats && Object.keys(proj.stats).length > 0 && p !== "K";
         const pts = hasStats ? slp.scoreStats({ pos: p, stats: proj.stats }, settings) : tank01.presetPoints(proj, settings);
-        if (pts != null) e.T = round(pts);
+        if (pts != null) {
+          e.T = round(pts);
+          setLine(e, "T", proj.stats);
+        }
       }
     }
     for (const [team, d] of Object.entries(tankWeek.projections?.defenses || {})) {
       const sid = team; // Sleeper's DEF player IDs are team abbreviations
       const pts = tank01.presetPoints(d, settings);
-      if (pts != null) entry(sid, "DEF", team).T = round(pts);
+      if (pts != null) {
+        const e = entry(sid, "DEF", team);
+        e.T = round(pts);
+        setLine(e, "T", d.stats);
+      }
     }
   }
 
@@ -140,7 +150,11 @@ export function computeAllSources({ pools, settings, sleeperPlayers }) {
   for (const [sid, rec] of Object.entries(pools.sleeperPool?.byId || {})) {
     const p = rec.pos || metaPos(sid);
     const pts = slp.scoreStats({ ...rec, pos: p }, settings);
-    if (pts != null) entry(sid, p, metaTeam(sid)).S = round(pts);
+    if (pts != null) {
+      const e = entry(sid, p, metaTeam(sid));
+      e.S = round(pts);
+      setLine(e, "S", rec.stats);
+    }
   }
 
   // --- ESPN ---
@@ -157,7 +171,10 @@ export function computeAllSources({ pools, settings, sleeperPlayers }) {
         }
       }
       if (!sid) continue;
-      entry(sid, metaPos(sid) || rec.pos, metaTeam(sid) || rec.team).E = round(espn.adjustForScoring(rec, settings));
+      const e = entry(sid, metaPos(sid) || rec.pos, metaTeam(sid) || rec.team);
+      e.E = round(espn.adjustForScoring(rec, settings));
+      // ESPN's feed only gives us receptions and passing TDs, not a full line.
+      setLine(e, "E", { rec: rec.rec, pass_td: rec.passTd });
     }
     for (const [team, rec] of Object.entries(ep.byTeamDef || {})) {
       entry(team, "DEF", team).E = round(espn.adjustForScoring(rec, settings));
@@ -167,6 +184,28 @@ export function computeAllSources({ pools, settings, sleeperPlayers }) {
 }
 function round(x) {
   return Math.round(Number(x) * 100) / 100;
+}
+
+/* ---------------- projected stat lines (v2.8) ---------------- */
+/** The stats shown on a player card, in display order (Sleeper stat keys). */
+export const STAT_LINE_KEYS = ["pass_yd", "pass_td", "pass_int", "rush_att", "rush_yd", "rush_td", "rec_tgt", "rec", "rec_yd", "rec_td", "fgm", "xpm", "kick_pts", "sack", "int", "fum_rec", "def_td", "pts_allow", "yds_allow"];
+/** Keeps only the displayable, non-zero stats, rounded to 0.1. */
+export function trimStatLine(stats) {
+  if (!stats || typeof stats !== "object") return null;
+  const out = {};
+  for (const k of STAT_LINE_KEYS) {
+    const v = Number(stats[k]);
+    if (stats[k] == null || !Number.isFinite(v)) continue;
+    if (v === 0 && k !== "pts_allow") continue;
+    out[k] = Math.round(v * 10) / 10;
+  }
+  return Object.keys(out).length ? out : null;
+}
+function setLine(e, src, stats) {
+  const t = trimStatLine(stats);
+  if (!t) return;
+  e.lines ??= {};
+  e.lines[src] = t;
 }
 
 /* ---------------- leans ---------------- */
@@ -297,15 +336,17 @@ export function leanSummary(leans) {
 /** Picks the projection for one player: Vegas raw, else the first other source with its lean applied. */
 export function pick(result, sleeperId) {
   const e = result?.all?.get(String(sleeperId));
-  if (!e) return { proj: null, projSource: null, projFactor: null };
-  if (e.V != null) return { proj: e.V, projSource: "V", projFactor: null };
+  if (!e) return { proj: null, projSource: null, projFactor: null, projStats: null };
+  // v2.8: projStats is the stat line from the same source as the number
+  // (raw, before any lean — the lean only scales the points total).
+  if (e.V != null) return { proj: e.V, projSource: "V", projFactor: null, projStats: e.lines?.V || null };
   for (const src of ["T", "S", "E"]) {
     if (e[src] == null) continue;
     const lean = result.leans?.[src]?.[e.pos];
     const f = lean && !lean.none ? lean.factor : 1;
-    return { proj: round(e[src] * f), projSource: src, projFactor: f !== 1 ? f : null, projRaw: e[src] };
+    return { proj: round(e[src] * f), projSource: src, projFactor: f !== 1 ? f : null, projRaw: e[src], projStats: e.lines?.[src] || null };
   }
-  return { proj: null, projSource: null, projFactor: null };
+  return { proj: null, projSource: null, projFactor: null, projStats: null };
 }
 
 export function clearCache() {

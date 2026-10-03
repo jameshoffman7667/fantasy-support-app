@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,42 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.8 — Matchups, weather, headshots, stat lines
+
+**Commit (short):** `v2.8: feat: matchup ranks, weather, headshots`
+
+**Commit (extended):**
+v2.8 makes player cards richer. Each card shows a headshot (Sleeper, then
+ESPN, then initials) and the matchup as "NYJ @ MIA". The player's team is
+coloured by its offensive rank at his position, the opponent by its
+defensive rank against it, on a five-colour red-to-dark-green scale. Cards
+also show kickoff, a weather chip for outdoor games, and the projected stat
+line from the source behind the projection.
+
+Matchup difficulty is computed in-app from Sleeper's weekly game stats in
+each league's scoring: points allowed and scored per game by position,
+blended with last season (fading), this season only, or the last 4 games,
+with an optional schedule adjustment. A new Analytics view ranks every
+defense and offense by position, and tapping a team shows the games behind
+its number.
+
+Weather uses Open-Meteo forecasts at kickoff. Significant wind, rain or snow
+flags the starter as a minor issue on the Lineup tab, with an hourly pop-up.
+Domes are skipped, retractable roofs are never flagged, and the owner can
+edit the thresholds. Team logos also appear in Pick'em, Game Day and the
+rankings.
+
+**Details**
+- New `server/dvp.js` (tables `dvp_stats`, `dvp_weeks`; per-user `dvp_settings:{user}`), `server/weather.js` (stadium table, Open-Meteo, flags; app-wide `weather_settings`), `server/images.js` (disk-cached image proxy under `DATA_DIR/img`).
+- Routes: `GET /api/dvp`, `GET /api/dvp/detail`, `GET|POST /api/dvp/settings`, `GET /api/weather`, `GET /api/weather/settings`, `POST /api/weather/settings` (owner), `GET /api/img/:kind/:id`.
+- Scheduler: matchup stats load 20 s after start-up and hourly (last season once; this season's finished weeks, re-pulled daily for ~9 days for stat corrections; the current week's finished games hourly).
+- `projectionHub.pick` now also returns `projStats` (the chosen source's stat line, before any lean). Built players carry `id`, `matchup`, `weather`, `projStats`; leagues carry `scoringProfile`.
+- `schedule.js` keeps ESPN's neutral-site and venue flags. `lineup.js` adds `weatherStarters` (a flagged starter makes an "ok" lineup "minor").
+- Unverified from the build sandbox: Open-Meteo and the image CDNs (unreachable from here). All fail soft. The Sleeper stats feed was checked live.
+- Change during the build, at James's request: cards show the team and opponent coloured separately by offensive and defensive rank, instead of a single "28th vs WR" label.
 
 ---
 
