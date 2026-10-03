@@ -105,9 +105,10 @@ function cleanStats(raw) {
  *   { byId: { sleeperPlayerId: { pos, stats } }, count, withProjection }
  * Throws if Sleeper can't be reached — the caller falls back to ESPN.
  */
-export async function getWeekProjections(season, week) {
+export async function getWeekProjections(season, week, { force = false } = {}) {
   const cacheKey = `sleeper:proj:${season}:${week}`;
-  const cached = cacheGet(cacheKey);
+  // force: the pre-kickoff refresh (scheduler.js) skips the hourly cache.
+  const cached = force ? null : cacheGet(cacheKey);
   if (cached !== null) return cached;
 
   const rows = await fetchWeek(season, week);

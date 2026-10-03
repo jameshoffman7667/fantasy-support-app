@@ -40,6 +40,13 @@ services:
       # if your data volume's filesystem doesn't support WAL. Normally leave
       # unset — the server detects this and falls back automatically.
       - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
+      # v2.4: Tank01 NFL API key (RapidAPI) for Vegas prop-based projections
+      # and Tank01 projections. Optional — without it the app uses Sleeper,
+      # then ESPN. TANK01_MONTHLY_LIMIT defaults to 1000 (free tier); calls
+      # stop TANK01_RESERVE (default 50) short of it.
+      - TANK01_API_KEY=${TANK01_API_KEY:-}
+      - TANK01_MONTHLY_LIMIT=${TANK01_MONTHLY_LIMIT:-}
+      - TANK01_RESERVE=${TANK01_RESERVE:-}
       - PORT=4000
       # Web Push (v2, pre-kickoff alerts) — optional; leave unset in your
       # .env/Portainer vars and the server just runs with push disabled

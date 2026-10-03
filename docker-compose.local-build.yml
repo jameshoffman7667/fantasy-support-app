@@ -22,6 +22,10 @@ services:
       - OWNER_PASSWORD=${OWNER_PASSWORD}
       - OWNER_FORCE_RESET=${OWNER_FORCE_RESET:-}
       - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
+      # Tank01 (v2.4) — optional; see docker-compose.yml.
+      - TANK01_API_KEY=${TANK01_API_KEY:-}
+      - TANK01_MONTHLY_LIMIT=${TANK01_MONTHLY_LIMIT:-}
+      - TANK01_RESERVE=${TANK01_RESERVE:-}
       - PORT=4000
       # Web Push (v2, pre-kickoff alerts) — optional; see docker-compose.yml.
       - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}

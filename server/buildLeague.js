@@ -1,7 +1,8 @@
 import * as sleeper from "./sleeper.js";
 import * as fp from "./fantasyPros.js";
 import * as schedule from "./schedule.js";
-import * as slp from "./sleeperProjections.js"; // v2.3: primary projection source
+import * as tank01 from "./tank01.js"; // v2.4: Vegas props (primary) + Tank01 projections
+import * as slp from "./sleeperProjections.js"; // v2.4: third source (primary in v2.3)
 import * as espn from "./espnProjections.js"; // v2.3: fallback for players Sleeper has no projection for
 import { lookupBySleeperId } from "./playerIdMap.js";
 import { buildFpIndex, lookupFpMulti } from "./matching.js";
@@ -169,7 +170,15 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   // player_id, scored with this league's exact settings — see
   // sleeperProjections.js), then ESPN for anyone Sleeper has nothing for.
   // One cached request per week each. FantasyPros is used for ECR only.
-  const [sleeperPool, espnPool, ...ecrByPosition] = await Promise.all([
+  // v2.4: Vegas player props (via Tank01) come first, then Tank01's own
+  // projection, then Sleeper, then ESPN. Tank01 calls are quota-bounded
+  // inside tank01.js, so calling this on every build is safe.
+  const [tankWeek, tankIds, sleeperPool, espnPool, ...ecrByPosition] = await Promise.all([
+    tank01.getWeekData(season, week).catch((err) => {
+      console.warn(`[buildLeague] Tank01 data unavailable this build: ${err.message}`);
+      return null;
+    }),
+    tank01.getIdMap().catch(() => null),
     slp.getWeekProjections(season, week).catch((err) => {
       console.warn(`[buildLeague] Sleeper projections unavailable this build, using ESPN only: ${err.message}`);
       return null;
@@ -241,14 +250,41 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   };
 
   /**
-   * proj + source: "S" = Sleeper (scored with this league's settings),
-   * "E" = ESPN fallback (adjusted for reception / TE-premium / passing-TD
-   * scoring), null = neither has one.
+   * proj + source, in priority order (v2.4):
+   *  "V" = Vegas props (full prop set for the position) scored with this league's settings
+   *  "T" = Tank01's projection (stat line scored with this league's settings; preset total for K/DEF)
+   *  "S" = Sleeper's projection, scored with this league's settings
+   *  "E" = ESPN fallback (adjusted for reception / TE-premium / passing-TD scoring)
+   *  null = none of them has one
    */
-  const projSourceCounts = { S: 0, E: 0, none: 0 };
+  const projSourceCounts = { V: 0, T: 0, S: 0, E: 0, none: 0 };
+  function tankProjection(sleeperId, name, pos, teamAbbr) {
+    if (!tankWeek) return { tankProj: null, props: null };
+    if (pos === "DEF") return { tankProj: tankWeek.projections?.defenses?.[tank01.normTeam(teamAbbr)] || null, props: null };
+    const tankId = tank01.tankIdFor(tankIds, sleeperId, { name, pos, team: teamAbbr });
+    return { tankProj: tankId ? tankWeek.projections?.players?.[tankId] || null : null, props: tank01.propsFor(tankWeek, tankId) };
+  }
   async function resolveProjection(sleeperId, name, pos, crosswalkName, teamAbbr, espnId) {
+    const settings = league.scoring_settings;
+    const { tankProj, props } = tankProjection(sleeperId, name, pos, teamAbbr);
+    const vegas = tank01.propsStatLine(props, pos, tankProj);
+    if (vegas) {
+      const pts = vegas.points ?? slp.scoreStats({ pos, stats: vegas.stats }, settings);
+      if (pts != null) {
+        projSourceCounts.V++;
+        return { proj: Math.round(pts * 100) / 100, projSource: "V" };
+      }
+    }
+    if (tankProj) {
+      const hasStats = tankProj.stats && Object.keys(tankProj.stats).length > 0 && pos !== "K" && pos !== "DEF";
+      const pts = hasStats ? slp.scoreStats({ pos, stats: tankProj.stats }, settings) : tank01.presetPoints(tankProj, settings);
+      if (pts != null) {
+        projSourceCounts.T++;
+        return { proj: Math.round(pts * 100) / 100, projSource: "T" };
+      }
+    }
     const slpRec = slp.lookupProjection(sleeperPool, sleeperId);
-    const slpPts = slpRec ? slp.scoreStats({ ...slpRec, pos: slpRec.pos || pos }, league.scoring_settings) : null;
+    const slpPts = slpRec ? slp.scoreStats({ ...slpRec, pos: slpRec.pos || pos }, settings) : null;
     if (slpPts != null) {
       projSourceCounts.S++;
       return { proj: slpPts, projSource: "S" };
@@ -256,7 +292,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     const rec = espn.lookupProjection(espnPool, { espnId, names: [name, crosswalkName], pos, team: teamAbbr });
     if (rec) {
       projSourceCounts.E++;
-      return { proj: espn.adjustForScoring(rec, league.scoring_settings), projSource: "E" };
+      return { proj: espn.adjustForScoring(rec, settings), projSource: "E" };
     }
     projSourceCounts.none++;
     return { proj: null, projSource: null };
@@ -604,10 +640,10 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const unmatched = [...new Set([...unmatchedStarters, ...unmatchedOptimal])];
   const dataWarnings = [];
   if (unmatched.length) {
-    dataWarnings.push(`No Sleeper or ESPN projection for: ${unmatched.join(", ")}`);
+    dataWarnings.push(`No projection from any source for: ${unmatched.join(", ")}`);
   }
 
-  console.log(`[buildLeague] ${league.name} week ${week} projections — Sleeper: ${projSourceCounts.S}, ESPN fallback: ${projSourceCounts.E}, none: ${projSourceCounts.none}`);
+  console.log(`[buildLeague] ${league.name} week ${week} projections — Vegas: ${projSourceCounts.V}, Tank01: ${projSourceCounts.T}, Sleeper: ${projSourceCounts.S}, ESPN: ${projSourceCounts.E}, none: ${projSourceCounts.none}`);
 
   const injuryEvents = buildInjuryRows(leagueId, built);
 

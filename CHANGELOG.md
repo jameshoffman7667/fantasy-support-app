@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,44 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.4 — Vegas prop projections (Tank01) and pre-kickoff refresh
+
+**Commit (short):** `v2.4: feat: Vegas prop projections, pre-kickoff`
+
+**Commit (extended):**
+v2.4 adds Vegas prop-based projections using the Tank01 handoff
+methodology. When a player has a full prop set for their position, the
+lines become his projected stats; anytime-TD odds are converted to
+expected TDs (implied probability / 1.18, then -ln(1-p)), and everything
+is scored with the league's own settings. Players without a full prop
+set use Tank01's projection, then Sleeper, then ESPN. Cards are tagged
+VEGAS, TANK01, SLEEPER or ESPN.
+
+tank01.js needs an optional TANK01_API_KEY. Calls are bounded by
+freshness rules (schedule and projections daily, odds per game daily
+Wed-Sun, player list weekly), about 450-500 a month, with a hard monthly
+cap that falls back to Sleeper/ESPN.
+
+Projections still refresh hourly, and now also about 60 minutes before
+each kickoff slot: Sleeper and ESPN are re-pulled past the cache, Tank01
+projections and that slot's props are refreshed, and every user's
+leagues are rebuilt.
+
+**Details**
+- New `server/tank01.js`: quota-bounded fetchers (pacing, monthly counter, 429 back-off), defensive parsers for schedule / odds / projections / player list, `propsStatLine()` (full-prop-set rules per position, TD split, K kicking points), Sleeper-ID join via the Tank01 player list with name + position + team fallback.
+- `buildLeague.js`: projection order Vegas → Tank01 → Sleeper → ESPN; per-league log line with counts for each.
+- `scheduler.js`: pre-kickoff check every 5 minutes; fires once per kickoff slot 45–60 minutes before kickoff.
+- Sleeper/ESPN `getWeekProjections()` accept `{ force: true }`.
+- Config: `TANK01_API_KEY`, optional `TANK01_MONTHLY_LIMIT` (1000) and `TANK01_RESERVE` (50) in both compose files and `.env.example`s.
+
+**Known limitations / what was and wasn't tested**
+- No live Tank01 call was possible while building (the Tank01 connection wasn't available), so the odds, projections and player-list response shapes come from the handoff and Tank01's documented fields; parsers are defensive and each endpoint's first raw response is logged. Whether the player list carries Sleeper IDs is unconfirmed — if not, matching falls back to name + team (the handoff's method, 1/208 miss).
+- Prop lines are used as expected values (they're closer to medians). The 1.18 TD vig factor was calibrated against Tank01's own TD projections.
+- Odds aren't fetched Mon–Tue except the pre-kickoff pull, so Monday-night props come from Sunday's pull plus the pre-kickoff refresh.
+- Tested with mocked APIs: odds-to-TD maths, full/partial prop rules, quota cap, no odds after kickoff, daily caching, forced-pull de-duplication, a league build using all four sources, the pre-kickoff trigger firing once per slot, plus the existing server (44) and browser (23) checks.
 
 ---
 

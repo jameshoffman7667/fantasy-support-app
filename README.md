@@ -473,7 +473,53 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
-### Projections (v2.3: Sleeper first, ESPN fallback)
+### Projections (v2.4: Vegas props → Tank01 → Sleeper → ESPN)
+
+Each player's projection comes from the first source that has one:
+
+1. **Vegas props** (`server/tank01.js`, needs `TANK01_API_KEY`) — when a
+   player has a full set of prop lines for their position, those lines
+   are the projected stats: QB passing yards, passing TDs, interceptions,
+   rushing yards and anytime TD; RB rushing yards (or rush+rec yards minus
+   receiving yards), receiving yards, receptions and anytime TD; WR/TE
+   receiving yards, receptions and anytime TD; K kicking points. Anytime-TD
+   odds become expected TDs as in the Tank01 handoff: implied probability
+   ÷ 1.18 (vig), then −ln(1 − p). A QB's anytime TD counts as rushing;
+   RB/WR/TE TDs are split rush/receiving by Tank01's projected split (or a
+   position default). Fumbles are 0 — no fumble props exist. Scored with
+   the league's own settings. Tag `VEGAS`.
+2. **Tank01's projection** — anyone without a full prop set. Stat line
+   scored with the league's settings; kickers and defenses use Tank01's
+   preset total for the league's reception setting. Tag `TANK01`.
+3. **Sleeper's projection** (v2.3's source), scored per league. Tag `SLEEPER`.
+4. **ESPN** (v2.2's source). Tag `ESPN`.
+
+Without a Tank01 key the app simply starts at step 3.
+
+**Tank01 quota** (free tier 1,000 calls/month, shared with anything else on
+the key). Calls are bounded by freshness rules, not by how often leagues
+rebuild: schedule once a day, player list (for the Sleeper-ID join) once a
+week, projections once a day, odds one call per game per day Wed–Sun
+(Eastern) and never after kickoff, plus one forced pull per game ~60 min
+before kickoff. That's roughly 450–500 calls a month. A monthly counter
+stops all Tank01 calls `TANK01_RESERVE` (default 50) short of
+`TANK01_MONTHLY_LIMIT` (default 1000), and a 429 pauses Tank01 for 10
+minutes — both fall back to Sleeper/ESPN.
+
+**Refresh timing (v2.4):** leagues still rebuild hourly (projection caches
+last an hour). Additionally, ~60 minutes before each kickoff slot (TNF,
+Sunday early/late/night, MNF…) the server re-pulls Sleeper and ESPN
+projections bypassing the cache, refreshes Tank01 projections and the
+props for that slot's games, then rebuilds every user's leagues.
+
+**Not verified:** Tank01 response shapes were taken from the handoff and
+written defensively; no live call was possible while building. The
+server logs the first raw response of each Tank01 endpoint and, per
+build, `[buildLeague] <league> week N projections — Vegas: …, Tank01: …,
+Sleeper: …, ESPN: …, none: …`. If Vegas stays at 0 on a Wednesday–Sunday,
+paste the `[tank01] First getNFLBettingOdds response sample` line.
+
+#### Sleeper and ESPN details
 
 **Primary: Sleeper's own projections feed** (`server/sleeperProjections.js`)
 — the numbers the Sleeper app shows (supplied to Sleeper by Rotowire). One
@@ -672,8 +718,9 @@ server/
   server.js             Express app + routes (+ FAAB endpoint)
   sleeper.js             Sleeper API client (no auth needed)
   fantasyPros.js          FantasyPros API client (uses your key, server-only) — consensus rankings (ECR) only
-  sleeperProjections.js    Sleeper's weekly projections, scored per league — primary source (v2.3)
-  espnProjections.js       ESPN weekly fantasy projections — fallback (v2.3; sole source in v2.2)
+  tank01.js                Tank01 (RapidAPI): Vegas props + Tank01 projections, quota-bounded (v2.4)
+  sleeperProjections.js    Sleeper's weekly projections, scored per league — third source (v2.4)
+  espnProjections.js       ESPN weekly fantasy projections — last fallback
   schedule.js             ESPN kickoff-time/bye-week client (unofficial endpoint)
   playerIdMap.js          ffb_ids ID crosswalk (Sleeper/ESPN/FantasyPros/etc)
   matching.js             Name-based cross-source player matching (FantasyPros ECR)
@@ -721,7 +768,10 @@ double-check first:
    confirmed. This is the one most likely to still need another pass —
    the server log warning it now prints if the response week doesn't
    match the request is the fastest way to know either way.
-2. **`sleeperProjections.js` (v2.3)** — unofficial feed; live samples of
+2. **`tank01.js` (v2.4)** — the props and projections response shapes
+   come from the handoff, not a live call; parsers are defensive and the
+   first raw response of each endpoint is logged.
+2b. **`sleeperProjections.js` (v2.3)** — unofficial feed; live samples of
    QB/WR/K/DEF rows were inspected through a page reader, but a full
    week's response was never fetched end to end from here. Logs row
    counts and one sample row on each fresh fetch.

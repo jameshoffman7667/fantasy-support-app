@@ -1,9 +1,18 @@
 import * as sleeper from "./sleeper.js";
+import * as schedule from "./schedule.js";
+import * as slp from "./sleeperProjections.js";
+import * as espn from "./espnProjections.js";
+import * as tank01 from "./tank01.js";
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
 
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // hourly, per the request this exists to satisfy
+// v2.4: on top of the hourly refresh, a fresh projection pull ~60 minutes
+// before each kickoff slot (TNF, Sunday early/late/night, MNF, ...).
+const PREKICK_LEAD_MS = 60 * 60 * 1000;
+const PREKICK_WINDOW_MS = 15 * 60 * 1000; // fires between 60 and 45 min before kickoff, so a short outage doesn't skip it
+const PREKICK_CHECK_MS = 5 * 60 * 1000;
 
 const ALERT_DEDUP_TTL_MS = 9 * 24 * 60 * 60 * 1000; // outlives a week so the same alert doesn't repeat next cycle
 const ALERT_LOOKAHEAD_MS = 26 * 60 * 60 * 1000; // only alert about a kickoff within about a day
@@ -96,11 +105,62 @@ async function refreshUser(state) {
   }
 }
 
+let refreshing = null;
 async function refreshAllUsers() {
-  // Sequential on purpose: shared FantasyPros/ESPN caches make the second
-  // user's refresh mostly cache hits, and it keeps the free-tier rate limit safe.
-  for (const state of getAllUserStates()) {
-    await refreshUser(state);
+  // One run at a time: the hourly and pre-kickoff refreshes can coincide.
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    // Sequential on purpose: shared projection caches make the second
+    // user's refresh mostly cache hits, and it keeps rate limits safe.
+    for (const state of getAllUserStates()) {
+      await refreshUser(state);
+    }
+  })().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
+
+/**
+ * Pre-kickoff refresh: ~60 minutes before each kickoff slot this week,
+ * re-pull projections bypassing the hourly cache — Sleeper and ESPN for
+ * the whole week, Tank01 projections plus fresh Vegas props for just the
+ * games in that slot — then rebuild every user's leagues so lineup advice
+ * and alerts use the latest numbers before lock.
+ */
+async function preKickoffCheck() {
+  try {
+    const state = await sleeper.getState();
+    const season = state.season;
+    const week = state.week;
+    const sched = await schedule.getWeekSchedule(season, week);
+    if (!sched?.byTeam) return;
+    const slots = new Map(); // kickoff millis -> teams
+    for (const [team, g] of Object.entries(sched.byTeam)) {
+      if (g.kickoffMillis == null) continue;
+      if (!slots.has(g.kickoffMillis)) slots.set(g.kickoffMillis, []);
+      slots.get(g.kickoffMillis).push(tank01.normTeam(team));
+    }
+    const now = Date.now();
+    for (const [kickoff, teams] of slots) {
+      const lead = kickoff - now;
+      if (lead > PREKICK_LEAD_MS || lead <= PREKICK_LEAD_MS - PREKICK_WINDOW_MS) continue;
+      const doneKey = `prekick:${season}:${week}:${kickoff}`;
+      if (cacheGet(doneKey) !== null) continue;
+      cacheSet(doneKey, true, 2 * 24 * 60 * 60 * 1000);
+      console.log(`[scheduler] Pre-kickoff refresh for the ${new Date(kickoff).toISOString()} slot (${teams.join(", ")}).`);
+
+      await slp.getWeekProjections(season, week, { force: true }).catch((err) => console.warn(`[scheduler] Pre-kickoff Sleeper pull failed: ${err.message}`));
+      await espn.getWeekProjections(season, week, { force: true }).catch((err) => console.warn(`[scheduler] Pre-kickoff ESPN pull failed: ${err.message}`));
+      if (tank01.isConfigured()) {
+        const current = await tank01.getWeekData(season, week); // schedule comes from here
+        const gameIDs = (current?.schedule?.games || []).filter((g) => teams.includes(g.home) || teams.includes(g.away)).map((g) => g.gameID);
+        await tank01.getWeekData(season, week, { projections: true, gameIDs });
+      }
+      await refreshAllUsers();
+    }
+  } catch (err) {
+    console.warn(`[scheduler] Pre-kickoff check failed: ${err.message}`);
   }
 }
 
@@ -109,4 +169,7 @@ export function startScheduler() {
   // rather than waiting a full hour), then on the regular interval.
   setTimeout(refreshAllUsers, 15 * 1000);
   setInterval(refreshAllUsers, REFRESH_INTERVAL_MS);
+  setInterval(preKickoffCheck, PREKICK_CHECK_MS);
 }
+
+export { preKickoffCheck as _preKickoffCheckForTests };

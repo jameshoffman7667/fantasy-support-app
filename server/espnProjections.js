@@ -92,9 +92,10 @@ function weeklyProjection(player, season, week) {
  * where rec = { pts, rec, passTd, pos, team, name } (pts = ESPN PPR total).
  * Throws on a network/API failure — the caller decides how to degrade.
  */
-export async function getWeekProjections(season, week) {
+export async function getWeekProjections(season, week, { force = false } = {}) {
   const cacheKey = `espn:proj-pool:${season}:${week}`;
-  const cached = cacheGet(cacheKey);
+  // force: the pre-kickoff refresh (scheduler.js) skips the hourly cache.
+  const cached = force ? null : cacheGet(cacheKey);
   if (cached !== null) return cached;
 
   const pool = await fetchPlayerPool(season, week);
