@@ -11,6 +11,9 @@ import { computeLeans } from "./projectionHub.js";
  * flatter every source.
  */
 const SOURCES = ["V", "T", "S", "E"];
+// v2.9: only fantasy-relevant positions are scored; anything else a source
+// happened to return (IDP, OL, …) is ignored here and not recorded.
+export const FANTASY_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
 const MIN_PROJ = 0.5;
 
 function stats(pairs) {
@@ -58,7 +61,10 @@ const r2 = (x) => Math.round(x * 100) / 100;
 const r3 = (x) => Math.round(x * 1000) / 1000;
 
 /**
- * opts: { profile, season, weekFrom, weekTo, pos, sameOnly, adjusted }
+ * opts: { profile, season, weekFrom, weekTo, positions, sameOnly, adjusted }
+ * `positions` (v2.9): array of the positions to include in the "ALL" rows and
+ * the by-week chart (default: all six). Per-position rows are always returned
+ * so the client can show a source × position matrix.
  * Returns { summary: [{source, pos, ...metrics, rankCorr}], byWeek: [{week, source, mae, bias, n}], meta }.
  */
 export function computeAccuracy(opts) {
@@ -70,7 +76,8 @@ export function computeAccuracy(opts) {
   const weeks = [];
   for (let w = Number(opts.weekFrom || 1); w <= Number(opts.weekTo || 18); w++) weeks.push(w);
 
-  const rows = store.projRows({ profile, season, weeks, pos: opts.pos || undefined });
+  const wanted = new Set((Array.isArray(opts.positions) && opts.positions.length ? opts.positions : FANTASY_POSITIONS).filter((p) => FANTASY_POSITIONS.includes(p)));
+  const rows = store.projRows({ profile, season, weeks }).filter((r) => FANTASY_POSITIONS.includes(r.pos));
   const actualRows = store.actualsFor(season, weeks);
   const actualWeeks = new Set(weeks.filter((w) => store.actualWeek(season, w)));
   const actual = new Map(actualRows.map((a) => [`${a.week}|${a.player_id}`, JSON.parse(a.stats_json)]));
@@ -105,16 +112,18 @@ export function computeAccuracy(opts) {
     for (const s of SOURCES) {
       const p = e.src[s];
       if (p == null || p < MIN_PROJ) continue;
-      for (const key of [`${s}|${e.pos}`, `${s}|ALL`]) {
+      for (const key of wanted.has(e.pos) ? [`${s}|${e.pos}`, `${s}|ALL`] : [`${s}|${e.pos}`]) {
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push([p, act]);
       }
       const rk = `${s}|${e.pos}|${e.week}`;
       if (!rankGroups.has(rk)) rankGroups.set(rk, []);
       rankGroups.get(rk).push([p, act]);
-      const wk = `${s}|${e.week}`;
-      if (!weekGroups.has(wk)) weekGroups.set(wk, []);
-      weekGroups.get(wk).push([p, act]);
+      if (wanted.has(e.pos)) {
+        const wk = `${s}|${e.week}`;
+        if (!weekGroups.has(wk)) weekGroups.set(wk, []);
+        weekGroups.get(wk).push([p, act]);
+      }
     }
   }
 
@@ -126,7 +135,7 @@ export function computeAccuracy(opts) {
     let num = 0, den = 0;
     for (const [rk, rp] of rankGroups) {
       const [s2, p2] = rk.split("|");
-      if (s2 !== source || (pos !== "ALL" && p2 !== pos)) continue;
+      if (s2 !== source || (pos !== "ALL" && p2 !== pos) || (pos === "ALL" && !wanted.has(p2))) continue;
       const rho = spearman(rp);
       if (rho == null) continue;
       num += rho * rp.length;
@@ -151,6 +160,7 @@ export function computeAccuracy(opts) {
     leans: lastWeek ? { week: lastWeek, ...computeLeans(profile, season, lastWeek) } : null,
     meta: {
       profile,
+      positions: [...wanted],
       profileLabel: prof.label,
       profiles: profiles.map((p) => ({ profile: p.profile, label: p.label })),
       seasons: [...new Set(store.recordedWeeks().map((r) => r.season))].sort(),

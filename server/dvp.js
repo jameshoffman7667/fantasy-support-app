@@ -3,6 +3,7 @@ import * as sleeper from "./sleeper.js";
 import * as schedule from "./schedule.js";
 import * as store from "./projectionStore.js";
 import * as slp from "./sleeperProjections.js";
+import { cacheGet, cacheSet } from "./db.js";
 
 /**
  * v2.8 matchup difficulty: defense-vs-position (DvP) and offense-by-position
@@ -25,7 +26,10 @@ import * as slp from "./sleeperProjections.js";
  *   blended  — this season + last season, last season's games together
  *              weighted like PREV_WEIGHT_GAMES games, fading to 0 as this
  *              season's sample grows (see prevWeightTotal)
- *   last4    — each team's 4 most recent games (reaching into last season if needed)
+ *   last4    — LEGACY (v2.9: removed from the UI). Still computable (computeRankings,
+ *              getDetail) and still accepted by saveSettings, but getSettings and
+ *              getTable map it to "blended". The same 4-game window now ships on every
+ *              row as `last4` (see below), independent of the selected mode.
  * Schedule-adjusted (SRS-style, additive): a defense's adjusted figure is
  * the average of (points allowed − how far that opponent's offense runs
  * above or below league average at the position), iterated together with
@@ -36,6 +40,30 @@ import * as slp from "./sleeperProjections.js";
  * Offense rank 1 = scores the most. `tier` is 0–4 from the point of view of
  * the player using the matchup: 0 = red (worst) … 4 = dark green (best),
  * about 6–7 teams per tier.
+ *
+ * v2.9 row fields (getTable), in addition to team/rank/tier/value/raw/games/weight:
+ *   last4, last4Games, last4Prev, last4Rank  — raw (never schedule-adjusted, never
+ *       mode-dependent) average points per game over the team's 4 most recent games
+ *       (scored for offense, allowed for defense; same scoring profile and unit as
+ *       `value`). Uses this season's games first and reaches into last season's tail
+ *       only if fewer than 4 were played this season (last4Prev = true if any did).
+ *       last4Rank is 1-32 in the same direction as `rank` (def: fewest allowed = 1,
+ *       off: most scored = 1).
+ *   ros, rosGames, rosRank — rest-of-season expected points per game; only when the
+ *       adjusted setting is on (otherwise null; see rosNote). Definition:
+ *
+ *       Additive model: value(one team game) = leagueAvg + off_rating(offense team)
+ *                                                       + def_rating(opposing defense)
+ *       where a rating is a DEVIATION from leagueAvg, i.e. (schedule-adjusted level
+ *       from the SRS iteration) - leagueAvg. (The adjusted levels are recentred ON
+ *       leagueAvg, so the deviation is level - leagueAvg; using the raw level would
+ *       count leagueAvg three times.)
+ *         OFFENSE row: ros = leagueAvg + off_dev(team) + mean over REMAINING opponents of def_dev(opp)
+ *         DEFENSE row: ros = leagueAvg + def_dev(team) + mean over REMAINING opponents of off_dev(opp)
+ *       Remaining = games in weeks currentWeek..18 (currentWeek = Sleeper's NFL week,
+ *       the same notion ensureLoaded uses) that have not already been played (a game
+ *       whose stats are already loaded is not remaining). Bye weeks add no game.
+ *       rosGames = number of remaining games; null ros when there are none.
  */
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
 const URLS = ["https://api.sleeper.com/stats/nfl", "https://api.sleeper.app/stats/nfl"];
@@ -44,7 +72,12 @@ const REG_WEEKS = 18;
 export const PREV_WEIGHT_GAMES = 3;
 const CURRENT_WEEK_REFRESH_MS = 55 * 60 * 1000;
 const CORRECTION_WINDOW_MS = 9 * 24 * 3600 * 1000; // stat corrections: re-pull finished weeks daily for ~9 days
-const MODES = ["blended", "current", "last4"];
+const MODES = ["blended", "current", "last4"]; // "last4" is accepted for compatibility only
+const UI_MODE = (m) => (m === "last4" ? "blended" : m); // v2.9: the last4 sample mode left the UI
+const ROS_THROUGH_WEEK = REG_WEEKS;
+const ROS_TTL_MS = 6 * 3600 * 1000;
+const ROS_FAIL_TTL_MS = 5 * 60 * 1000;
+const ROS_CONCURRENCY = 3;
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS dvp_stats (
@@ -281,6 +314,12 @@ const wavg = (list, f) => {
   return den > 0 ? num / den : null;
 };
 const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
+/** Writes 1-based `rankKey` onto rows by `key` (def: low first, off: high first; null keys get null). */
+function rankBy(list, key, rankKey, side) {
+  const ok = list.filter((x) => x[key] != null).sort((a, b) => (side === "def" ? a[key] - b[key] : b[key] - a[key]) || a.team.localeCompare(b.team));
+  ok.forEach((x, i) => (x[rankKey] = i + 1));
+  for (const x of list) if (x[key] == null) x[rankKey] = null;
+}
 export function tierFor(rank, n, side) {
   const band = Math.min(4, Math.floor(((rank - 1) * 5) / Math.max(1, n)));
   return side === "def" ? band : 4 - band;
@@ -316,13 +355,35 @@ export function computeRankings(games, { season, mode = "blended", adjusted = fa
         offAdj = recentre(no);
       }
     }
+    // v2.9: last-4-games window, raw, from every loaded game of this season and last
+    // (independent of mode): most recent first, this season before last season.
+    const allPos = games.filter((g) => g.pos === pos && (g.season === season || g.season === season - 1));
+    const last4Of = (side) => {
+      const by = new Map();
+      for (const g of allPos) {
+        const t = side === "def" ? g.opp : g.team;
+        if (!by.has(t)) by.set(t, []);
+        by.get(t).push(g);
+      }
+      const o = new Map();
+      for (const [t, list] of by) {
+        const s4 = [...list].sort((a, b) => b.season - a.season || b.week - a.week).slice(0, 4);
+        o.set(t, { avg: s4.reduce((a, g) => a + g.pts, 0) / s4.length, n: s4.length, prev: s4.some((g) => g.season < season) });
+      }
+      return o;
+    };
     const rank = (m, raw, side, samp) => {
-      const list = [...m].map(([team, value]) => ({ team, value: r2(value), raw: r2(raw.get(team)), games: samp.get(team)?.length || 0, weight: r2(samp.get(team)?.reduce((a, x) => a + x.w, 0) || 0) }));
+      const l4 = last4Of(side);
+      const list = [...m].map(([team, value]) => {
+        const f = l4.get(team);
+        return { team, value: r2(value), raw: r2(raw.get(team)), games: samp.get(team)?.length || 0, weight: r2(samp.get(team)?.reduce((a, x) => a + x.w, 0) || 0), last4: f ? r2(f.avg) : null, last4Games: f ? f.n : 0, last4Prev: f ? f.prev : false };
+      });
       list.sort((a, b) => (side === "def" ? a.value - b.value : b.value - a.value) || a.team.localeCompare(b.team));
       list.forEach((x, i) => {
         x.rank = i + 1;
         x.tier = tierFor(i + 1, list.length, side);
       });
+      rankBy(list, "last4", "last4Rank", side);
       return list;
     };
     result.leagueAvg[pos] = r2(L);
@@ -337,19 +398,112 @@ export function computeRankings(games, { season, mode = "blended", adjusted = fa
 export const DEFAULT_SETTINGS = { mode: "blended", adjusted: false };
 export function getSettings(username) {
   const s = store.getState(`dvp_settings:${username}`, {}) || {};
-  return { mode: MODES.includes(s.mode) ? s.mode : DEFAULT_SETTINGS.mode, adjusted: Boolean(s.adjusted) };
+  return { mode: MODES.includes(s.mode) ? UI_MODE(s.mode) : DEFAULT_SETTINGS.mode, adjusted: Boolean(s.adjusted) };
 }
+// A legacy "last4" mode is accepted and stored as "blended".
 export function saveSettings(username, input = {}) {
   const cur = getSettings(username);
-  const next = { mode: MODES.includes(input.mode) ? input.mode : cur.mode, adjusted: input.adjusted != null ? Boolean(input.adjusted) : cur.adjusted };
+  const next = { mode: MODES.includes(input.mode) ? UI_MODE(input.mode) : cur.mode, adjusted: input.adjusted != null ? Boolean(input.adjusted) : cur.adjusted };
   store.setState(`dvp_settings:${username}`, next);
   return next;
 }
 
 /* ---------------- API ---------------- */
-async function currentSeason() {
+async function nflState() {
   const nfl = await sleeper.getState().catch(() => null);
-  return Number(nfl?.season) || new Date().getFullYear();
+  return { season: Number(nfl?.season) || new Date().getFullYear(), week: Number(nfl?.week ?? nfl?.display_week ?? 0) || 0, seasonType: nfl?.season_type || "regular" };
+}
+async function currentSeason() {
+  return (await nflState()).season;
+}
+
+/* ---------------- remaining schedule (rest-of-season) ---------------- */
+async function fetchPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+      }
+    })
+  );
+  return out;
+}
+const rosInflight = new Map();
+/**
+ * { [week]: { [TEAM]: OPP } } for weeks fromWeek..18 (bye teams absent), or null if
+ * any week could not be fetched. Cached 6h per season+currentWeek; a failure is
+ * remembered for 5 minutes so a dead ESPN doesn't get hammered on every request.
+ */
+export async function remainingSchedule(season, fromWeek) {
+  if (fromWeek > ROS_THROUGH_WEEK) return {};
+  const key = `dvp-remaining:${season}-${fromWeek}`;
+  const hit = cacheGet(key);
+  if (hit) return hit;
+  if (cacheGet(`${key}:fail`)) return null;
+  if (rosInflight.has(key)) return rosInflight.get(key);
+  const p = (async () => {
+    const weeks = [];
+    for (let w = fromWeek; w <= ROS_THROUGH_WEEK; w++) weeks.push(w);
+    try {
+      const res = await fetchPool(weeks, ROS_CONCURRENCY, async (w) => {
+        const s = await schedule.getWeekSchedule(season, w);
+        // A week with no games, or one ESPN answered for a different week, is a bad
+        // fetch, not a league-wide bye: using it would silently bias every ros.
+        const entries = Object.entries(s?.byTeam || {});
+        if (!entries.length || (s.weekNumber != null && Number(s.weekNumber) !== w)) throw new Error(`no usable schedule for week ${w}`);
+        const m = {};
+        for (const [t, g] of entries) if (g?.opponent) m[normTeam(t)] = normTeam(g.opponent);
+        return [w, m];
+      });
+      const byWeek = Object.fromEntries(res);
+      cacheSet(key, byWeek, ROS_TTL_MS);
+      return byWeek;
+    } catch (err) {
+      console.warn(`[dvp] remaining schedule unavailable: ${err.message}`);
+      cacheSet(`${key}:fail`, true, ROS_FAIL_TTL_MS);
+      return null;
+    }
+  })().finally(() => rosInflight.delete(key));
+  rosInflight.set(key, p);
+  return p;
+}
+
+/** team -> [remaining opponents], skipping byes and games already played (`played` = Set of `${week}|${team}`). */
+export function remainingOpponents(byWeek, played = new Set()) {
+  const out = new Map();
+  for (const w of Object.keys(byWeek).map(Number).sort((a, b) => a - b)) {
+    for (const [t, opp] of Object.entries(byWeek[w])) {
+      if (played.has(`${w}|${t}`)) continue;
+      if (!out.has(t)) out.set(t, []);
+      out.get(t).push(opp);
+    }
+  }
+  return out;
+}
+
+/** Adds ros / rosGames / rosRank to (copies of) the rows of an ADJUSTED computeRankings result. See the file header for the definition. */
+export function applyRos(res, oppsByTeam) {
+  const out = { offense: {}, defense: {} };
+  for (const pos of POSITIONS) {
+    const R = res.ratings[pos];
+    const L = R.L;
+    const dev = (m, t) => (m.get(t) == null ? 0 : m.get(t) - L);
+    for (const side of ["offense", "defense"]) {
+      const own = side === "offense" ? R.offAdj : R.defAdj;
+      const other = side === "offense" ? R.defAdj : R.offAdj;
+      const list = res[side][pos].map((r) => {
+        const opps = oppsByTeam.get(r.team) || [];
+        const ros = opps.length ? r2(L + dev(own, r.team) + opps.reduce((a, o) => a + dev(other, o), 0) / opps.length) : null;
+        return { ...r, ros, rosGames: opps.length };
+      });
+      rankBy(list, "ros", "rosRank", side === "offense" ? "off" : "def");
+      out[side][pos] = list;
+    }
+  }
+  return out;
 }
 function profileFor(key) {
   const profiles = store.listProfiles();
@@ -368,14 +522,39 @@ function computed(prof, season, mode, adjusted) {
 /** Rankings table for one scoring profile with the user's (or given) mode/adjusted. */
 export async function getTable(username, { profile, mode, adjusted } = {}) {
   const settings = getSettings(username);
-  const m = MODES.includes(mode) ? mode : settings.mode;
+  const m = MODES.includes(mode) ? UI_MODE(mode) : settings.mode;
   const adj = adjusted != null ? adjusted === true || adjusted === "1" || adjusted === "true" : settings.adjusted;
-  const season = await currentSeason();
+  const nfl = await nflState();
+  const season = nfl.season;
   const { prof, profiles } = profileFor(profile);
   const base = { season, mode: m, adjusted: adj, settings, profiles: profiles.map((p) => ({ profile: p.profile, label: p.label })), loaded: loadedWeeks().filter((w) => w.season >= season - 1) };
   if (!prof) return { ...base, profile: null, note: "No scoring profiles yet — open your leagues once so the app knows your scoring." };
   const res = computed(prof, season, m, adj);
-  return { ...base, profile: prof.profile, profileLabel: prof.label, leagueAvg: res.leagueAvg, defense: res.defense, offense: res.offense, updatedAt: Date.now() };
+  // Rest-of-season (only when schedule-adjusted). Fresh row copies: `res` is cached and shared.
+  const blank = (list) => list.map((r) => ({ ...r, ros: null, rosGames: null, rosRank: null }));
+  let offense = {}, defense = {};
+  for (const pos of POSITIONS) {
+    offense[pos] = blank(res.offense[pos]);
+    defense[pos] = blank(res.defense[pos]);
+  }
+  let rosNote = "Rest-of-season expectation needs the schedule-adjusted rating turned on.";
+  if (adj) {
+    const fromWeek = nfl.seasonType === "pre" || !(nfl.week >= 1) ? 1 : nfl.seasonType === "post" ? ROS_THROUGH_WEEK + 1 : nfl.week;
+    if (fromWeek > ROS_THROUGH_WEEK) rosNote = "No regular-season games remain.";
+    else {
+      const byWeek = await remainingSchedule(season, fromWeek);
+      if (!byWeek) rosNote = "Remaining schedule unavailable right now, so rest-of-season numbers are off. Try again shortly.";
+      else {
+        const played = new Set();
+        for (const g of teamGames(prof.profile, prof.settings)) if (g.season === season && g.week >= fromWeek) played.add(`${g.week}|${g.team}`).add(`${g.week}|${g.opp}`);
+        const r = applyRos(res, remainingOpponents(byWeek, played));
+        offense = r.offense;
+        defense = r.defense;
+        rosNote = null;
+      }
+    }
+  }
+  return { ...base, profile: prof.profile, profileLabel: prof.label, leagueAvg: res.leagueAvg, defense, offense, rosNote, rosThroughWeek: ROS_THROUGH_WEEK, updatedAt: Date.now() };
 }
 
 /** The sample behind one team's number: which games, opponents, points, opponent strength and adjustment. */

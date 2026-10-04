@@ -31,6 +31,9 @@ import * as pickem from "./pickem.js";
 import * as dvp from "./dvp.js";
 import * as weather from "./weather.js";
 import { getImage } from "./images.js";
+import * as varianceAcks from "./varianceAcks.js";
+import * as waiverPlan from "./waiverPlan.js";
+import * as gemini from "./gemini.js";
 import * as tank01 from "./tank01.js";
 import { getLastSummary } from "./projectionHub.js";
 import { simulateSeason } from "./simulate.js";
@@ -330,6 +333,9 @@ app.use("/api/push", requireAuth);
 app.use("/api/dvp", requireAuth);
 app.use("/api/weather", requireAuth);
 app.use("/api/img", requireAuth);
+app.use("/api/variances", requireAuth);
+app.use("/api/waiver-plan", requireAuth);
+app.use("/api/trade", requireAuth);
 
 // Step 1: the logged-in user's Sleeper account -> their leagues for the
 // current season. (v2.1: the username comes from the login, not from a form
@@ -357,10 +363,29 @@ app.get("/api/connect", async (req, res) => {
   }
 });
 
+// v2.9: the last saved build for the user's tracked leagues, straight from
+// SQLite — no Sleeper calls — so the app can paint instantly at open while
+// the live build runs in the background.
+app.get("/api/leagues/cached", (req, res) => {
+  const username = req.user.username;
+  const st = getUserState(username);
+  if (!st || !st.leagueIds.length) return res.json({ leagues: [], week: null, leagueIds: [] });
+  const leagues = [];
+  for (const id of st.leagueIds) {
+    const c = getBuiltLeague(username, id);
+    if (c) leagues.push({ ...c.data, customRanking: getRankingOrder(username, id), fromCache: true, cachedAt: c.updatedAt });
+  }
+  res.json({ leagues, week: leagues[0]?.week ?? st.week ?? null, leagueIds: st.leagueIds });
+});
+
 // Step 2: build (or rebuild, on refresh, or on a week change) the
 // selected leagues with real Sleeper + real Sleeper/ESPN projections + FantasyPros rankings merged in.
+// v2.9: `leagueIds` are the leagues to build NOW (the client can ask for one
+// at a time and show each as it arrives); `trackedIds` is the full tracked
+// list to remember (defaults to leagueIds). Results are merged into the
+// session, not replaced.
 app.post("/api/leagues/build", async (req, res) => {
-  const { sessionId, leagueIds, week } = req.body || {};
+  const { sessionId, leagueIds, week, trackedIds } = req.body || {};
   const session = ownSession(req, res, sessionId);
   if (!session) return;
   if (!Array.isArray(leagueIds) || leagueIds.length === 0) {
@@ -370,15 +395,15 @@ app.post("/api/leagues/build", async (req, res) => {
   if (Number.isInteger(week) && week >= 1 && week <= 22) {
     session.week = week;
   }
-  session.trackedLeagueIds = leagueIds;
+  const tracked = Array.isArray(trackedIds) && trackedIds.length ? trackedIds : leagueIds;
+  session.trackedLeagueIds = tracked;
 
   try {
     const chosen = session.leaguesRaw.filter((l) => leagueIds.includes(l.league_id));
-    const trending = await sleeper.getTrendingAdds(60, 24);
+    const trending = await sleeper.getTrendingAdds(200, 24);
     const built = [];
-    // Sequential, not Promise.all — FantasyPros' free/personal tiers have
-    // modest rate limits, and this keeps errors attributable to one league
-    // instead of Promise.all's all-or-nothing rejection.
+    // Sequential within one request — FantasyPros' free/personal tiers have
+    // modest rate limits, and this keeps errors attributable to one league.
     for (const leagueSummary of chosen) {
       try {
         const league = await buildFullLeague(session.userId, leagueSummary, session.week, trending, session.builtLeagues);
@@ -397,14 +422,48 @@ app.post("/api/leagues/build", async (req, res) => {
         }
       }
     }
-    session.builtLeagues = built.filter((l) => !l.error);
-    setUserState(req.user.username, leagueIds, session.week);
+    const keep = (session.builtLeagues || []).filter((l) => !leagueIds.includes(l.id));
+    session.builtLeagues = [...keep, ...built.filter((l) => !l.error)];
+    setUserState(req.user.username, tracked, session.week);
     // The user's drag-ordered Player Rankings override rides along with each
     // league (it's per user, so it's attached here, not stored in the shared build cache).
     const withRankings = built.map((l) => (l.error ? l : { ...l, customRanking: getRankingOrder(req.user.username, l.id) }));
     res.json({ leagues: withRankings, week: session.week });
   } catch (err) {
     res.status(502).json({ error: err.message || "Couldn't build leagues." });
+  }
+});
+
+/* ---------------- Waiver plan (v2.9): bids, drop ranking, claim edits ---------------- */
+app.get("/api/waiver-plan", (req, res) => {
+  const leagueId = String(req.query.leagueId || "");
+  if (!leagueId) return res.status(400).json({ error: "leagueId is required." });
+  res.json(waiverPlan.getPlan(req.user.username, leagueId));
+});
+app.post("/api/waiver-plan", (req, res) => {
+  const leagueId = String(req.body?.leagueId || "");
+  if (!leagueId) return res.status(400).json({ error: "leagueId is required." });
+  res.json(waiverPlan.savePlan(req.user.username, leagueId, req.body?.plan));
+});
+
+/* ---------------- Trade advice (v2.9): Gemini news check on Trade Finder swaps ---------------- */
+app.post("/api/trade/advice", async (req, res) => {
+  const { sessionId, leagueId, force } = req.body || {};
+  const session = ownSession(req, res, sessionId);
+  if (!session) return;
+  const lg = (session.builtLeagues || []).find((l) => l.id === leagueId);
+  if (!lg) return res.status(400).json({ error: "That league hasn't been built yet — refresh first." });
+  if (!gemini.isConfigured()) return res.json({ configured: false, byKey: {}, sources: [] });
+  const items = (lg.tradeFinder || []).slice(0, 10).map((t) => ({
+    key: `${t.give.name} > ${t.get.name}`,
+    give: { name: t.give.name, pos: t.give.pos },
+    get: { name: t.get.name, pos: t.get.pos },
+  }));
+  try {
+    const out = await gemini.tradeNews(lg.season || new Date().getFullYear(), lg.week, items, { force: Boolean(force) });
+    res.json({ configured: true, at: out?.at ?? null, byKey: out?.byKey ?? {}, sources: out?.sources ?? [] });
+  } catch (err) {
+    res.json({ configured: true, error: err.message, byKey: {}, sources: [] });
   }
 });
 
@@ -495,7 +554,8 @@ app.get("/api/accuracy", (req, res) => {
       season: Number(q.season) || new Date().getFullYear(),
       weekFrom: Number(q.weekFrom) || 1,
       weekTo: Number(q.weekTo) || 18,
-      pos: q.pos && q.pos !== "ALL" ? String(q.pos) : undefined,
+      // v2.9: multi-select positions as "QB,RB" ("ALL" or empty = every fantasy position)
+      positions: q.positions && q.positions !== "ALL" ? String(q.positions).split(",").map((x) => x.trim().toUpperCase()).filter(Boolean) : undefined,
       sameOnly: q.sameOnly === "1" || q.sameOnly === "true",
       adjusted: q.adjusted === "1" || q.adjusted === "true",
     });
@@ -553,6 +613,14 @@ app.get("/api/dvp/detail", async (req, res) => {
 });
 app.get("/api/dvp/settings", (req, res) => res.json(dvp.getSettings(req.user.username)));
 app.post("/api/dvp/settings", (req, res) => res.json(dvp.saveSettings(req.user.username, req.body || {})));
+
+/* ---------------- Variance report: cleared minors (v2.8.1) ---------------- */
+app.get("/api/variances/acks", (req, res) => res.json({ keys: varianceAcks.getAcks(req.user.username) }));
+app.post("/api/variances/ack", (req, res) => res.json({ keys: varianceAcks.addAcks(req.user.username, req.body?.keys) }));
+app.post("/api/variances/prune", (req, res) => {
+  const { leagueIds, week, present } = req.body || {};
+  res.json({ keys: varianceAcks.prune(req.user.username, { leagueIds, week, present }) });
+});
 
 /* ---------------- Weather (v2.8) ---------------- */
 app.get("/api/weather", async (req, res) => {

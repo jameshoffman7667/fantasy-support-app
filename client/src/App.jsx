@@ -35,8 +35,9 @@ import {
   X,
 } from "lucide-react";
 import * as api from "./api.js";
+import { claimKey, generateClaims, effectiveClaims, groupClaims, flatten, simulate, toDollars, fromDollars, setBid, syncDrops, describeClaim, resetClaims } from "./waiverPlan.js";
 import { effectiveLineup, isZeroProjection, GROUP_LABEL, hasStarted } from "./lineup.js";
-import { applyAcks, collectVariances, groupTree, minorKeys, PAGE_LABEL } from "./variances.js";
+import { applyAcks, collectVariances, groupTree, minorKeys, autoClearKeys, PAGE_LABEL } from "./variances.js";
 
 /* ------------------------------------------------------------------ */
 /*  DESIGN TOKENS                                                     */
@@ -98,9 +99,19 @@ function computeRoster(league) {
     starterRows[posIdx].issues.push(iss("Flex lock order", "major", `Later kickoff than ${slot}'s ${flexPlayer.name} — swap these two to preserve flexibility.`));
   });
 
-  const benchRows = league.bench.map((p) => {
+  // v2.9: Sleeper only lists players, so pad the bench with empty slots up to
+  // the league's bench size (this is what makes "Open bench slot" appear).
+  const benchList = [...(league.bench || [])];
+  if (Number.isFinite(league.benchSlots)) while (benchList.length < league.benchSlots) benchList.push(null);
+  // v2.9: an IR-eligible bench player is only worth flagging when there is an
+  // open IR slot to move him into. Unknown IR size -> flag as before.
+  const openIr = Number.isFinite(league.irSlots) ? league.irSlots - (league.ir || []).length : null;
+  const benchRows = benchList.map((p) => {
     if (!p) return { slot: "BN", label: "(empty)", issues: [iss("Open bench slot", "minor", "Open bench slot — consider a waiver add")] };
-    if (p.irEligible) return { slot: "BN", label: p.name, issues: [iss("IR-eligible on bench", "minor", "IR-eligible — move to an empty IR slot")], usage: p.usage };
+    if (p.irEligible) {
+      if (openIr == null || openIr > 0) return { slot: "BN", label: p.name, issues: [iss("IR-eligible on bench", "minor", "IR-eligible — move to an empty IR slot")], usage: p.usage };
+      return { slot: "BN", label: p.name, issues: [], note: "IR-eligible, but there is no open IR slot", usage: p.usage };
+    }
     return { slot: "BN", label: p.name, issues: [], usage: p.usage };
   });
   const irRows = (league.ir || []).map((p) => ({ slot: "IR", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
@@ -127,30 +138,52 @@ function computeLineup(league) {
   return effectiveLineup(league);
 }
 
-function rankThreshold(pos, superflex) {
-  if (pos === "QB") return superflex ? 36 : 24;
-  if (pos === "RB" || pos === "WR") return 48;
-  if (pos === "TE") return 24;
-  return 0;
-}
-
+// v2.9: waiver flags are by projection, not ECR or "trending":
+//  - red:    a free agent projected higher than one of your current starters in
+//            a slot he could fill (flex included) — you'd start him;
+//  - yellow: a free agent projected higher than a bench player at his position.
+// Trending is shown on the card but no longer flags anything.
 function computeWaiver(league, allLeagues) {
+  const eligible = (slot, pos) => (FLEX_ELIGIBLE[slot] ? FLEX_ELIGIBLE[slot].includes(pos) : slot === pos);
+  const projOf = (p) => (p && p.proj != null ? p.proj : 0);
   const rows = (league.freeAgents || []).map((fa) => {
-    const rankHit = fa.ecr != null && fa.ecr <= rankThreshold(fa.pos, league.superflex);
-    const trendHit = fa.trending;
-    const severity = rankHit && trendHit ? "major" : rankHit || trendHit ? "minor" : "ok";
+    let rule = null;
+    let note = null;
+    let severity = "ok";
+    if (fa.proj != null) {
+      const slots = (league.starters || []).filter((s) => eligible(s.slot, fa.pos));
+      const weakest = slots.length ? slots.reduce((m, s) => (projOf(s.player) < projOf(m.player) ? s : m)) : null;
+      if (weakest && fa.proj > projOf(weakest.player)) {
+        rule = "Free agent outprojects a starter";
+        severity = "major";
+        note = `projected ${fa.proj.toFixed(1)} vs ${weakest.player ? weakest.player.name : "(empty)"} ${projOf(weakest.player).toFixed(1)} at ${weakest.slot}`;
+      } else {
+        const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos);
+        const weakBench = bench.length ? bench.reduce((m, p) => (projOf(p) < projOf(m) ? p : m)) : null;
+        if (weakBench && fa.proj > projOf(weakBench)) {
+          rule = "Free agent outprojects a bench player";
+          severity = "minor";
+          note = `projected ${fa.proj.toFixed(1)} vs bench ${weakBench.name} ${projOf(weakBench).toFixed(1)}`;
+        }
+      }
+    }
     const crossLeagues = allLeagues
       .filter((l) => l.id !== league.id && !l.error)
-      .filter((l) => (l.freeAgents || []).some((x) => x.name === fa.name))
+      .filter((l) => (l.freeAgents || []).some((x) => x.id === fa.id || x.name === fa.name))
       .map((l) => l.name);
-    return { ...fa, rankHit, trendHit, severity, crossLeagues };
+    return { ...fa, rule, note, severity, crossLeagues };
   });
   return { rows, status: worst(rows.map((r) => r.severity)) };
 }
 
+// v2.9: a big-gap opportunity is yellow and clears itself once the page has
+// been viewed and left; a smaller one is listed but is not a variance.
 function computeTrade(league) {
-  const rows = league.tradeSuggestions || [];
-  return { rows, status: rows.length ? worst(rows.map((t) => t.severity)) : "ok" };
+  const rows = (league.tradeSuggestions || []).map((t) => {
+    const big = t.severity === "major";
+    return { ...t, bigGap: big, severity: big ? "minor" : "ok", auto: big };
+  });
+  return { rows, status: worst(rows.map((t) => t.severity)) };
 }
 
 // Injury Watch now persists: every currently-injured player shows up
@@ -170,15 +203,16 @@ function computeInjury(league) {
 function StatusBadge({ status, label, onClick, compact }) {
   const s = STATUS[status];
   const Icon = s.Icon;
+  const Tag = onClick ? "button" : "span"; // a plain badge inside an already-clickable row must not be a nested button
   return (
-    <button
+    <Tag
       onClick={onClick}
       style={{ background: s.bg, color: s.color, border: `1px solid ${s.color}33` }}
       className={`flex items-center gap-1 rounded-md ${compact ? "px-1.5 py-1" : "px-2.5 py-1.5"} shrink-0`}
     >
       <Icon size={14} strokeWidth={2.3} />
       {label && <span className="text-xs font-medium" style={{ fontFamily: "Inter, sans-serif" }}>{label}</span>}
-    </button>
+    </Tag>
   );
 }
 
@@ -568,7 +602,9 @@ function VarianceButton({ variances, onOpen, compact = false, label = "Variance 
 const worstSev = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
 
 function VarianceReportModal({ title, variances, onClear, onClose }) {
-  const [open, setOpen] = useState(() => new Set()); // default: everything collapsed
+  // v2.9: opens fully expanded (collapse is still one tap away). Groups that
+  // appear later (a new league/page/rule) also open, unless the user collapsed them.
+  const [collapsed, setCollapsed] = useState(() => new Set());
   const [showCleared, setShowCleared] = useState(false);
   const [clearing, setClearing] = useState(false);
   const shown = showCleared ? variances : variances.filter((v) => !v.cleared);
@@ -583,8 +619,9 @@ function VarianceReportModal({ title, variances, onClear, onClose }) {
       p.rules.forEach((r) => allIds.push(`R:${l.id}:${p.page}:${r.rule}`));
     });
   });
+  const open = { has: (id) => !collapsed.has(id) };
   const toggle = (id) =>
-    setOpen((prev) => {
+    setCollapsed((prev) => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id);
       else n.add(id);
@@ -612,10 +649,10 @@ function VarianceReportModal({ title, variances, onClear, onClose }) {
   return (
     <Modal title={title} onClose={onClose}>
       <div className="flex items-center gap-1.5 flex-wrap mb-2">
-        <button onClick={() => setOpen(new Set(allIds))} style={{ color: C.brand, border: `1px solid ${C.brand}55` }} className="text-[11px] rounded-md px-2 py-1">
+        <button onClick={() => setCollapsed(new Set())} style={{ color: C.brand, border: `1px solid ${C.brand}55` }} className="text-[11px] rounded-md px-2 py-1">
           Expand all
         </button>
-        <button onClick={() => setOpen(new Set())} style={{ color: C.brand, border: `1px solid ${C.brand}55` }} className="text-[11px] rounded-md px-2 py-1">
+        <button onClick={() => setCollapsed(new Set(allIds))} style={{ color: C.brand, border: `1px solid ${C.brand}55` }} className="text-[11px] rounded-md px-2 py-1">
           Collapse all
         </button>
         <button
@@ -869,25 +906,31 @@ function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues,
       <div className="space-y-3">
         {computed.map((lg) => (
           <div key={lg.id} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg overflow-hidden">
-            <button onClick={() => onOpenLeague(lg.id)} className="w-full flex items-center justify-between px-4 py-3">
-              <div className="text-left min-w-0">
-                <div style={{ fontFamily: "Oswald, sans-serif", fontWeight: 600, color: C.text }} className="text-[15px] truncate">{lg.name}</div>
+            <div className="flex items-center justify-between gap-2 px-4 py-3">
+              <button onClick={() => onOpenLeague(lg.id)} className="text-left min-w-0 flex-1" data-league-open={lg.id}>
+                <div className="flex items-center gap-1 min-w-0">
+                  <span style={{ fontFamily: "Oswald, sans-serif", fontWeight: 600, color: C.text }} className="text-[15px] truncate">{lg.name}</span>
+                  <ChevronRight size={16} style={{ color: C.textFaint }} className="shrink-0" />
+                </div>
                 <div className="text-xs truncate" style={{ color: C.textMuted }}>
                   {lg.error ? "Failed to load" : lg.teamName || "—"}
                 </div>
-              </div>
-              <ChevronRight size={18} style={{ color: C.textFaint }} className="shrink-0" />
-            </button>
+              </button>
+              {!lg.error && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => onOpenTab(lg.id, "odds")} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="text-[11px] rounded-full px-2 py-1 flex items-center gap-1 shrink-0">
+                    <Trophy size={11} />
+                    Outlook
+                  </button>
+                  <VarianceButton compact variances={lg.variances || []} onOpen={() => onOpenVariances({ leagueId: lg.id })} />
+                </div>
+              )}
+            </div>
             {!lg.error && (
-              <div className="flex items-center gap-1 flex-wrap px-4 pb-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.border}` }}>
+              <div className="flex items-center gap-1 flex-nowrap overflow-x-auto px-4 pb-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.border}` }} data-badge-row={lg.id}>
                 {STATUS_BADGE_TABS.map((key) => (
                   <StatusBadge key={key} status={lg[key].status} label={TAB_META[key].short} compact onClick={() => onOpenTab(lg.id, key)} />
                 ))}
-                <button onClick={() => onOpenTab(lg.id, "odds")} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="text-[11px] rounded-full px-2 py-1 flex items-center gap-1 shrink-0">
-                  <Trophy size={11} />
-                  Outlook
-                </button>
-                <VarianceButton compact variances={lg.variances || []} onOpen={() => onOpenVariances({ leagueId: lg.id })} />
               </div>
             )}
           </div>
@@ -1014,6 +1057,7 @@ function RosterTab({ league }) {
           <div style={{ color: C.text }} className="text-sm font-medium truncate">{r.label}</div>
           {r.kickoffLabel && <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{r.kickoffLabel}</div>}
           {r.reason && <div style={{ color: s.color }} className="text-xs mt-0.5">{r.reason}</div>}
+          {r.note && !r.reason && <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{r.note}</div>}
           {r.usage && <div className="mt-1"><UsageBadge usage={r.usage} /></div>}
         </div>
         <s.Icon size={16} style={{ color: s.color }} className="shrink-0 mt-0.5" />
@@ -1506,17 +1550,182 @@ function LineupTab({ league, onSaveRanking }) {
   );
 }
 
-function FaabPanel({ sessionId, leagueId }) {
-  const [state, setState] = useState({ loading: false, result: null, error: null });
-  const run = async () => {
-    setState({ loading: true, result: null, error: null });
-    try {
-      const result = await api.getFaabSuggestions(sessionId, leagueId);
-      setState({ loading: false, result, error: null });
-    } catch (err) {
-      setState({ loading: false, result: null, error: err.message });
+/* ------------------------------------------------------------------ */
+/*  WAIVERS (v2.9): Available page + Claims page                       */
+/* ------------------------------------------------------------------ */
+const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
+
+// Reusable vertical drag list. Items can only move inside their own list, so
+// one list per FAAB group keeps claims from being dragged between groups.
+function DragList({ items, getKey, render, onReorder, label = "Drag to reorder" }) {
+  const [live, setLive] = useState(null);
+  const [dragKey, setDragKey] = useState(null);
+  const refs = useRef(new Map());
+  const lastY = useRef(0);
+  const liveRef = useRef(null);
+  const keys = items.map(getKey);
+  const keysSig = keys.join("\n");
+  const order = live || keys;
+  const byKey = new Map(items.map((i) => [getKey(i), i]));
+  const orderRef = useRef(order);
+  orderRef.current = order;
+
+  const reorderToPointer = useCallback(() => {
+    const key = dragKey;
+    if (!key) return;
+    const cur = liveRef.current || orderRef.current;
+    const without = cur.filter((k) => k !== key);
+    let idx = 0;
+    for (const k of without) {
+      const el = refs.current.get(k);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (lastY.current > r.top + r.height / 2) idx++;
+      else break;
     }
+    const next = [...without.slice(0, idx), key, ...without.slice(idx)];
+    if (next.some((k, i) => k !== cur[i])) {
+      liveRef.current = next;
+      setLive(next);
+    }
+  }, [dragKey]);
+
+  useEffect(() => {
+    if (!dragKey) return undefined;
+    const onMove = (e) => {
+      lastY.current = e.clientY;
+      reorderToPointer();
+    };
+    const onUp = () => {
+      const result = liveRef.current;
+      liveRef.current = null;
+      setLive(null);
+      setDragKey(null);
+      if (result && result.join("\n") !== keysSig) onReorder(result);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    let raf;
+    const tick = () => {
+      const y = lastY.current;
+      if (y < 90) window.scrollBy(0, -14);
+      else if (y > window.innerHeight - 90) window.scrollBy(0, 14);
+      reorderToPointer();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      cancelAnimationFrame(raf);
+    };
+  }, [dragKey, reorderToPointer, onReorder, keysSig]);
+
+  const handleFor = (key) => ({
+    onPointerDown: (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      e.preventDefault();
+      lastY.current = e.clientY;
+      liveRef.current = null;
+      setDragKey(key);
+    },
+    onKeyDown: (e) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      const from = keys.indexOf(key);
+      const to = from + (e.key === "ArrowUp" ? -1 : 1);
+      if (from < 0 || to < 0 || to >= keys.length) return;
+      const next = [...keys];
+      next.splice(from, 1);
+      next.splice(to, 0, key);
+      onReorder(next);
+    },
+    "aria-label": `${label}. Or use the up and down arrow keys.`,
+  });
+
+  return (
+    <div className="space-y-1.5">
+      {order.map((k) => {
+        const item = byKey.get(k);
+        if (!item) return null;
+        return (
+          <div key={k} ref={(el) => (el ? refs.current.set(k, el) : refs.current.delete(k))}>
+            {render(item, { dragging: dragKey === k, handleProps: handleFor(k) })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DragHandle({ handleProps, dragging }) {
+  return (
+    <button type="button" {...handleProps} data-drag-handle style={{ touchAction: "none", cursor: dragging ? "grabbing" : "grab", color: C.textFaint }} className="p-1 -ml-1 shrink-0">
+      <GripVertical size={18} />
+    </button>
+  );
+}
+
+// A bid box: type dollars or a % of the budget; empty removes the claim, 0 is a real bid.
+function BidBox({ dollars, mode, budget, onCommit, width = 64, ariaLabel }) {
+  const shown = fromDollars(dollars, mode, budget);
+  const [text, setText] = useState(shown);
+  useEffect(() => setText(shown), [shown]);
+  const commit = () => {
+    const d = toDollars(text, mode, budget);
+    if (d == null && text.trim() !== "") {
+      setText(shown); // not a number — put back what was there
+      return;
+    }
+    if (d === dollars) {
+      setText(shown);
+      return;
+    }
+    onCommit(d);
   };
+  return (
+    <label className="flex items-center gap-0.5" style={{ color: C.textMuted }}>
+      {mode === "dollars" && <span className="text-xs">$</span>}
+      <input
+        inputMode="decimal"
+        value={text}
+        placeholder="bid"
+        aria-label={ariaLabel || "Bid"}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+        style={{ ...inputStyle, width }}
+        className="rounded-md px-2 py-1 text-sm outline-none text-right"
+        data-bid-input
+      />
+      {mode === "percent" && <span className="text-xs">%</span>}
+    </label>
+  );
+}
+
+function EntryModeToggle({ mode, onChange }) {
+  const b = (m, label) => (
+    <button type="button" onClick={() => onChange(m)} aria-pressed={mode === m} style={{ background: mode === m ? C.brand : "transparent", color: mode === m ? C.text : C.textMuted }} className="text-xs px-2.5 py-1">
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ border: `1px solid ${C.border}` }} className="inline-flex rounded-md overflow-hidden" role="group" aria-label="Enter bids as">
+      {b("dollars", "$")}
+      {b("percent", "% of budget")}
+    </div>
+  );
+}
+
+const fmtMoney = (n) => `$${Math.round(n)}`;
+const fmtPct = (n) => (n == null ? "—" : `${n}%`);
+const fmtWhen = (ms) => new Date(ms).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+
+function FaabPanel({ faab, onRun }) {
+  const { loading, result, error } = faab;
+  const h = result?.history;
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg px-3.5 py-3 mb-3">
       <div className="flex items-center justify-between mb-1">
@@ -1524,27 +1733,67 @@ function FaabPanel({ sessionId, leagueId }) {
           <DollarSign size={14} style={{ color: C.brand }} />
           FAAB Suggestions
         </div>
-        <button onClick={run} disabled={state.loading} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
-          {state.loading ? <Loader2 size={12} className="animate-spin" /> : null}
-          {state.loading ? "Calculating…" : "Get suggestions"}
+        <button onClick={onRun} disabled={loading} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
+          {loading ? <Loader2 size={12} className="animate-spin" /> : null}
+          {loading ? "Calculating…" : result ? "Refresh" : "Get suggestions"}
         </button>
       </div>
       <div style={{ color: C.textMuted }} className="text-[11px] mb-2">
-        Based on winning waiver bids in your tracked leagues only since last Tuesday — not platform-wide (Sleeper's API doesn't expose that). With a small league sample, treat this as a directional guide, not a real confidence interval.
+        Based on winning waiver bids in your tracked leagues over the last 21 days — not platform-wide (Sleeper's API doesn't expose that). With a small sample, treat this as a directional guide, not a confidence interval.
       </div>
-      {state.error && <div style={{ color: C.major }} className="text-xs">{state.error}</div>}
-      {state.result && state.result.note && <div style={{ color: C.textMuted }} className="text-xs">{state.result.note}</div>}
-      {state.result?.players?.length > 0 && (
-        <div className="space-y-1.5 mt-1">
-          {state.result.players.map((p, i) => (
-            <div key={i} className="flex items-center justify-between text-xs">
-              <span style={{ color: C.text }} className="truncate">{p.name} <span style={{ color: C.textFaint }}>({p.pos})</span></span>
-              <span style={{ color: C.textMuted }} className="shrink-0 ml-2 text-right">
-                70%: {state.result.budget ? `$${Math.round((state.result.budget * p.suggestion70Pct) / 100)}` : `${p.suggestion70Pct?.toFixed(0)}%`}
-                {" · "}
-                95%: {state.result.budget ? `$${Math.round((state.result.budget * p.suggestion95Pct) / 100)}` : `${p.suggestion95Pct?.toFixed(0)}%`}
-                {" "}<span style={{ color: C.textFaint }}>(n={p.sampleSize})</span>
-              </span>
+      {error && <div style={{ color: C.major }} className="text-xs">{error}</div>}
+      {result?.note && <div style={{ color: C.textMuted }} className="text-xs">{result.note}</div>}
+      {h && (h.bids.length > 0 || Object.keys(h.byPosition || {}).length > 0) && (
+        <div className="mt-1 mb-2" data-faab-history>
+          <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide mb-1">Bid history · {h.windowLabel}</div>
+          {Object.entries(h.byPosition).length > 0 && (
+            <div className="flex flex-wrap gap-1 mb-1">
+              {Object.entries(h.byPosition).map(([pos, v]) => (
+                <span key={pos} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="text-[10px] rounded px-1.5 py-0.5">
+                  {pos}: median ${v.median} ({v.medianPct}%), max ${v.max}, n={v.n}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="space-y-0.5">
+            {h.bids.map((b, i) => (
+              <div key={i} style={{ color: C.textMuted }} className="text-[11px] flex justify-between gap-2">
+                <span className="truncate">{b.playerName} <span style={{ color: C.textFaint }}>({b.pos}) · {b.leagueName}</span></span>
+                <span className="shrink-0">${b.bid} <span style={{ color: C.textFaint }}>({b.pct}%)</span></span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {result?.players?.length > 0 && <div style={{ color: C.textFaint }} className="text-[10px]">Suggested bids (70% / 95% level) appear on each player below.</div>}
+    </div>
+  );
+}
+
+function DropSummary({ league }) {
+  const d = league.dropSummary;
+  const [open, setOpen] = useState(true);
+  if (!d) return null;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg px-3.5 py-3 mb-3" data-drop-summary>
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between" aria-expanded={open}>
+        <span style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm">Dropped in the last {d.windowDays} days</span>
+        <span style={{ color: C.textFaint }} className="text-xs">{d.items.length}</span>
+      </button>
+      {open && (
+        <div className="mt-1.5 space-y-1">
+          {d.error && <div style={{ color: C.major }} className="text-xs">Couldn't load transactions: {d.error}</div>}
+          {!d.error && d.items.length === 0 && <div style={{ color: C.textMuted }} className="text-xs">No drops in this league in the last {d.windowDays} days.</div>}
+          {d.items.map((x, i) => (
+            <div key={i} className="flex items-start justify-between gap-2 text-xs">
+              <div className="min-w-0">
+                <span style={{ color: C.text }}>{x.name}</span> <span style={{ color: C.textFaint }}>({x.pos}{x.team ? ` · ${x.team}` : ""})</span>
+                <div style={{ color: C.textFaint }} className="text-[10px]">dropped by {x.teamLabel || "a team"} · {fmtWhen(x.at)}</div>
+              </div>
+              <div className="text-right shrink-0">
+                <div style={{ color: x.available ? C.ok : C.textMuted }} className="text-[11px]">{x.available ? "Available" : x.readded ? "Re-added" : "Rostered"}</div>
+                {x.proj != null && <div style={{ color: C.textFaint }} className="text-[10px]">proj {x.proj.toFixed(1)}</div>}
+              </div>
             </div>
           ))}
         </div>
@@ -1553,40 +1802,407 @@ function FaabPanel({ sessionId, leagueId }) {
   );
 }
 
+function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile }) {
+  const s = STATUS[p.severity] || STATUS.ok;
+  const bid = (plan.bids || []).find((b) => b.id === p.id);
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="relative rounded-md px-3 py-2.5 pb-4" data-fa={p.id}>
+      <div className="flex items-start gap-2.5">
+        <Headshot player={p} size={34} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-1.5 min-w-0">
+            <span style={{ color: C.text }} className="text-sm font-medium truncate">{p.name}</span>
+            <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{p.pos}{p.team ? ` · ${p.team}` : ""}</span>
+          </div>
+          <div style={{ color: C.textMuted }} className="text-xs mt-0.5">
+            {p.proj != null ? `Proj ${p.proj.toFixed(1)}` : "No projection"}
+            {p.topProj ? ` · #${p.projRank} projected at ${p.pos}` : ""}
+            {p.trending ? ` · Trending add${p.trendCount ? ` (+${p.trendCount})` : ""}` : ""}
+          </div>
+          {p.status && p.status !== "Healthy" && <div style={{ color: C.minor }} className="text-[11px]">{p.status}</div>}
+          {(p.matchup || p.weather) && (
+            <div className="flex items-center gap-1 flex-wrap mt-1">
+              <MatchupChip player={p} profile={profile} />
+              <WeatherChip player={p} />
+            </div>
+          )}
+          {p.note && p.rule && <div style={{ color: s.color }} className="text-[11px] mt-1">{p.rule === "Free agent outprojects a starter" ? "Beats a starter" : "Beats a bench player"}: {p.note}</div>}
+          {p.usage && <div className="mt-1"><UsageBadge usage={p.usage} /></div>}
+          {p.crossLeagues?.length > 0 && <div style={{ color: C.brand }} className="text-[11px] mt-1">Also available in: {p.crossLeagues.join(", ")}</div>}
+          {faabHint && (
+            <div style={{ color: C.textFaint }} className="text-[10px] mt-1">
+              Suggested bid: {fmtMoney((budget * faabHint.suggestion70Pct) / 100)} (70%) · {fmtMoney((budget * faabHint.suggestion95Pct) / 100)} (95%) · n={faabHint.sampleSize}
+              {faabHint.playerBids?.length ? ` · this player: ${faabHint.playerBids.map((b) => `$${b.bid}`).join(", ")}` : ""}
+            </div>
+          )}
+        </div>
+        <div className="shrink-0 flex flex-col items-end gap-1">
+          {isFaab ? (
+            <BidBox dollars={bid ? bid.bid : null} mode={mode} budget={budget} onCommit={(d) => onBid(p, d)} ariaLabel={`Bid for ${p.name}`} />
+          ) : (
+            <button type="button" onClick={() => onBid(p, bid ? null : 0)} style={{ color: bid ? C.ok : C.brand, border: `1px solid ${bid ? C.ok : C.brand}66` }} className="text-xs rounded-md px-2 py-1" data-claim-toggle>
+              {bid ? "Claimed ✓" : "Add claim"}
+            </button>
+          )}
+          {bid && <span style={{ color: C.ok }} className="text-[10px]">on Claims page</span>}
+        </div>
+      </div>
+      <SourceTag source={p.projSource} factor={p.projFactor} />
+    </div>
+  );
+}
+
+function AvailablePage({ league, plan, setPlan, faab, onRunFaab }) {
+  const budget = league.waiverInfo?.budget || 0;
+  const isFaab = Boolean(league.waiverInfo?.faab);
+  const mode = plan.entryMode;
+  const hints = new Map((faab.result?.players || []).map((x) => [x.name, x]));
+  const groups = POS_ORDER.map((pos) => ({
+    pos,
+    rows: (league.waiver.rows || []).filter((r) => r.pos === pos).sort((a, b) => (b.proj ?? -1) - (a.proj ?? -1)),
+  })).filter((g) => g.rows.length);
+  const onBid = (p, dollars) => setPlan((pl) => ({ ...pl, bids: setBid(pl.bids, p, dollars) }));
+  return (
+    <div>
+      {isFaab && <FaabPanel faab={faab} onRun={onRunFaab} />}
+      <DropSummary league={league} />
+      <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap">
+        <div style={{ color: C.textMuted }} className="text-xs max-w-[60%]">
+          Top 5 projected and top 5 trending free agents at each position, by projection. {isFaab ? "Enter a bid (0 counts) to add a claim." : "Tap “Add claim” to add a claim."}
+        </div>
+        {isFaab && <EntryModeToggle mode={mode} onChange={(m) => setPlan((pl) => ({ ...pl, entryMode: m }))} />}
+      </div>
+      {groups.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No notable free agents right now.</div>}
+      {groups.map((g) => (
+        <div key={g.pos} data-pos-group={g.pos}>
+          <SectionLabel>{g.pos}</SectionLabel>
+          <div className="space-y-1.5">
+            {g.rows.map((p) => (
+              <AvailableRow key={p.id || p.name} p={p} plan={plan} mode={mode} budget={budget} isFaab={isFaab} faabHint={isFaab && budget ? hints.get(p.name) : null} onBid={onBid} profile={league.scoringProfile} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ClaimRow({ c, result, mode, budget, isFaab, bench, handle, dragging, onBid, onDrop, onDelete }) {
+  const failed = result && !result.ok;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${failed ? `${C.minor}66` : C.border}`, borderLeft: `3px solid ${failed ? C.minor : C.ok}`, boxShadow: dragging ? "0 6px 18px rgba(0,0,0,0.5)" : "none", opacity: dragging ? 0.92 : 1 }} className="rounded-md px-2.5 py-2 flex items-start gap-2" data-claim={c.key}>
+      {handle}
+      <div className="min-w-0 flex-1">
+        <div style={{ color: C.text }} className="text-sm font-medium truncate">
+          {c.addName} <span style={{ color: C.textFaint }} className="text-[11px]">{c.pos}{c.source === "custom" ? " · custom" : c.edited ? " · edited" : ""}</span>
+        </div>
+        <label className="flex items-center gap-1 mt-1 text-[11px]" style={{ color: C.textMuted }}>
+          Drop
+          <select
+            value={c.dropId || ""}
+            onChange={(e) => {
+              const id = e.target.value;
+              const b = bench.find((x) => String(x.id) === id);
+              onDrop(c, id ? { dropId: id, dropName: b?.name } : { dropId: null, dropName: null });
+            }}
+            style={{ ...inputStyle, maxWidth: 170 }}
+            className="rounded px-1.5 py-0.5 text-xs outline-none"
+            aria-label={`Player to drop for ${c.addName}`}
+          >
+            <option value="">No drop</option>
+            {bench.map((b) => (
+              <option key={b.id} value={String(b.id)}>{b.name} ({b.pos})</option>
+            ))}
+          </select>
+        </label>
+        {result && <div style={{ color: result.ok ? C.ok : C.minor }} className="text-[11px] mt-1">{result.ok ? "Would succeed (if no one outbids you)" : `Would fail: ${result.reason}`}</div>}
+      </div>
+      <div className="flex flex-col items-end gap-1 shrink-0">
+        {isFaab ? <BidBox dollars={c.bid} mode={mode} budget={budget} onCommit={(d) => d != null && onBid(c, d)} width={58} ariaLabel={`Bid for ${c.addName}`} /> : null}
+        <button type="button" onClick={() => onDelete(c)} style={{ color: C.textMuted }} className="text-[11px] flex items-center gap-1" aria-label={`Delete claim for ${c.addName}`} data-claim-delete>
+          <X size={12} /> Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ClaimsPage({ league, plan, setPlan }) {
+  const budget = league.waiverInfo?.budget || 0;
+  const used = league.waiverInfo?.used || 0;
+  const isFaab = Boolean(league.waiverInfo?.faab);
+  const mode = plan.entryMode;
+  const bench = league.bench || [];
+  const openSpots = Math.max(0, (league.benchSlots ?? bench.length) - bench.length);
+
+  // Keep the drop ranking in step with the bench (new bench players go to the bottom, unticked).
+  const syncedDrops = useMemo(() => syncDrops(plan.drops, bench), [plan.drops, bench]);
+  useEffect(() => {
+    const same = syncedDrops.length === plan.drops.length && syncedDrops.every((d, i) => d.id === plan.drops[i].id && d.name === plan.drops[i].name);
+    if (!same) setPlan((pl) => ({ ...pl, drops: syncDrops(pl.drops, bench) }));
+  }, [syncedDrops, plan.drops, bench, setPlan]);
+
+  const eff = useMemo(() => effectiveClaims({ ...plan, drops: syncedDrops }, { openSpots }), [plan, syncedDrops, openSpots]);
+  const groups = useMemo(() => groupClaims(eff.claims, plan.order), [eff.claims, plan.order]);
+  const ordered = useMemo(() => flatten(groups), [groups]);
+  const sim = useMemo(() => simulate(ordered, { budget, used, openSpots }), [ordered, budget, used, openSpots]);
+  const resultByKey = new Map(sim.results.map((r) => [r.key, r]));
+
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ addId: "", dropId: "", bidText: "" });
+  const [ticked, setTicked] = useState(() => new Set());
+
+  const onBid = (c, d) => {
+    if (c.source === "custom") setPlan((pl) => ({ ...pl, custom: pl.custom.map((x) => (x.key === c.key ? { ...x, bid: d } : x)) }));
+    else setPlan((pl) => ({ ...pl, edits: { ...pl.edits, [c.key]: { ...(pl.edits[c.key] || {}), bid: d } } }));
+  };
+  const onDrop = (c, drop) => {
+    if (c.source === "custom") setPlan((pl) => ({ ...pl, custom: pl.custom.map((x) => (x.key === c.key ? { ...x, ...drop } : x)) }));
+    else setPlan((pl) => ({ ...pl, edits: { ...pl.edits, [c.key]: { ...(pl.edits[c.key] || {}), ...drop } } }));
+  };
+  const onDelete = (c) => {
+    if (c.source === "custom") setPlan((pl) => ({ ...pl, custom: pl.custom.filter((x) => x.key !== c.key) }));
+    else setPlan((pl) => ({ ...pl, removed: [...new Set([...pl.removed, c.key])] }));
+  };
+  const addCustom = () => {
+    const fa = (league.waiver.rows || []).find((r) => r.id === draft.addId);
+    const bid = toDollars(draft.bidText, mode, budget);
+    if (!fa || (isFaab && bid == null)) return;
+    const b = bench.find((x) => String(x.id) === draft.dropId);
+    setPlan((pl) => ({ ...pl, custom: [...pl.custom, { key: `c:${Date.now()}:${fa.id}`, addId: fa.id, addName: fa.name, pos: fa.pos, bid: bid ?? 0, dropId: b ? String(b.id) : null, dropName: b?.name ?? null }] }));
+    setDraft({ addId: "", dropId: "", bidText: "" });
+    setAdding(false);
+  };
+
+  const moveDrops = (keys) => setPlan((pl) => {
+    const cur = syncDrops(pl.drops, bench);
+    const byId = new Map(cur.map((d) => [d.id, d]));
+    return { ...pl, drops: keys.map((k) => byId.get(k)).filter(Boolean) };
+  });
+
+  const Stat = ({ label, dollars, pct, accent }) => (
+    <div className="text-center">
+      <div style={{ color: C.textMuted }} className="text-[11px] mb-0.5">{label}</div>
+      <div style={{ color: accent || C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-xl font-semibold">{fmtMoney(dollars)}</div>
+      <div style={{ color: C.textFaint }} className="text-[11px]">{fmtPct(pct)}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      {isFaab ? (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg p-3 mb-2" data-budget>
+          <div className="flex items-center justify-around">
+            <Stat label="Budget now" dollars={sim.current} pct={sim.currentPct} />
+            <div style={{ color: C.textFaint }} className="text-xs text-center">
+              − {fmtMoney(sim.spent)}
+              <div className="text-[10px]">{sim.wins} win{sim.wins === 1 ? "" : "s"}</div>
+            </div>
+            <Stat label="After proposed" dollars={sim.after} pct={sim.afterPct} accent={C.brand} />
+          </div>
+          <div style={{ color: C.textFaint }} className="text-[10px] mt-2">
+            Predicted for YOUR claims only, assuming you win every one that's possible: only your highest bid per player counts, a dropped player can only be dropped once, and without a drop you can only add as many players as you have open bench spots ({openSpots} now). Other teams' bids aren't visible, so a higher outside bid would change this. Equal bids are assumed to process in the order shown.
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-lg p-3 mb-2 text-xs">
+          This league doesn't use FAAB{league.waiverInfo?.priority != null ? ` — your waiver priority is #${league.waiverInfo.priority}` : ""}. Claims are processed in priority order; order within your list is the order Sleeper tries them. {openSpots} open bench spot{openSpots === 1 ? "" : "s"}.
+        </div>
+      )}
+      {isFaab && (
+        <div className="flex items-center justify-between gap-2 px-1 pb-1">
+          <span style={{ color: C.textMuted }} className="text-xs">Enter bids as</span>
+          <EntryModeToggle mode={mode} onChange={(m) => setPlan((pl) => ({ ...pl, entryMode: m }))} />
+        </div>
+      )}
+
+      <SectionLabel>Who you'd drop — rank most willing first</SectionLabel>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Drag your bench into the order you'd drop them, and tick the ones you're willing to lose. The claim list below is built from this.
+      </div>
+      {syncedDrops.length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1 pb-2">No bench players to drop.</div>
+      ) : (
+        <DragList
+          items={syncedDrops}
+          getKey={(d) => d.id}
+          onReorder={moveDrops}
+          label="Drag to rank the player you would drop"
+          render={(d, { handleProps, dragging }) => (
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: dragging ? 0.92 : 1 }} className="rounded-md px-2.5 py-2 flex items-center gap-2" data-drop-row={d.id}>
+              <DragHandle handleProps={handleProps} dragging={dragging} />
+              <span style={{ color: C.textFaint, fontVariantNumeric: "tabular-nums" }} className="text-xs w-5 text-right">{syncedDrops.findIndex((x) => x.id === d.id) + 1}</span>
+              <span style={{ color: C.text }} className="text-sm truncate flex-1">{d.name} <span style={{ color: C.textFaint }} className="text-[11px]">{d.pos}</span></span>
+              <label className="flex items-center gap-1 text-xs shrink-0" style={{ color: C.textMuted }}>
+                <input type="checkbox" checked={d.willing} onChange={(e) => setPlan((pl) => ({ ...pl, drops: syncDrops(pl.drops, bench).map((x) => (x.id === d.id ? { ...x, willing: e.target.checked } : x)) }))} data-willing />
+                Willing to drop
+              </label>
+            </div>
+          )}
+        />
+      )}
+
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Proposed claims — {eff.claims.length}</SectionLabel>
+        <div className="flex items-center gap-2 pt-3">
+          <button type="button" onClick={() => setAdding((v) => !v)} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="text-xs rounded-md px-2 py-1" data-add-custom>
+            + Custom claim
+          </button>
+          <button type="button" onClick={() => setPlan((pl) => resetClaims(pl))} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="text-xs rounded-md px-2 py-1" data-reset-claims>
+            Reset to defaults
+          </button>
+        </div>
+      </div>
+      {adding && (
+        <div style={{ background: C.surfaceRaised, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2.5 mb-2 space-y-2" data-custom-form>
+          <select value={draft.addId} onChange={(e) => setDraft({ ...draft, addId: e.target.value })} style={inputStyle} className="w-full rounded px-2 py-1.5 text-sm outline-none" aria-label="Player to add">
+            <option value="">Player to add…</option>
+            {(league.waiver.rows || []).map((r) => (
+              <option key={r.id || r.name} value={r.id}>{r.name} ({r.pos})</option>
+            ))}
+          </select>
+          <select value={draft.dropId} onChange={(e) => setDraft({ ...draft, dropId: e.target.value })} style={inputStyle} className="w-full rounded px-2 py-1.5 text-sm outline-none" aria-label="Player to drop">
+            <option value="">No drop</option>
+            {bench.map((b) => (
+              <option key={b.id} value={String(b.id)}>Drop {b.name} ({b.pos})</option>
+            ))}
+          </select>
+          <div className="flex items-center gap-2">
+            {isFaab && (
+              <input value={draft.bidText} onChange={(e) => setDraft({ ...draft, bidText: e.target.value })} placeholder={mode === "percent" ? "bid %" : "bid $"} inputMode="decimal" style={{ ...inputStyle, width: 90 }} className="rounded px-2 py-1.5 text-sm outline-none" aria-label="Bid" />
+            )}
+            <button type="button" onClick={addCustom} disabled={!draft.addId || (isFaab && toDollars(draft.bidText, mode, budget) == null)} style={{ background: C.brand, color: C.text, opacity: !draft.addId || (isFaab && toDollars(draft.bidText, mode, budget) == null) ? 0.5 : 1 }} className="text-sm rounded-md px-3 py-1.5">
+              Add claim
+            </button>
+          </div>
+        </div>
+      )}
+      {eff.warnings.map((w, i) => (
+        <div key={i} style={{ color: C.minor }} className="text-[11px] px-1 pb-1">{w}</div>
+      ))}
+      {eff.claims.length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">
+          No claims yet. Enter a bid on the Available page{plan.bids.length ? ", then tick the bench players you're willing to drop above" : ""}.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {groups.map((g) => (
+            <div key={g.bid} data-claim-group={g.bid}>
+              <div style={{ color: C.brand, fontFamily: "Oswald, sans-serif" }} className="text-xs px-1 pb-1">
+                {isFaab ? `${fmtMoney(g.bid)}${budget ? ` · ${fmtPct(Math.round((g.bid / budget) * 1000) / 10)}` : ""}` : "Claims"} — {g.claims.length} claim{g.claims.length === 1 ? "" : "s"}
+              </div>
+              <DragList
+                items={g.claims}
+                getKey={(c) => c.key}
+                label={`Drag to reorder within the ${fmtMoney(g.bid)} group`}
+                onReorder={(keys) => {
+                  const next = flatten(groups.map((x) => (x.bid === g.bid ? { ...x, claims: keys.map((k) => x.claims.find((c) => c.key === k)) } : x))).map((c) => c.key);
+                  setPlan((pl) => ({ ...pl, order: next }));
+                }}
+                render={(c, { handleProps, dragging }) => (
+                  <ClaimRow c={c} result={resultByKey.get(c.key)} mode={mode} budget={budget} isFaab={isFaab} bench={bench} dragging={dragging} handle={<DragHandle handleProps={handleProps} dragging={dragging} />} onBid={onBid} onDrop={onDrop} onDelete={onDelete} />
+                )}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {ordered.length > 0 && (
+        <>
+          <SectionLabel>Enter these in Sleeper, in this order</SectionLabel>
+          <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+            Tick each one once it's entered.{" "}
+            <a href={`https://sleeper.com/leagues/${league.id}`} target="_blank" rel="noreferrer" style={{ color: C.brand }} className="underline">Open this league in Sleeper</a>
+          </div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y" data-claim-checklist>
+            {ordered.map((c, i) => (
+              <label key={c.key} className="flex items-start gap-2 px-3 py-2 text-xs" style={{ color: ticked.has(c.key) ? C.textFaint : C.text, borderColor: C.border, textDecoration: ticked.has(c.key) ? "line-through" : "none" }}>
+                <input type="checkbox" checked={ticked.has(c.key)} onChange={(e) => setTicked((prev) => { const n = new Set(prev); if (e.target.checked) n.add(c.key); else n.delete(c.key); return n; })} />
+                <span>{i + 1}. {isFaab ? describeClaim(c) : `Claim ${c.addName}${c.dropName ? ` and drop ${c.dropName}` : " (no drop)"}`}</span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function WaiverTab({ league, sessionId }) {
+  const [sub, setSub] = useState("available");
+  const [plan, setPlanState] = useState(null);
+  const [planError, setPlanError] = useState(null);
+  const [faab, setFaab] = useState({ loading: false, result: null, error: null });
+  const saveTimer = useRef(null);
+  const latest = useRef(null);
+  const leagueId = league.id;
+
+  useEffect(() => {
+    let cancelled = false;
+    setPlanState(null);
+    api.getWaiverPlan(leagueId).then((p) => !cancelled && setPlanState(p)).catch((e) => !cancelled && setPlanError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [leagueId]);
+
+  const flush = useCallback(() => {
+    clearTimeout(saveTimer.current);
+    if (latest.current) {
+      const p = latest.current;
+      latest.current = null;
+      api.saveWaiverPlan(leagueId, p).catch((e) => setPlanError(e.message));
+    }
+  }, [leagueId]);
+  useEffect(() => () => flush(), [flush]);
+
+  // Updates are applied at once and saved shortly after (so typing and dragging stay snappy).
+  const setPlan = useCallback(
+    (fn) => {
+      setPlanState((prev) => {
+        if (!prev) return prev;
+        const next = typeof fn === "function" ? fn(prev) : fn;
+        latest.current = next;
+        clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(flush, 500);
+        return next;
+      });
+    },
+    [flush]
+  );
+
+  const runFaab = async () => {
+    setFaab({ loading: true, result: faab.result, error: null });
+    try {
+      setFaab({ loading: false, result: await api.getFaabSuggestions(sessionId, leagueId), error: null });
+    } catch (err) {
+      setFaab({ loading: false, result: null, error: err.message });
+    }
+  };
+
+  const claimCount = plan ? effectiveClaims(plan, { openSpots: Math.max(0, (league.benchSlots ?? (league.bench || []).length) - (league.bench || []).length) }).claims.length : 0;
+  const tab = (key, label) => (
+    <button key={key} onClick={() => setSub(key)} aria-current={sub === key ? "page" : undefined} data-waiver-tab={key} style={{ color: sub === key ? C.text : C.textMuted, borderBottom: `2px solid ${sub === key ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium">
+      {label}
+    </button>
+  );
   return (
     <div className="px-4 py-3">
-      <FaabPanel sessionId={sessionId} leagueId={league.id} />
-      <SectionLabel>Available Players</SectionLabel>
-      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Filtered against every roster in your league, not just yours.
+      <div className="flex mb-3" style={{ borderBottom: `1px solid ${C.border}` }}>
+        {tab("available", "Available")}
+        {tab("claims", `Claims${claimCount ? ` (${claimCount})` : ""}`)}
       </div>
-      <div className="space-y-1.5">
-        {league.waiver.rows.map((p, i) => {
-          const s = STATUS[p.severity];
-          return (
-            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="relative rounded-md px-3 py-2.5 pb-4">
-              <div className="flex items-center gap-3">
-                <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs w-9 shrink-0">{p.pos}</div>
-                <div className="min-w-0 flex-1">
-                  <div style={{ color: C.text }} className="text-sm font-medium truncate">{p.name}</div>
-                  <div style={{ color: C.textMuted }} className="text-xs mt-0.5">
-                    {p.proj != null ? `Proj ${p.proj.toFixed(1)} · ` : ""}
-                    {p.ecr != null ? `ECR #${p.ecr} ` : "ECR unmatched "}
-                    {p.trendHit ? "· Trending add" : ""}
-                  </div>
-                  {p.usage && <div className="mt-1"><UsageBadge usage={p.usage} /></div>}
-                </div>
-                <s.Icon size={16} style={{ color: s.color }} className="shrink-0" />
-              </div>
-              {p.crossLeagues.length > 0 && (
-                <div style={{ color: C.brand }} className="text-xs mt-1.5 pl-12">Also available in: {p.crossLeagues.join(", ")}</div>
-              )}
-              <SourceTag source={p.projSource} factor={p.projFactor} />
-            </div>
-          );
-        })}
-      </div>
+      {planError && <div style={{ color: C.major }} className="text-xs px-1 pb-2">{planError}</div>}
+      {!plan ? (
+        <div className="flex items-center gap-2 px-1 py-4" style={{ color: C.textMuted }}>
+          <Loader2 size={16} className="animate-spin" /> <span className="text-sm">Loading your waiver plan…</span>
+        </div>
+      ) : sub === "available" ? (
+        <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRunFaab={runFaab} />
+      ) : (
+        <ClaimsPage league={league} plan={plan} setPlan={setPlan} />
+      )}
     </div>
   );
 }
@@ -1605,7 +2221,86 @@ function StrengthWeaknessRow({ label, items, color }) {
   );
 }
 
-function TradeTab({ league }) {
+// v2.9: "5 days 3 hr left" from the deadline's end time (an estimate: the last
+// kickoff of the deadline week plus a few hours).
+function countdownLabel(endsAt, now) {
+  const ms = endsAt - now;
+  if (ms <= 0) return "passed";
+  const d = Math.floor(ms / 86400e3);
+  const h = Math.floor((ms % 86400e3) / 3600e3);
+  const m = Math.floor((ms % 3600e3) / 60e3);
+  return d > 0 ? `${d} day${d === 1 ? "" : "s"} ${h} hr left` : h > 0 ? `${h} hr ${m} min left` : `${m} min left`;
+}
+
+function DeadlineBanner({ info }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+  if (!info) return null;
+  if (!info.configured) {
+    return <div style={{ background: C.surfaceRaised, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-2 mb-3 text-xs" data-deadline>This league has no trade deadline.</div>;
+  }
+  const passed = info.passed || (info.endsAt && info.endsAt <= now);
+  const left = info.endsAt ? countdownLabel(info.endsAt, now) : null;
+  const urgent = !passed && info.endsAt && info.endsAt - now < 7 * 86400e3;
+  const color = passed ? C.textMuted : urgent ? C.minor : C.text;
+  return (
+    <div style={{ background: urgent ? C.minorBg : C.surfaceRaised, border: `1px solid ${urgent ? `${C.minor}66` : C.border}`, color }} className="rounded-md px-3 py-2 mb-3 text-xs" data-deadline>
+      <div className="flex items-center gap-1.5 font-medium">
+        <Clock size={13} />
+        {passed ? "Trade deadline has passed" : `Trade deadline: ${left || info.label}`}
+      </div>
+      {info.label && !passed && left && <div style={{ color: C.textMuted }} className="mt-0.5">{info.label}</div>}
+      {info.note && <div style={{ color: C.textFaint }} className="text-[10px] mt-0.5">{info.note}</div>}
+    </div>
+  );
+}
+
+const NEWS_COLOR = { ok: C.ok, caution: C.minor, avoid: C.major };
+const NEWS_LABEL = { ok: "No red flags", caution: "Caution", avoid: "Avoid" };
+
+function OwnershipSection({ ownership }) {
+  if (!ownership) return null;
+  if (ownership.pending) {
+    return (
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-3 flex items-center gap-1.5" data-ownership-pending>
+        <Loader2 size={12} className="animate-spin" /> Checking which of your players your opponents also own in their other leagues — this takes a minute the first time. Refresh shortly.
+      </div>
+    );
+  }
+  const list = ownership.players || [];
+  const high = list.filter((p) => p.high);
+  const rest = list.filter((p) => !p.high);
+  return (
+    <div className="mb-3" data-ownership>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Players on your roster that opponents in this league also roster in their other Sleeper leagues. A rival who owns the same player elsewhere may value him differently when you offer him. Based on {ownership.leaguesChecked ?? 0} league(s) checked across {ownership.opponents ?? 0} opponents
+        {ownership.capped ? " (capped — not every league was checked)" : ""}.
+      </div>
+      {list.length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1">None found.</div>
+      ) : (
+        <div className="space-y-1.5">
+          {[...high, ...rest.slice(0, 8)].map((p) => (
+            <div key={p.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${p.high ? C.brand : C.border}` }} className="rounded-md px-3 py-2">
+              <div style={{ color: C.text }} className="text-sm">
+                {p.name} <span style={{ color: C.textFaint }} className="text-[11px]">{p.pos}</span>
+                {p.high && <span style={{ color: C.brand }} className="text-[10px] ml-1.5">High ownership</span>}
+              </div>
+              <div style={{ color: C.textMuted }} className="text-[11px]">
+                {p.opponentCount} of {ownership.opponents} opponents · {(p.opponents || []).map((o) => `${o.team} (${o.leagues} league${o.leagues === 1 ? "" : "s"})`).join(", ")}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TradeTab({ league, sessionId }) {
   const teams = league.leagueTeams || [];
   const me = teams.find((t) => t.isMe);
   const others = teams.filter((t) => !t.isMe);
@@ -1613,11 +2308,34 @@ function TradeTab({ league }) {
   (league.trade.rows || []).forEach((t) => {
     (suggestionsByTeam[t.theirTeam] = suggestionsByTeam[t.theirTeam] || []).push(t);
   });
+  const finder = league.tradeFinder || [];
+  const [advice, setAdvice] = useState({ loading: false, configured: null, byKey: {}, at: null, error: null });
+  const finderSig = finder.map((t) => `${t.give.name}>${t.get.name}`).join("|");
+  const runAdvice = useCallback(
+    async (force) => {
+      if (!finderSig) return;
+      setAdvice((a) => ({ ...a, loading: true, error: null }));
+      try {
+        const r = await api.getTradeAdvice(sessionId, league.id, force);
+        setAdvice({ loading: false, configured: r.configured, byKey: r.byKey || {}, at: r.at, error: null });
+      } catch (err) {
+        setAdvice((a) => ({ ...a, loading: false, error: err.message }));
+      }
+    },
+    [sessionId, league.id, finderSig]
+  );
+  // Results are cached on the server for 3 hours, so opening the page is cheap.
+  useEffect(() => {
+    runAdvice(false);
+  }, [runAdvice]);
 
   return (
     <div className="px-4 py-3">
+      <DeadlineBanner info={league.tradeDeadline} />
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Based on average ECR by position across every roster in the league (a rest-of-season-oriented signal, not a single week's projection) — not a dedicated trade-value model.
+        {league.tradeBasis === "projection"
+          ? "FantasyPros rankings weren't available for enough of your league, so trade value here is each player's rank by projected points among rostered players at his position — a single-week signal, not a dedicated trade-value model."
+          : "Based on average ECR by position across every roster in the league (a rest-of-season-oriented signal, not a single week's projection) — not a dedicated trade-value model."}
       </div>
 
       {me && (
@@ -1628,26 +2346,52 @@ function TradeTab({ league }) {
         </div>
       )}
 
-      <SectionLabel>Trade Finder — 1-for-1 Swaps</SectionLabel>
-      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Concrete player-for-player swaps against real rival rosters, ranked by the projected-points gain to your starting lineup. Filtered to offers close enough in trade value (ECR) that a rival could plausibly accept — not "my worst bench guy for their All-Pro."
+      <SectionLabel>Owned by opponents elsewhere</SectionLabel>
+      <OwnershipSection ownership={league.ownership} />
+
+      <div className="flex items-center justify-between">
+        <SectionLabel>Trade Finder — 1-for-1 Swaps</SectionLabel>
+        {finder.length > 0 && advice.configured && (
+          <button onClick={() => runAdvice(true)} disabled={advice.loading} style={{ color: C.brand }} className="text-[11px] pt-3 flex items-center gap-1" data-recheck-news>
+            {advice.loading ? <Loader2 size={11} className="animate-spin" /> : null}Re-check news
+          </button>
+        )}
       </div>
-      {(league.tradeFinder || []).length === 0 ? (
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        You sell from a position of strength and buy at a position of weakness — never the same position — against real rival rosters, kept to offers close enough in trade value that a rival could plausibly accept. Ranked by the net change to your projected starting lineup.
+        {advice.configured === false ? " (Add a Gemini key on the server to get a news check on each swap.)" : advice.configured ? " Each swap has a news check from Gemini with Google Search — it can be wrong, so verify before trading." : ""}
+      </div>
+      {advice.error && <div style={{ color: C.major }} className="text-xs px-1 pb-2">News check failed: {advice.error}</div>}
+      {finder.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1 pb-3">No fair 1-for-1 swaps found against any rival roster right now.</div>
       ) : (
         <div className="space-y-1.5 mb-3">
-          {league.tradeFinder.map((t, i) => (
-            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.ok}` }} className="rounded-md px-3.5 py-2.5">
-              <div style={{ color: C.text }} className="text-xs">
-                <span style={{ color: C.textMuted }}>Give </span>{t.give.name} <span style={{ color: C.textFaint }}>({t.give.pos})</span>
-                <span style={{ color: C.textMuted }}> · Get </span>{t.get.name} <span style={{ color: C.textFaint }}>({t.get.pos})</span>
-                <span style={{ color: C.textMuted }}> from </span>{t.theirTeam}
+          {finder.map((t, i) => {
+            const news = advice.byKey[`${t.give.name} > ${t.get.name}`];
+            const nc = news ? NEWS_COLOR[news.flag] || C.textMuted : null;
+            return (
+              <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${nc || C.ok}` }} className="rounded-md px-3.5 py-2.5" data-finder={i}>
+                <div style={{ color: C.text }} className="text-xs">
+                  <span style={{ color: C.textMuted }}>Give </span>{t.give.name} <span style={{ color: C.textFaint }}>({t.give.pos})</span>
+                  <span style={{ color: C.textMuted }}> · Get </span>{t.get.name} <span style={{ color: C.textFaint }}>({t.get.pos})</span>
+                  <span style={{ color: C.textMuted }}> from </span>{t.theirTeam}
+                  {t.mutual && <span style={{ color: C.brand }} className="text-[10px] ml-1.5">They're weak at {t.give.pos} too</span>}
+                </div>
+                <div style={{ color: C.ok }} className="text-[11px] mt-0.5">
+                  {t.gain >= 0 ? "+" : ""}{t.gain.toFixed(1)} projected pts to your starting lineup
+                  {t.gainParts ? <span style={{ color: C.textFaint }}> ({t.get.name} adds {t.gainParts.add.toFixed(1)}{t.gainParts.loss > 0 ? `, losing ${t.give.name} costs ${t.gainParts.loss.toFixed(1)}` : ""})</span> : null}
+                </div>
+                {news && (
+                  <div style={{ color: nc }} className="text-[11px] mt-1" data-news={news.flag}>
+                    <span className="font-medium">{NEWS_LABEL[news.flag] || news.flag}:</span> {news.note}
+                  </div>
+                )}
               </div>
-              <div style={{ color: C.ok }} className="text-[11px] mt-0.5">+{t.gain.toFixed(1)} projected pts to your starting lineup</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
+      {advice.at && advice.configured && <div style={{ color: C.textFaint }} className="text-[10px] px-1 pb-3">News checked {fmtWhen(advice.at)}</div>}
 
       <SectionLabel>League Teams &amp; Trade Ideas</SectionLabel>
       {others.length === 0 ? (
@@ -2317,9 +3061,31 @@ function MatchupRankings({ onDvpChange, authUser }) {
     onDvpChange?.();
   };
 
-  const rows = (side === "def" ? data?.defense : data?.offense)?.[pos] || [];
+  // v2.9: every column sorts when its header is tapped (tap again to reverse).
+  const [sort, setSort] = useState({ key: "rank", dir: 1 });
+  const baseRows = (side === "def" ? data?.defense : data?.offense)?.[pos] || [];
+  const sortVal = (r, k) => (k === "team" ? r.team : r[k] == null ? null : Number(r[k]));
+  const rows = [...baseRows].sort((a, b) => {
+    const x = sortVal(a, sort.key);
+    const y = sortVal(b, sort.key);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1; // missing values always last
+    if (y == null) return -1;
+    const c = typeof x === "string" ? x.localeCompare(y) : x - y;
+    return c * sort.dir;
+  });
+  const showRos = Boolean(data?.adjusted) && baseRows.some((r) => r.ros != null);
+  const clickSort = (key) => setSort((cur) => (cur.key === key ? { key, dir: -cur.dir } : { key, dir: key === "rank" || key === "team" ? 1 : -1 }));
   const th = "text-left font-medium px-1.5 py-1";
   const td = "px-1.5 py-1.5";
+  const SortTh = ({ k, children, title }) => (
+    <th className={th} aria-sort={sort.key === k ? (sort.dir === 1 ? "ascending" : "descending") : "none"} title={title}>
+      <button type="button" onClick={() => clickSort(k)} data-sort={k} className="font-medium inline-flex items-center gap-0.5" style={{ color: sort.key === k ? C.text : C.textFaint }}>
+        {children}
+        {sort.key === k ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
+      </button>
+    </th>
+  );
   return (
     <div className="px-4 py-3">
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
@@ -2327,7 +3093,7 @@ function MatchupRankings({ onDvpChange, authUser }) {
       </div>
       <div className="flex flex-wrap gap-2 items-end mb-2">
         <Select label="Scoring" value={profile} onChange={setProfile} options={(data?.profiles || []).map((p) => ({ value: p.profile, label: p.label }))} />
-        <Select label="Sample" value={data?.mode || "blended"} onChange={(v) => saveSettings({ mode: v })} options={Object.entries(SAMPLE_LABEL).map(([value, label]) => ({ value, label }))} />
+        <Toggle checked={(data?.mode || "blended") === "blended"} onChange={(v) => saveSettings({ mode: v ? "blended" : "current" })}>Blend ({(data?.season ?? new Date().getFullYear()) - 1})</Toggle>
         <Toggle checked={Boolean(data?.adjusted)} onChange={(v) => saveSettings({ adjusted: v })}>Schedule adjusted</Toggle>
       </div>
       <div className="flex gap-1.5 mb-2">
@@ -2372,7 +3138,7 @@ function MatchupRankings({ onDvpChange, authUser }) {
           : pos === "DEF"
           ? "DEF: points this team's own D/ST scores. Rank 1 = most."
           : `Points this team's ${pos}s score. Rank 1 = most (best for your ${pos}).`}
-        {" "}Tap a team for the games behind it.
+        {" "}Tap a team for the games behind it, or a column heading to sort. Last 4 = average over the last 4 games ("*" = includes games from last season). {data?.adjusted ? "ROS is an estimate of rest-of-season points per game given the opponents still to come." : "Turn on Schedule adjusted to also see the rest-of-season (ROS) estimate."}
       </div>
       {error && <div style={{ color: C.major }} className="text-xs pb-2">{error}</div>}
       {data?.note && <div style={{ color: C.textMuted }} className="text-xs pb-2">{data.note}</div>}
@@ -2381,11 +3147,12 @@ function MatchupRankings({ onDvpChange, authUser }) {
         <table className="w-full text-xs" style={{ color: C.text }}>
           <thead style={{ color: C.textFaint }}>
             <tr>
-              <th className={th}>#</th>
-              <th className={th}>Team</th>
-              <th className={th}>Pts/g</th>
-              {data.adjusted && <th className={th}>Raw</th>}
-              <th className={th}>Games</th>
+              <SortTh k="rank">#</SortTh>
+              <SortTh k="team">Team</SortTh>
+              <SortTh k="value" title="Points per game in the selected sample">Pts/g</SortTh>
+              {data.adjusted && <SortTh k="raw" title="Before the schedule adjustment">Raw</SortTh>}
+              <SortTh k="last4" title="Average over the last 4 games played (this season, topped up from last season's end if needed; never schedule-adjusted)">Last 4</SortTh>
+              {showRos && <SortTh k="ros" title="Rest-of-season expected points per game, from the schedule remaining (estimate)">ROS</SortTh>}
             </tr>
           </thead>
           <tbody>
@@ -2404,7 +3171,8 @@ function MatchupRankings({ onDvpChange, authUser }) {
                 </td>
                 <td className={td} style={{ fontVariantNumeric: "tabular-nums" }}>{r.value}</td>
                 {data.adjusted && <td className={td} style={{ color: C.textMuted }}>{r.raw}</td>}
-                <td className={td} style={{ color: C.textMuted }}>{r.games}{r.weight !== r.games ? ` (wt ${r.weight})` : ""}</td>
+                <td className={td} style={{ color: C.textMuted, fontVariantNumeric: "tabular-nums" }}>{r.last4 ?? "—"}{r.last4Prev ? "*" : ""}</td>
+                {showRos && <td className={td} style={{ color: C.textMuted, fontVariantNumeric: "tabular-nums" }}>{r.ros ?? "—"}</td>}
               </tr>
             ))}
           </tbody>
@@ -2469,20 +3237,59 @@ function WeatherSettingsPanel() {
   );
 }
 
+const ACC_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
+// What each accuracy measure means (shown in the info pop-up) — and which direction is better.
+const ACC_METRICS = [
+  { key: "rankCorr", label: "Rank correlation", short: "Rank", better: "high", fmt: (v) => v, help: "How well the source ORDERS players at the same position in the same week (Spearman correlation, averaged over position-weeks). 1 = perfect order, 0 = no better than chance. This is what matters for start/sit and waiver decisions." },
+  { key: "mae", label: "Average miss (MAE)", short: "Avg miss", better: "low", fmt: (v) => v, help: "Average absolute difference between projection and actual points. Lower is better." },
+  { key: "rmse", label: "RMSE", short: "RMSE", better: "low", fmt: (v) => v, help: "Like average miss but punishes big misses more. Lower is better." },
+  { key: "bias", label: "Bias", short: "Bias", better: "zero", fmt: (v) => (v > 0 ? `+${v}` : v), help: "Average projected minus actual. Positive = the source runs high, negative = low. Closest to 0 is best." },
+  { key: "sdErr", label: "SD of error", short: "SD", better: "low", fmt: (v) => v, help: "How spread out the errors are. Lower is steadier." },
+  { key: "corr", label: "Correlation", short: "Corr", better: "high", fmt: (v) => v, help: "Pearson correlation of projected with actual points across all players. Higher is better." },
+  { key: "within3", label: "Within ±3 pts", short: "±3", better: "high", fmt: (v) => `${Math.round(v * 100)}%`, help: "Share of projections within 3 points of the actual score." },
+  { key: "within5", label: "Within ±5 pts", short: "±5", better: "high", fmt: (v) => `${Math.round(v * 100)}%`, help: "Share of projections within 5 points of the actual score." },
+];
+
+function AccuracyInfoModal({ onClose }) {
+  return (
+    <Modal title="How to read these numbers" onClose={onClose}>
+      <div style={{ color: C.textMuted }} className="text-xs space-y-2">
+        <div>Each source's projection is frozen at the player's kickoff and compared with what the player actually scored (in the selected scoring). A projected player with no stat line counts as 0; projections under 0.5 pts are ignored. Only QB, RB, WR, TE, K and DEF are scored.</div>
+        {ACC_METRICS.map((m) => (
+          <div key={m.key}>
+            <span style={{ color: C.text }} className="font-medium">{m.label}.</span> {m.help}
+          </div>
+        ))}
+        <div><span style={{ color: C.text }} className="font-medium">Same players only</span> keeps just the players every source projected that week, so a source isn't helped or hurt by covering different players. <span style={{ color: C.text }} className="font-medium">Lean-adjusted</span> scores the projections after the app's source-vs-Vegas lean correction.</div>
+      </div>
+    </Modal>
+  );
+}
+
 function AccuracyScreen({ authUser }) {
   const thisSeason = new Date().getFullYear();
-  const [f, setF] = useState({ season: String(thisSeason), profile: "", pos: "ALL", weekFrom: "1", weekTo: "18", sameOnly: false, adjusted: false });
+  const [f, setF] = useState({ season: String(thisSeason), profile: "", positions: ACC_POSITIONS, weekFrom: "1", weekTo: "18", sameOnly: false, adjusted: false });
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [metric, setMetric] = useState("rankCorr"); // matrix metric — rank correlation within position-week by default
+  const [sort, setSort] = useState({ key: null, dir: -1 });
+  const [info, setInfo] = useState(false);
   const set = (k) => (v) => setF((prev) => ({ ...prev, [k]: v }));
+  const togglePos = (p) =>
+    setF((prev) => {
+      const has = prev.positions.includes(p);
+      if (has && prev.positions.length === 1) return prev; // keep at least one
+      return { ...prev, positions: has ? prev.positions.filter((x) => x !== p) : ACC_POSITIONS.filter((x) => x === p || prev.positions.includes(x)) };
+    });
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    const { positions, ...rest } = f;
     api
-      .getAccuracy({ ...f, sameOnly: f.sameOnly ? "1" : "0", adjusted: f.adjusted ? "1" : "0" })
+      .getAccuracy({ ...rest, ...(positions.length < ACC_POSITIONS.length ? { positions: positions.join(",") } : {}), sameOnly: f.sameOnly ? "1" : "0", adjusted: f.adjusted ? "1" : "0" })
       .then((d) => {
         if (cancelled) return;
         setData(d);
@@ -2497,22 +3304,71 @@ function AccuracyScreen({ authUser }) {
 
   const seasons = [...new Set([...(data?.meta?.seasons || []), thisSeason, thisSeason - 1])].sort((a, b) => b - a);
   const weekOpts = Array.from({ length: 18 }, (_, i) => ({ value: String(i + 1), label: `Week ${i + 1}` }));
-  const rows = (data?.summary || []).filter((r) => (f.pos === "ALL" ? true : r.pos === f.pos));
+  const allSel = f.positions.length === ACC_POSITIONS.length;
+  const baseRows = (data?.summary || []).filter((r) => (r.pos === "ALL" ? true : f.positions.includes(r.pos)));
+  // v2.9: every column sorts on a header tap; with no sort chosen, the server's order is kept.
+  const rows = sort.key
+    ? [...baseRows].sort((a, b) => {
+        const x = sort.key === "source" ? SRC_NAME[a.source] : sort.key === "pos" ? a.pos : a[sort.key];
+        const y = sort.key === "source" ? SRC_NAME[b.source] : sort.key === "pos" ? b.pos : b[sort.key];
+        if (x == null && y == null) return 0;
+        if (x == null) return 1;
+        if (y == null) return -1;
+        return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir;
+      })
+    : baseRows;
+  const clickSort = (key) => setSort((cur) => (cur.key === key ? { key, dir: -cur.dir } : { key, dir: key === "source" || key === "pos" ? 1 : -1 }));
   const th = "text-[10px] uppercase tracking-wide font-medium px-1.5 py-1 text-right";
   const td = "text-xs px-1.5 py-1 text-right";
+  const SortTh = ({ k, children, title, left }) => (
+    <th className={`${th} ${left ? "text-left" : ""}`} title={title} aria-sort={sort.key === k ? (sort.dir === 1 ? "ascending" : "descending") : "none"}>
+      <button type="button" onClick={() => clickSort(k)} data-acc-sort={k} className="uppercase tracking-wide font-medium" style={{ color: sort.key === k ? C.text : "inherit" }}>
+        {children}
+        {sort.key === k ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
+      </button>
+    </th>
+  );
+
+  // Source × position matrix for the chosen metric; the best source per column is highlighted.
+  const m = ACC_METRICS.find((x) => x.key === metric) || ACC_METRICS[0];
+  const matrixSources = ["V", "T", "S", "E"].filter((s) => (data?.summary || []).some((r) => r.source === s));
+  const matrixCols = [...f.positions, ...(f.positions.length > 1 ? ["ALL"] : [])];
+  const cell = (s, p) => (data?.summary || []).find((r) => r.source === s && r.pos === p) || null;
+  const score = (r) => (r?.[m.key] == null ? null : m.better === "zero" ? Math.abs(r[m.key]) : r[m.key]);
+  const bestIn = (p) => {
+    const vals = matrixSources.map((s) => [s, score(cell(s, p))]).filter(([, v]) => v != null);
+    if (vals.length < 2) return null;
+    return vals.reduce((best, cur) => (m.better === "high" ? (cur[1] > best[1] ? cur : best) : cur[1] < best[1] ? cur : best))[0];
+  };
 
   return (
     <div className="px-4 py-3 space-y-4">
-      <div style={{ color: C.textMuted }} className="text-xs px-1">
-        Every source's projection (frozen at each player's kickoff) compared with actual points, scored with the selected scoring profile. A projected player with no stat line counts as 0. Projections under 0.5 pts are ignored.
+      <div className="flex items-start justify-between gap-2">
+        <div style={{ color: C.textMuted }} className="text-xs px-1">
+          Every source's projection (frozen at each player's kickoff) compared with actual points, scored with the selected scoring profile. A projected player with no stat line counts as 0. Projections under 0.5 pts are ignored.
+        </div>
+        <button type="button" onClick={() => setInfo(true)} aria-label="What do these measures mean?" data-acc-info style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="text-xs rounded-full w-6 h-6 shrink-0 font-semibold">
+          i
+        </button>
       </div>
+      {info && <AccuracyInfoModal onClose={() => setInfo(false)} />}
       <div className="grid grid-cols-2 gap-2">
         <Select label="Season" value={f.season} onChange={set("season")} options={seasons.map((s) => ({ value: String(s), label: String(s) }))} />
         <Select label="Scoring" value={f.profile} onChange={set("profile")} options={(data?.meta?.profiles || []).map((p) => ({ value: p.profile, label: p.label }))} />
-        <Select label="Position" value={f.pos} onChange={set("pos")} options={["ALL", "QB", "RB", "WR", "TE", "K", "DEF"].map((p) => ({ value: p, label: p === "ALL" ? "All positions" : p }))} />
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2 col-span-2">
           <Select label="From" value={f.weekFrom} onChange={set("weekFrom")} options={weekOpts} />
           <Select label="To" value={f.weekTo} onChange={set("weekTo")} options={weekOpts} />
+        </div>
+      </div>
+      <div>
+        <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide pb-1">Positions</div>
+        <div className="flex flex-wrap gap-1.5">
+          {ACC_POSITIONS.map((p) => (
+            <Toggle key={p} checked={f.positions.includes(p)} onChange={() => togglePos(p)}>{p}</Toggle>
+          ))}
+          {!allSel && (
+            <button type="button" onClick={() => set("positions")(ACC_POSITIONS)} style={{ color: C.textMuted }} className="text-[11px] underline px-1">All</button>
+          )}
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -2529,6 +3385,43 @@ function AccuracyScreen({ authUser }) {
             Scored weeks: {data.meta.scoredWeeks.length ? data.meta.scoredWeeks.join(", ") : "none yet (actuals arrive after each week finishes)"}
             {data.meta.backfilledWeeks.length > 0 && ` · backfilled (projection timing approximate): ${data.meta.backfilledWeeks.join(", ")}`}
           </div>
+          <div data-acc-matrix>
+            <div className="flex items-end justify-between gap-2">
+              <SectionLabel>Source × position</SectionLabel>
+              <Select label="Measure" value={metric} onChange={setMetric} options={ACC_METRICS.map((x) => ({ value: x.key, label: x.label }))} />
+            </div>
+            <div style={{ color: C.textFaint }} className="text-[10px] px-1 pb-1">
+              {m.help} Best source per position is highlighted.
+            </div>
+            <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${C.border}` }}>
+              <table className="w-full" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                <thead style={{ background: C.surfaceRaised, color: C.textMuted }}>
+                  <tr>
+                    <th className={`${th} text-left`}>Source</th>
+                    {matrixCols.map((p) => (
+                      <th key={p} className={th}>{p === "ALL" ? "All" : p}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {matrixSources.map((s) => (
+                    <tr key={s} style={{ borderTop: `1px solid ${C.border}` }}>
+                      <td className={`${td} text-left`}><span style={{ color: SRC_COLOR[s] }}>●</span> {SRC_NAME[s]}</td>
+                      {matrixCols.map((p) => {
+                        const r = cell(s, p);
+                        const best = bestIn(p) === s;
+                        return (
+                          <td key={p} className={td} style={{ color: best ? C.ok : C.text, fontWeight: best ? 600 : 400 }} title={r ? `n=${r.n}` : "no data"} data-matrix-cell={`${s}|${p}`}>
+                            {r && r[m.key] != null ? m.fmt(r[m.key]) : "—"}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
           <div>
             <SectionLabel>Accuracy by source</SectionLabel>
             {rows.length === 0 ? (
@@ -2538,17 +3431,17 @@ function AccuracyScreen({ authUser }) {
                 <table className="w-full" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>
                   <thead style={{ background: C.surfaceRaised, color: C.textMuted }}>
                     <tr>
-                      <th className={`${th} text-left`}>Source</th>
-                      <th className={`${th} text-left`}>Pos</th>
-                      <th className={th}>n</th>
-                      <th className={th} title="Average projected minus actual (+ = runs high)">Bias</th>
-                      <th className={th} title="Average absolute miss">Avg miss</th>
-                      <th className={th}>RMSE</th>
-                      <th className={th} title="Standard deviation of the error">SD</th>
-                      <th className={th} title="Correlation of projected with actual">Corr</th>
-                      <th className={th} title="Rank correlation within position each week">Rank</th>
-                      <th className={th}>±3</th>
-                      <th className={th}>±5</th>
+                      <SortTh k="source" left>Source</SortTh>
+                      <SortTh k="pos" left>Pos</SortTh>
+                      <SortTh k="n">n</SortTh>
+                      <SortTh k="bias" title="Average projected minus actual (+ = runs high)">Bias</SortTh>
+                      <SortTh k="mae" title="Average absolute miss">Avg miss</SortTh>
+                      <SortTh k="rmse">RMSE</SortTh>
+                      <SortTh k="sdErr" title="Standard deviation of the error">SD</SortTh>
+                      <SortTh k="corr" title="Correlation of projected with actual">Corr</SortTh>
+                      <SortTh k="rankCorr" title="Rank correlation within position each week">Rank</SortTh>
+                      <SortTh k="within3">±3</SortTh>
+                      <SortTh k="within5">±5</SortTh>
                     </tr>
                   </thead>
                   <tbody>
@@ -2724,12 +3617,22 @@ function CheerRow({ p, ratio }) {
         <span style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-[11px] font-medium">
           {p.points != null ? `${p.points.toFixed(1)} pts` : p.proj != null ? `proj ${p.proj.toFixed(1)}` : ""}
         </span>
-        {p.leagues.map((l, i) => (
-          <span key={i} style={{ color: l.side === "for" ? C.ok : C.major, border: `1px solid ${l.side === "for" ? C.ok : C.major}55` }} className="text-[10px] rounded px-1.5 py-0.5">
-            {l.side === "for" ? "+" : "−"} {l.league} ({l.weight})
-          </span>
-        ))}
       </div>
+      {/* v2.9: leagues you cheer FOR sit on the left, leagues you cheer AGAINST on the right. */}
+      {p.leagues.length > 0 && (
+        <div className="flex items-start justify-between gap-2 mt-1 px-0.5">
+          <div className="flex flex-wrap gap-1" data-chips="for">
+            {p.leagues.filter((l) => l.side === "for").map((l, i) => (
+              <span key={i} style={{ color: C.ok, border: `1px solid ${C.ok}55` }} className="text-[10px] rounded px-1.5 py-0.5">+ {l.league} ({l.weight})</span>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1 justify-end" data-chips="against">
+            {p.leagues.filter((l) => l.side !== "for").map((l, i) => (
+              <span key={i} style={{ color: C.major, border: `1px solid ${C.major}55` }} className="text-[10px] rounded px-1.5 py-0.5">− {l.league} ({l.weight})</span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2740,6 +3643,15 @@ function GameDayScreen() {
   const [showSettings, setShowSettings] = useState(false);
   const [slot, setSlot] = useState("all");
   const [cat, setCat] = useState("all");
+  // v2.9: tap league cards to show only those leagues' starters (yours + your opponents'); none selected = all.
+  const [leagueSel, setLeagueSel] = useState(() => new Set());
+  const toggleLeague = (id) =>
+    setLeagueSel((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
   const load = useCallback(() => {
     api
       .getGameDay()
@@ -2758,9 +3670,20 @@ function GameDayScreen() {
   if (error && !data) return <div className="px-4 py-6"><ErrorScreen message={error} /></div>;
   if (!data) return <BootstrapScreen />;
   const slots = [...new Set(data.players.map((p) => p.kickoffLabel).filter(Boolean))];
-  const shown = data.players.filter((p) => (slot === "all" || p.kickoffLabel === slot) && (cat === "all" || p.category === cat));
+  const inLeagues = (p) => leagueSel.size === 0 || p.leagues.some((l) => leagueSel.has(l.leagueId));
+  const shown = data.players.filter((p) => inLeagues(p) && (slot === "all" || p.kickoffLabel === slot) && (cat === "all" || p.category === cat));
   const counts = { for: 0, balanced: 0, against: 0 };
-  data.players.forEach((p) => counts[p.category]++);
+  data.players.filter(inLeagues).forEach((p) => counts[p.category]++);
+  // Group by game time slot, earliest first, with a header between groups.
+  const slotGroups = [];
+  [...shown]
+    .sort((a, b) => (a.kickoff ?? Infinity) - (b.kickoff ?? Infinity))
+    .forEach((p) => {
+      const label = p.kickoffLabel || "Time TBD";
+      let g = slotGroups.find((x) => x.label === label);
+      if (!g) slotGroups.push((g = { label, players: [] }));
+      g.players.push(p);
+    });
 
   return (
     <div className="px-4 py-3 space-y-3">
@@ -2781,7 +3704,15 @@ function GameDayScreen() {
       )}
       <div className="space-y-1.5">
         {data.leagues.map((l) => (
-          <div key={l.id} style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: l.include === false ? 0.5 : 1 }} className="rounded-md px-3 py-2">
+          <button
+            type="button"
+            key={l.id}
+            onClick={() => toggleLeague(l.id)}
+            aria-pressed={leagueSel.has(l.id)}
+            data-gd-league={l.id}
+            style={{ background: leagueSel.has(l.id) ? C.surfaceRaised : C.surface, border: `1px solid ${leagueSel.has(l.id) ? C.brand : C.border}`, opacity: l.include === false ? 0.5 : 1 }}
+            className="rounded-md px-3 py-2 w-full text-left"
+          >
             <div className="flex items-center justify-between gap-2">
               <span style={{ color: C.text }} className="text-xs font-medium truncate">{l.name}</span>
               <span style={{ color: C.textFaint }} className="text-[10px] shrink-0">×{l.importance ?? 1}{data.settings.closeWeighting && l.closeFactor != null ? ` · close ×${l.closeFactor}` : ""}</span>
@@ -2793,7 +3724,7 @@ function GameDayScreen() {
                 {l.myTeam} {l.myPoints?.toFixed(1)} – {l.oppPoints?.toFixed(1)} {l.oppTeam} · proj {l.myProjected?.toFixed(1)} – {l.oppProjected?.toFixed(1)}
               </div>
             )}
-          </div>
+          </button>
         ))}
       </div>
       <div className="flex flex-wrap gap-2 items-center">
@@ -2814,7 +3745,14 @@ function GameDayScreen() {
       {shown.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No players for these filters.</div>
       ) : (
-        <div>{shown.map((p) => <CheerRow key={p.id} p={p} ratio={data.settings.ratio} />)}</div>
+        <div>
+          {slotGroups.map((g) => (
+            <div key={g.label} data-slot-group={g.label}>
+              <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif", borderBottom: `1px solid ${C.border}` }} className="text-[11px] tracking-wide pt-3 pb-1">{g.label}</div>
+              {g.players.map((p) => <CheerRow key={p.id} p={p} ratio={data.settings.ratio} />)}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -2904,6 +3842,12 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct }) {
         {g.changed && g.prevPick && <span style={{ color: C.major }} className="text-[11px]">changed from {g.prevPick} — tap to dismiss</span>}
       </div>
       {g.reason && g.leverage && <div style={{ color: C.textMuted }} className="text-[11px]">{g.reason}</div>}
+      {g.weather && !g.weather.indoor && g.weather.temp != null && (
+        <div className="flex items-center gap-1.5 flex-wrap" data-pick-weather={g.weather.flag ? "bad" : "ok"}>
+          <WeatherChip player={{ weather: g.weather }} />
+          {g.weather.flag && <span style={{ color: C.minor }} className="text-[11px]">{g.weather.reasons.join("; ")}</span>}
+        </div>
+      )}
 
       {g.underdog && (
         <div>
@@ -3130,6 +4074,16 @@ function BootstrapScreen() {
 /*  ROOT APP                                                           */
 /* ------------------------------------------------------------------ */
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
+const BUILD_CONCURRENCY = 2;
+
+// Merge freshly built leagues into the list, keeping the tracked order.
+function mergeLeagues(prev, incoming, order) {
+  const byId = new Map(prev.map((l) => [l.id, l]));
+  for (const l of incoming) byId.set(l.id, l);
+  const ids = order && order.length ? order : [...byId.keys()];
+  const rest = [...byId.keys()].filter((id) => !ids.includes(id));
+  return [...ids, ...rest].map((id) => byId.get(id)).filter(Boolean);
+}
 
 export default function App() {
   const [view, setView] = useState({ screen: "bootstrapping" });
@@ -3158,6 +4112,9 @@ export default function App() {
   const [loadingLeagues, setLoadingLeagues] = useState(false);
   const [liveLeagues, setLiveLeagues] = useState([]);
   const [week, setWeek] = useState(null);
+  // v2.9: per-week copies of the last build, so switching weeks shows something instantly.
+  const weekCache = useRef(new Map());
+  const buildSeq = useRef(0);
 
   const [password, setPassword] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
@@ -3202,13 +4159,47 @@ export default function App() {
 
   const activeLeague = useMemo(() => computed.find((l) => l.id === (view.leagueId || null)), [computed, view.leagueId]);
 
+  // v2.9: build leagues a couple at a time and show each as it arrives (the
+  // last saved copy is already on screen, so nothing blocks on this). A newer
+  // build supersedes an older one. Returns { week, superseded }; throws only if
+  // not a single league could be built.
+  const buildAll = useCallback(async (sid, ids, wk) => {
+    const seq = ++buildSeq.current;
+    let builtWeek = wk;
+    let ok = 0;
+    let firstError = null;
+    const queue = [...ids];
+    const worker = async () => {
+      while (queue.length) {
+        const id = queue.shift();
+        try {
+          const r = await api.buildLeagues(sid, [id], wk, ids);
+          if (seq !== buildSeq.current) return;
+          builtWeek = r.week ?? builtWeek;
+          if (r.leagues.some((l) => !l.error)) ok += 1;
+          setLiveLeagues((prev) => {
+            const next = mergeLeagues(prev, r.leagues, ids);
+            weekCache.current.set(builtWeek, next.filter((l) => !l.error));
+            return next;
+          });
+        } catch (err) {
+          firstError = firstError || err;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BUILD_CONCURRENCY, ids.length) }, worker));
+    if (seq !== buildSeq.current) return { week: builtWeek, superseded: true };
+    if (!ok && firstError) throw firstError;
+    return { week: builtWeek, superseded: false };
+  }, []);
+
   // Shared by both the bootstrap effect and the post-login handler: given
   // the server's last-session record (username + tracked leagues + week),
-  // reconnect to Sleeper and rebuild the dashboard. This is what replaces
+  // reconnect to Sleeper and refresh the dashboard. This is what replaces
   // localStorage — the record lives in SQLite, tied to the login, not the
   // browser, so it follows the person across devices.
   const reconnectFromLastSession = useCallback(
-    async (last) => {
+    async (last, { showedCache = false } = {}) => {
       try {
         const { sessionId, user, week: currentWeek, leagues } = await api.connect();
         setSessionId(sessionId);
@@ -3217,30 +4208,32 @@ export default function App() {
         const validIds = leagues.map((l) => l.league_id);
         const restoredIds = (last?.leagueIds || []).filter((id) => validIds.includes(id));
         setSelectedIds(restoredIds.length ? restoredIds : validIds);
-        setWeek(currentWeek);
+        setWeek((w) => w ?? currentWeek);
         if (restoredIds.length === 0) {
           navigate({ screen: "select" }, { replace: true });
           return;
         }
-        setLoadingLeagues(true);
-        const { leagues: built, week: builtWeek } = await api.buildLeagues(sessionId, restoredIds, last?.week ?? undefined);
-        setLiveLeagues(built);
+        if (!showedCache) setLoadingLeagues(true);
+        setRefreshing(true);
+        const { week: builtWeek } = await buildAll(sessionId, restoredIds, last?.week ?? undefined);
         setWeek(builtWeek ?? currentWeek);
         setSyncedAt("just now");
-        navigate({ screen: "dashboard" }, { replace: true });
+        if (!showedCache) navigate({ screen: "dashboard" }, { replace: true });
       } catch (err) {
-        // Logged in fine, but Sleeper couldn't be reached — land on the account screen so
-        // the person isn't stuck, with the reason shown on the league picker.
+        // Logged in fine, but Sleeper couldn't be reached. With saved data on screen, stay on it;
+        // otherwise land on the league picker with the reason shown.
         setConnectError(err.message || "Couldn't reach Sleeper — try again.");
-        navigate({ screen: "select" }, { replace: true });
+        if (!showedCache) navigate({ screen: "select" }, { replace: true });
       } finally {
         setLoadingLeagues(false);
+        setRefreshing(false);
       }
     },
-    [navigate]
+    [navigate, buildAll]
   );
 
   // After login/bootstrap: a pending forced password change blocks everything else.
+  // v2.9: show the last saved build at once, then update it live in the background.
   const enterApp = useCallback(
     async (status) => {
       setAuthUser(status.user);
@@ -3248,7 +4241,21 @@ export default function App() {
         navigate({ screen: "forceChange" }, { replace: true });
         return;
       }
-      await reconnectFromLastSession(status.lastSession);
+      let showedCache = false;
+      try {
+        const c = await api.getCachedLeagues();
+        if (c.leagues?.length) {
+          setLiveLeagues(c.leagues);
+          setWeek(c.week ?? null);
+          setSelectedIds(c.leagueIds || c.leagues.map((l) => l.id));
+          setSyncedAt("saved copy");
+          navigate({ screen: "dashboard" }, { replace: true });
+          showedCache = true;
+        }
+      } catch {
+        // No saved copy (or the call failed) — fall through to the normal path.
+      }
+      await reconnectFromLastSession(status.lastSession, { showedCache });
     },
     [navigate, reconnectFromLastSession]
   );
@@ -3330,12 +4337,13 @@ export default function App() {
     setLoadingLeagues(true);
     setConnectError(null);
     try {
-      const { leagues, week: builtWeek } = await api.buildLeagues(sessionId, selectedIds, week);
-      setLiveLeagues(leagues);
+      // Drop leagues that are no longer tracked, then build the chosen ones.
+      setLiveLeagues((prev) => prev.filter((l) => selectedIds.includes(l.id)));
+      const { week: builtWeek } = await buildAll(sessionId, selectedIds, week);
       setWeek(builtWeek);
       setSyncedAt("just now");
       // No client-side persistence call needed here — the build endpoint
-      // already calls setLastSession() server-side, which is what
+      // already saves the tracked list server-side, which is what
       // reconnectFromLastSession() reads on the next login/bootstrap.
       navigate({ screen: "dashboard" });
     } catch (err) {
@@ -3343,14 +4351,13 @@ export default function App() {
     } finally {
       setLoadingLeagues(false);
     }
-  }, [sessionId, selectedIds, week, navigate]);
+  }, [sessionId, selectedIds, week, navigate, buildAll]);
 
   const handleRefresh = useCallback(async () => {
     if (!sessionId || selectedIds.length === 0) return;
     setRefreshing(true);
     try {
-      const { leagues, week: builtWeek } = await api.buildLeagues(sessionId, selectedIds, week);
-      setLiveLeagues(leagues);
+      const { week: builtWeek } = await buildAll(sessionId, selectedIds, week);
       setWeek(builtWeek);
       setSyncedAt("just now");
     } catch (err) {
@@ -3358,7 +4365,7 @@ export default function App() {
     } finally {
       setRefreshing(false);
     }
-  }, [sessionId, selectedIds, week]);
+  }, [sessionId, selectedIds, week, buildAll]);
 
   const handleWeekChange = useCallback(
     async (newWeek) => {
@@ -3366,10 +4373,13 @@ export default function App() {
         setWeek(newWeek);
         return;
       }
+      setWeek(newWeek);
+      // Show the last build we have for that week straight away (marked as a saved copy), then rebuild.
+      const cached = weekCache.current.get(newWeek);
+      if (cached) setLiveLeagues(cached.map((l) => ({ ...l, fromCache: true })));
       setRefreshing(true);
       try {
-        const { leagues, week: builtWeek } = await api.buildLeagues(sessionId, selectedIds, newWeek);
-        setLiveLeagues(leagues);
+        const { week: builtWeek } = await buildAll(sessionId, selectedIds, newWeek);
         setWeek(builtWeek ?? newWeek);
         setSyncedAt("just now");
       } catch (err) {
@@ -3378,7 +4388,7 @@ export default function App() {
         setRefreshing(false);
       }
     },
-    [sessionId, selectedIds]
+    [sessionId, selectedIds, buildAll]
   );
 
   const refreshRef = useRef(handleRefresh);
@@ -3398,6 +4408,8 @@ export default function App() {
       // regardless; the server-side session just won't be revoked until
       // it naturally expires.
     }
+    weekCache.current.clear();
+    buildSeq.current += 1;
     setSessionId(null);
     setSleeperUser(null);
     setAvailableLeagues([]);
@@ -3446,17 +4458,32 @@ export default function App() {
     if (!authUser || authUser.mustChangePassword) return;
     api.getVarianceAcks().then((r) => setAcks(new Set(r.keys || []))).catch(() => {});
   }, [authUser]);
+  // v2.9: clears for issues that have gone away are only dropped after a
+  // COMPLETE, fresh, live build of every tracked league for one week — never
+  // after a saved copy, a stale fallback, a failed league or a half-finished
+  // progressive build (those make issues look like they vanished, which then
+  // wrongly un-clears them when they "reappear"). `ackEpoch` stops a slow
+  // prune response from overwriting a clear the person made in the meantime.
+  const ackEpoch = useRef(0);
   useEffect(() => {
-    if (!authUser || authUser.mustChangePassword) return;
-    const built = rawComputed.filter((lg) => !lg.error);
-    if (!built.length) return;
-    const present = built.flatMap((lg) => collectVariances(lg).map((v) => v.key));
+    if (!authUser || authUser.mustChangePassword || refreshing) return;
+    if (!rawComputed.length) return;
+    const complete = rawComputed.every((lg) => !lg.error && !lg.stale && !lg.fromCache);
+    const sameWeek = new Set(rawComputed.map((lg) => lg.week)).size === 1;
+    const tracked = selectedIds.length === 0 || selectedIds.every((id) => rawComputed.some((lg) => lg.id === id));
+    if (!complete || !sameWeek || !tracked) return;
+    const present = rawComputed.flatMap((lg) => collectVariances(lg).map((v) => v.key));
+    const epoch = ackEpoch.current;
     api
-      .pruneVarianceAcks(built.map((lg) => lg.id), built[0].week, present)
-      .then((r) => setAcks(new Set(r.keys || [])))
+      .pruneVarianceAcks(rawComputed.map((lg) => lg.id), rawComputed[0].week, present)
+      .then((r) => {
+        if (epoch === ackEpoch.current) setAcks(new Set(r.keys || []));
+      })
       .catch(() => {});
-  }, [rawComputed, authUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawComputed, authUser, refreshing]);
   const clearVariances = useCallback(async (keys) => {
+    ackEpoch.current += 1;
     setAcks((prev) => new Set([...prev, ...keys])); // optimistic
     try {
       const r = await api.ackVariances(keys);
@@ -3469,6 +4496,22 @@ export default function App() {
       });
     }
   }, []);
+
+  // v2.9: auto-clearing minors (weather, big-gap trades) are acknowledged once
+  // their page has been viewed and left — so they show on the first visit and
+  // not on later ones unless they come back.
+  const prevView = useRef(null);
+  const computedRef = useRef(computed);
+  computedRef.current = computed;
+  useEffect(() => {
+    const prev = prevView.current;
+    prevView.current = view;
+    if (!prev || prev.screen !== "tab" || !STATUS_BADGE_TABS.includes(prev.tab)) return;
+    if (view.screen === "tab" && view.leagueId === prev.leagueId && view.tab === prev.tab) return;
+    const lg = computedRef.current.find((l) => l.id === prev.leagueId);
+    const keys = autoClearKeys(lg?.variances || [], { leagueId: prev.leagueId, page: prev.tab });
+    if (keys.length) clearVariances(keys);
+  }, [view, clearVariances]);
   const openVariances = useCallback((scope) => setModal({ type: "variances", scope }), []);
 
   // v2.8: fetch the matchup table for each scoring profile in use; re-fetch
@@ -3533,7 +4576,7 @@ export default function App() {
         crumbs={crumbs}
         onRefresh={showRefresh ? handleRefresh : undefined}
         refreshing={refreshing}
-        syncedLabel={showRefresh ? `Synced ${syncedAt} · ${sourceStatusLabel(sourceStatus)}` : null}
+        syncedLabel={showRefresh ? `${computed.some((l) => l.fromCache) ? "Showing your last saved data — updating live… · " : ""}Synced ${syncedAt} · ${sourceStatusLabel(sourceStatus)}` : null}
         week={week}
         onWeekChange={handleWeekChange}
         showWeek={showWeek}

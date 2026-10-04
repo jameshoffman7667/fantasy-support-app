@@ -238,6 +238,8 @@ export function listProfiles() {
  * Upserts rows. A row whose stored kickoff has passed is frozen (never
  * overwritten) unless `allowFrozen` (backfill) is set.
  */
+// v2.9: only fantasy positions are recorded for accuracy (QB/RB/WR/TE/K/DEF).
+const FANTASY_POS = new Set(["QB", "RB", "WR", "TE", "K", "DEF"]);
 export function recordProjections(rows, { allowFrozen = false } = {}) {
   const now = Date.now();
   const stmt = db.prepare(`
@@ -249,7 +251,7 @@ export function recordProjections(rows, { allowFrozen = false } = {}) {
     WHERE @allow = 1 OR proj_records.kickoff IS NULL OR proj_records.kickoff > @now
   `);
   const tx = db.transaction((list) => {
-    for (const r of list) stmt.run({ ...r, adj_proj: r.adj_proj ?? null, kickoff: r.kickoff ?? null, backfill: r.backfill ? 1 : 0, now, allow: allowFrozen ? 1 : 0 });
+    for (const r of list) if (FANTASY_POS.has(r.pos)) stmt.run({ ...r, adj_proj: r.adj_proj ?? null, kickoff: r.kickoff ?? null, backfill: r.backfill ? 1 : 0, now, allow: allowFrozen ? 1 : 0 });
   });
   tx(rows);
 }

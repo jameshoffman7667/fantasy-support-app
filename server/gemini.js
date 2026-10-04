@@ -40,14 +40,14 @@ function extractJson(text) {
  */
 export async function upsetScan(season, week, games, { force = false } = {}) {
   if (!isConfigured() || !games.length) return null;
-  const cacheKey = `gemini:upsets:${season}:${week}`;
+  const cacheKey = `gemini:upsets:v2:${season}:${week}`; // v2: notes are about twice as long as before
   const cached = cacheGet(cacheKey);
   if (cached && !force) return cached;
 
   const lines = games.map((g) => `- ${g.key} (favourite: ${g.favorite}, underdog: ${g.underdog}, ${g.kickoffLabel || ""})`).join("\n");
   const prompt = `You are helping with an NFL straight-up pick'em pool for ${season} week ${week}.
 Search the web for this week's public pick'em articles, expert picks, and "upset picks" columns.
-For EACH game below, count how many distinct articles/experts you found that pick the UNDERDOG to win outright, list up to 3 source names, and write a neutral note (max 35 words) on injuries, weather, rest or motivation relevant to that game.
+For EACH game below, count how many distinct articles/experts you found that pick the UNDERDOG to win outright, list up to 3 source names, and write a neutral note (max 70 words, same concise factual style) on injuries, weather, rest or motivation relevant to that game.
 Games:
 ${lines}
 Reply with ONLY a JSON array, no prose: [{"game":"AWAY@HOME","upsetMentions":0,"sources":["..."],"note":"..."}]`;
@@ -73,12 +73,75 @@ Reply with ONLY a JSON array, no prose: [{"game":"AWAY@HOME","upsetMentions":0,"
     byGame[String(r.game).toUpperCase().replace(/\s+/g, "")] = {
       upsetMentions: Math.max(0, Number(r.upsetMentions) || 0),
       sources: Array.isArray(r.sources) ? r.sources.slice(0, 3).map(String) : [],
-      note: r.note ? String(r.note).slice(0, 300) : null,
+      note: r.note ? String(r.note).slice(0, 600) : null,
     };
   }
   const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 12);
   const out = { at: Date.now(), model: MODEL(), byGame, sources };
   console.log(`[gemini] Upset scan for ${season} wk${week}: ${Object.keys(byGame).length} games, ${sources.length} grounding sources.`);
   cacheSet(cacheKey, out, TTL);
+  return out;
+}
+
+/**
+ * v2.9: a grounded news check for the swaps Trade Finder suggests — injuries,
+ * role / depth-chart changes, suspensions, trades — so a suggestion that the
+ * numbers like but the news doesn't gets a flag. Like the upset scan it only
+ * READS the news; it never changes the numbers or proposes trades.
+ *
+ * items: [{ key, give: {name,pos,team}, get: {name,pos,team} }]
+ * Returns { at, model, byKey: { [key]: { flag: "ok"|"caution"|"avoid", note } }, sources } or null.
+ * One call covers the whole list (cached 3 hours per list), so opening the
+ * Trades page costs at most a few grounded requests a day.
+ * Unverified from the build sandbox: model id and response shape (see top).
+ */
+const TRADE_TTL = 3 * 60 * 60 * 1000;
+export async function tradeNews(season, week, items, { force = false } = {}) {
+  if (!isConfigured() || !items?.length) return null;
+  const listKey = items.map((i) => i.key).sort().join("~");
+  let h = 0;
+  for (const ch of listKey) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  const cacheKey = `gemini:trade:${season}:${week}:${h}`;
+  const cached = cacheGet(cacheKey);
+  if (cached && !force) return cached;
+
+  const who = (p) => `${p.name} (${p.pos}${p.team ? `, ${p.team}` : ""})`;
+  const lines = items.map((i) => `- ${i.key}: I would GIVE ${who(i.give)} and GET ${who(i.get)}`).join("\n");
+  const prompt = `You are checking NFL fantasy football trade ideas for ${season} week ${week}.
+Search the web for the latest news (last ~7 days) on each player involved: injuries or practice status, snap-count or depth-chart changes, suspensions, trades, coaching-staff comments.
+For EACH idea below reply with a flag and a note (max 40 words):
+- "avoid": news clearly argues against it (the player I'd GET is hurt, losing his job or suspended; or the player I'd GIVE has news that raises his value).
+- "caution": something worth knowing but not decisive.
+- "ok": nothing relevant found.
+Do not suggest other trades. Do not invent news; if you find nothing, say "ok" with a short note saying so.
+Ideas:
+${lines}
+Reply with ONLY a JSON array, no prose: [{"key":"<the key before the colon>","flag":"ok","note":"..."}]`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }),
+  });
+  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const json = await res.json();
+  const cand = json?.candidates?.[0];
+  const text = (cand?.content?.parts || []).map((p) => p.text || "").join("\n");
+  const arr = extractJson(text);
+  if (!Array.isArray(arr)) {
+    console.warn("[gemini] Trade news: couldn't read a JSON array:", text.slice(0, 400));
+    return null;
+  }
+  const byKey = {};
+  for (const r of arr) {
+    if (!r?.key) continue;
+    const flag = ["ok", "caution", "avoid"].includes(r.flag) ? r.flag : "ok";
+    byKey[String(r.key)] = { flag, note: r.note ? String(r.note).slice(0, 300) : null };
+  }
+  const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 12);
+  const out = { at: Date.now(), model: MODEL(), byKey, sources };
+  console.log(`[gemini] Trade news for ${season} wk${week}: ${Object.keys(byKey).length}/${items.length} ideas, ${sources.length} sources.`);
+  cacheSet(cacheKey, out, TRADE_TTL);
   return out;
 }

@@ -312,6 +312,32 @@ Straight-up pick'em tab. Win probability: Tank01 no-vig moneylines (avg of books
   - Majors can't be cleared.
   - Clears for issues that no longer exist are pruned after each build.
 
+### 8.2h v2.9 — public-API release (waiver pages, trades, variance rules, speed)
+Everything here uses only public Sleeper data (plus the existing Tank01 / ESPN / FantasyPros / Gemini / Open-Meteo sources). Anything needing a Sleeper login token is v3.0.
+
+- **League card / dashboard:** restructured card layout; IR players no longer trigger "IR-eligible on bench" once on IR (IR flag fix); a cleared variance no longer re-colours the card after a rebuild (cleared-variance bug fix).
+- **Speed:** the dashboard paints instantly from the last saved build (`GET /api/leagues/cached`, no Sleeper calls), then rebuilds leagues progressively (2 at a time) and swaps each in as it finishes. A week-keyed client cache avoids rebuilding on tab switches.
+- **Game Day:** league filter; games grouped into kickoff time slots; for-league chips left, against-league chips right (interpretation not yet confirmed by James).
+- **Pick'em:** weather chip on outdoor games; longer Gemini news notes.
+- **Analytics - matchup rankings:** Last 4 and ROS windows, sortable columns, a Blend toggle (replaces the old "last 4 sample" option; saved last-4 settings are read as blended).
+- **Analytics - accuracy:** position toggles (QB/RB/WR/TE/K/DEF only; other positions are no longer recorded), info pop-up, sortable table, source x position matrix.
+- **Variance report:** opens expanded by default.
+- **Variance rules (changed):**
+  - Weather variance (V14) is auto-clearing: shown on the first visit to the page, acknowledged once the page has been viewed and left; returns only if it goes away and comes back.
+  - Waivers are judged by projection, not ECR/trending: red = a free agent is projected above a current starter at that position (V15); yellow = projected above a bench player at the same position (V16). The trending-add variance is removed (V17).
+  - Trades: big-gap opportunities are yellow and auto-clearing; small gaps are listed but not flagged (V18/V19).
+  - Lineup: yellow "No projection for player" for starters and bench (N01; bench included for troubleshooting).
+  - Acks keep a 12-hour grace before an absent key is pruned, so a brief data hiccup doesn't resurrect cleared items.
+- **Waivers - two pages:**
+  - *Available:* top 5 projected and top 5 trending per position, grouped by position and sorted by projection. Every player has a bid box (a value including 0 adds the claim to the plan). A $ / % toggle changes how bids are typed; bids are stored in whole dollars.
+  - *Claims:* generated claims grouped by bid amount (highest first). Within a group, order follows the dropped player's priority; new claims go to the bottom; a drag handle reorders within a group only. Bids and drops are editable, claims deletable, custom claims addable, "Reset to defaults" clears manual changes. A "claims to enter in Sleeper" checklist lists the claims in order (the app can't push in v2.9).
+  - *Budget:* shows current FAAB and the predicted FAAB after your claims, as dollars and percent. The prediction takes claims highest bid first, uses a dropped player once, limits no-drop claims to open bench spots, and respects the remaining budget. It covers YOUR claims only; the equal-bid processing order is an assumption.
+  - *Claim generation:* the k-th highest bid gets a "no drop" claim (only if open spots exist) plus the first max(0, k - open spots) willing drops, in drop-priority order.
+  - The plan (bids, drop ranking, edits, deletions, custom claims, order, entry mode) is saved per user per league (`/api/waiver-plan`).
+  - FAAB bid history for each player and a 3-day drop summary appear on the page.
+- **Trades:** Gemini news flag per partner player (cached 3 h); Trade Finder reworked (sell from strength, buy at weakness, never the same position, value gap <= 20, net gain over the replaced starter); trade deadline countdown; players on your roster that opponents own in their other leagues are highlighted. Trade values use ECR when >= 60% of rostered players match, else a projection-rank fallback scaled to position depths.
+- **Unverified assumptions:** ROS windows, the trade deadline source, other-league ownership, Game Day for/against orientation, and equal-bid waiver order.
+
 ### 8.3 Waiver Management
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
@@ -481,3 +507,7 @@ Collected here since they cut across multiple sections:
 43. **Matchup display (v2.8):** cards show `[team] @/vs [opp]`, the team coloured by offensive rank and the opponent by defensive rank (kept separate rather than one combined rank), per James.
 44. **Weather (v2.8):** Open-Meteo, outdoor only, owner-editable thresholds; a flag is a minor heads-up, not a swap recommendation; retractable roofs never flagged.
 45. **Variance report (v2.8.1):** clearing applies to minors only and also clears the colours (badges/cards), not just the report; a variance's identity ignores changing numbers; clears follow the user across devices; a cleared minor that escalates or any new variance restores the colour.
+46. **Waiver pages (v2.9):** Available and Claims are separate pages; bids are whole dollars with a display-only $/% toggle; claims grouped by bid, dragged only within a group; prediction models only the user's own claims.
+47. **Variance semantics (v2.9):** "seen" = page viewed and then left; auto-clearing minors (weather, big-gap trades) show once; incoming trade offers (v3.0) never auto-clear; waiver flags use projection vs starters/bench; trending variance removed; N01 includes bench players.
+48. **Release split (v2.9/v3.0):** v2.9 = public Sleeper API only; v3.0 = anything needing the private token (even read-only) plus write-back.
+49. **Speed (v2.9):** cached-first dashboard, progressive 2-at-a-time league builds.

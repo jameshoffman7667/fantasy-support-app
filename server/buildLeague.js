@@ -7,6 +7,9 @@ import { buildFpIndex, lookupFpMulti } from "./matching.js";
 import { checkAndRecordInjury, clearInjurySeen, getInjurySeenForLeague } from "./db.js";
 import * as weather from "./weather.js"; // v2.8
 import * as store from "./projectionStore.js";
+import * as transactions from "./transactions.js"; // v2.9: recent drops
+import { deadlineInfo } from "./tradeDeadline.js"; // v2.9
+import * as ownership from "./crossOwnership.js"; // v2.9
 import { getSnapShareForWeek, getUsageStatsForWeek, lookupUsage } from "./nflverseUsage.js";
 
 // Slot labels as they appear AFTER slotLabel() (SUPER_FLEX -> "SFLX"). Before
@@ -35,6 +38,7 @@ function toFpPosition(sleeperPos) {
   return sleeperPos === "DEF" ? "DST" : sleeperPos;
 }
 let _loggedNoLivePoints = false;
+let _loggedNoEcr = false;
 
 function scoringLabel(settings) {
   const rec = settings?.rec ?? 0;
@@ -181,7 +185,18 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       console.warn(`[buildLeague] Projections unavailable this build: ${err.message}`);
       return null;
     }),
-    ...FP_POSITIONS.map((position) => fp.getConsensusRankings(season, { position, scoring, week })),
+    // v2.9: ECR is optional now. If FantasyPros is down, out of quota or not
+    // configured, the build carries on without ECR (waivers no longer use it;
+    // Trade Radar falls back to projections) instead of failing the league.
+    ...FP_POSITIONS.map((position) =>
+      fp.getConsensusRankings(season, { position, scoring, week }).catch((err) => {
+        if (!_loggedNoEcr) {
+          console.warn(`[buildLeague] ECR unavailable (${err.message.slice(0, 120)}) — continuing without it.`);
+          _loggedNoEcr = true;
+        }
+        return { players: [] };
+      })
+    ),
   ]);
 
   const fpConsensusPlayers = ecrByPosition.flatMap((r, i) =>
@@ -332,24 +347,60 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     ...bench.filter(Boolean).map((p) => ({ ...p, origin: "roster" })),
   ];
 
-  const trendingCandidates = (trending || []).filter((t) => !allRosteredIds.has(t.player_id));
+  // --- v2.9 waiver pool: top 5 PROJECTED + top 5 TRENDING per position ---
+  // Candidates are everyone with a projection who isn't rostered in THIS
+  // league (any team). Projected: best 5 per position by this league's
+  // numbers, skipping players who are out/on bye or have no team. Trending:
+  // Sleeper's most-added feed (24h), first 5 per position, same filters minus
+  // the projection requirement. A player in both lists appears once, flagged
+  // both ways. ECR is no longer part of waivers.
+  const WAIVER_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
+  const WAIVER_TOP_N = 5;
+  const rosterSlots = league.roster_positions || [];
+  const posWanted = (pos) => WAIVER_POSITIONS.includes(pos) && (pos !== "K" || rosterSlots.includes("K")) && (pos !== "DEF" || rosterSlots.includes("DEF"));
+  const faEligible = (sid) => {
+    const meta = sleeperPlayers[sid];
+    if (!meta || !posWanted(meta.position)) return false;
+    if (allRosteredIds.has(String(sid))) return false;
+    if (meta.position !== "DEF" && (meta.active === false || !meta.team)) return false;
+    return true;
+  };
+  const projTop = new Map(); // pos -> [{id, proj}]
+  if (projWeek?.all) {
+    for (const [sid] of projWeek.all) {
+      if (!faEligible(sid)) continue;
+      const meta = sleeperPlayers[sid];
+      if (OUT_LIKE.includes(meta.injury_status)) continue; // can't play
+      if (kickoffFor(meta.team).onBye) continue;
+      const r = hub.pick(projWeek, sid);
+      if (r.proj == null) continue;
+      if (!projTop.has(meta.position)) projTop.set(meta.position, []);
+      projTop.get(meta.position).push({ id: String(sid), proj: r.proj });
+    }
+  }
+  const faFlags = new Map(); // id -> { topProj, trending, trendCount, projRank }
+  for (const [pos, list] of projTop) {
+    list.sort((x, y) => y.proj - x.proj);
+    list.slice(0, WAIVER_TOP_N).forEach((x, i) => faFlags.set(x.id, { topProj: true, projRank: i + 1, trending: false, trendCount: null }));
+  }
+  const trendSeen = {};
+  for (const t of trending || []) {
+    const sid = String(t.player_id);
+    if (!faEligible(sid)) continue;
+    const pos = sleeperPlayers[sid].position;
+    trendSeen[pos] = (trendSeen[pos] || 0) + 1;
+    if (trendSeen[pos] > WAIVER_TOP_N) continue;
+    const f = faFlags.get(sid) || { topProj: false, projRank: null };
+    faFlags.set(sid, { ...f, trending: true, trendCount: t.count ?? null, trendRank: trendSeen[pos] });
+  }
   const trendingFreeAgents = await Promise.all(
-    trendingCandidates.map(async (t) => {
-      const meta = sleeperPlayers[t.player_id];
-      const name = playerName(meta, t.player_id);
-      const pos = meta?.position || "?";
-      const fpPos = toFpPosition(pos);
-      const crosswalk = await lookupBySleeperId(t.player_id).catch(() => null);
-      let ecrRec = lookupFpMulti(ecrIndex, crosswalk?.name ? [name, crosswalk.name] : [name], fpPos);
-      if (!ecrRec && fpPos === "DST" && meta?.team) {
-        ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
-      }
-      const { proj, projSource, projFactor } = await resolveProjection(t.player_id);
-      const faKickoff = kickoffFor(meta?.team).kickoff;
-      const faStarted = faKickoff != null && faKickoff <= Date.now();
-      return { name, pos, proj, projSource, projFactor: projFactor ?? null, kickoff: faKickoff, started: faStarted, ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null, trending: true, origin: "waiver" };
+    [...faFlags.entries()].map(async ([sid, f]) => {
+      const card = await enrich(sid);
+      return { ...card, ...f, origin: "waiver" };
     })
   );
+  const POS_ORDER = Object.fromEntries(WAIVER_POSITIONS.map((p, i) => [p, i]));
+  trendingFreeAgents.sort((x, y) => (POS_ORDER[x.pos] ?? 9) - (POS_ORDER[y.pos] ?? 9) || (y.proj ?? -1) - (x.proj ?? -1));
 
   // v2.6: lock every starter whose game has kicked off (not only once Sleeper
   // reports his points), and drop any bench player or free agent whose game
@@ -424,48 +475,91 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const optimalLineup = lineupComparison.map((c) => ({ slot: c.slot, name: c.optimal?.name ?? null, proj: c.optimal?.proj ?? null, note: c.optimal?.note }));
 
   const superflex = (league.roster_positions || []).includes("SUPER_FLEX");
-  // Leagues without a K or DEF/DST starting slot have no use for those
-  // waiver candidates — showing them anyway was just noise.
-  const rosterHasK = (league.roster_positions || []).includes("K");
-  const rosterHasDef = (league.roster_positions || []).includes("DEF");
-  const relevantTrending = trendingFreeAgents.filter((fa) => {
-    if (fa.pos === "K") return rosterHasK;
-    if (fa.pos === "DEF") return rosterHasDef;
-    return true;
-  });
-  const freeAgents = relevantTrending.slice(0, 20).map((fa) => ({
+  const freeAgents = trendingFreeAgents.map((fa) => ({
+    id: fa.id,
     name: fa.name,
     pos: fa.pos,
+    team: fa.team,
+    status: fa.status,
+    matchup: fa.matchup,
+    weather: fa.weather,
+    projStats: fa.projStats,
+    kickoff: fa.kickoff,
+    kickoffLabel: fa.kickoffLabel,
+    started: fa.started,
     proj: fa.proj,
     projSource: fa.projSource,
     projFactor: fa.projFactor ?? null,
-    ecr: fa.ecr,
-    trending: true,
-    usage: lookupUsage(snapShareMap, usageStatsMap, fa.name),
+    ecr: fa.ecr ?? null,
+    topProj: Boolean(fa.topProj),
+    projRank: fa.projRank ?? null,
+    trending: Boolean(fa.trending),
+    trendCount: fa.trendCount ?? null,
+    usage: fa.usage,
   }));
 
+  // --- Trade value index (v2.9) ---
+  // Trade Radar and Trade Finder compare players by a "value" where LOWER IS
+  // BETTER, on FantasyPros' ECR-rank scale. ECR is optional now: when it
+  // matches fewer than 60% of the league's rostered QB/RB/WR/TE (FantasyPros
+  // down, over quota, or not configured) the value falls back to each player's
+  // rank by projection among all rostered players at his position in this
+  // league, stretched onto a similar scale (QB 36 / RB 80 / WR 100 / TE 36
+  // deep) so the "25 spots" and "20 spots" thresholds keep a similar meaning.
+  // That scaling is a judgement call, not something measured.
+  const posGroups = ["QB", "RB", "WR", "TE"];
+  const POS_DEPTH = { QB: 36, RB: 80, WR: 100, TE: 36 };
+  const valueById = new Map();
+  let tradeBasis = "ecr";
+  {
+    let total = 0;
+    let withEcr = 0;
+    for (const id of allRosteredIds) {
+      const meta = sleeperPlayers[id];
+      if (!meta || !posGroups.includes(meta.position)) continue;
+      total++;
+      const rec = lookupFpMulti(ecrIndex, [playerName(meta, id)], toFpPosition(meta.position));
+      const ecr = rec ? Number(rec.rank_ecr ?? rec.rank ?? null) : null;
+      if (ecr != null && !Number.isNaN(ecr)) {
+        valueById.set(String(id), ecr);
+        withEcr++;
+      }
+    }
+    if (!total || withEcr / total < 0.6) {
+      tradeBasis = "projection";
+      valueById.clear();
+      const byPos = {};
+      for (const id of allRosteredIds) {
+        const meta = sleeperPlayers[id];
+        if (!meta || !posGroups.includes(meta.position)) continue;
+        const proj = hub.pick(projWeek, id).proj;
+        if (proj == null) continue;
+        (byPos[meta.position] ||= []).push({ id: String(id), proj });
+      }
+      for (const [pos, list] of Object.entries(byPos)) {
+        list.sort((x, y) => y.proj - x.proj);
+        list.forEach((x, i) => valueById.set(x.id, Math.round(((i + 1) * POS_DEPTH[pos]) / list.length)));
+      }
+    }
+  }
+
   // --- Trade Radar: every team's strengths/weaknesses, suggestions grouped by opponent ---
-  // Uses ECR (already fetched, and consensus-rankings is inherently a
-  // rest-of-season-oriented signal by nature, not a single-week snapshot)
-  // as the "team strength" value per position — not literal rest-of-season
-  // point projections, which FantasyPros doesn't expose in a form this
-  // app fetches today. If literal ROS point totals are wanted later,
-  // that would need a separate fetch (FantasyPros does have ROS-specific
-  // rankings pages, confirmed to exist, just not wired up here yet).
+  // "Team strength" at a position = the average trade value (ECR rank, or the
+  // projection-based stand-in above) of that roster's players there.
   let leagueTeams = [];
   const tradeSuggestions = [];
+  let myAnalysis = null;
+  let teamAnalyses = [];
   try {
-    const posGroups = ["QB", "RB", "WR", "TE"];
-    const avgEcrByPos = (roster) => {
+    const avgValueByPos = (roster) => {
       const byPos = {};
       (roster.players || []).forEach((id) => {
         const meta = sleeperPlayers[id];
         if (!meta || !posGroups.includes(meta.position)) return;
-        const rec = lookupFpMulti(ecrIndex, [playerName(meta, id)], toFpPosition(meta.position));
-        const ecr = rec ? Number(rec.rank_ecr ?? rec.rank ?? null) : null;
-        if (ecr == null || Number.isNaN(ecr)) return;
+        const v = valueById.get(String(id));
+        if (v == null) return;
         byPos[meta.position] = byPos[meta.position] || [];
-        byPos[meta.position].push(ecr);
+        byPos[meta.position].push(v);
       });
       const avg = {};
       for (const pos of posGroups) {
@@ -475,10 +569,10 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       return avg;
     };
 
-    const teamAnalyses = rosters.map((r) => {
-      const avg = avgEcrByPos(r);
+    teamAnalyses = rosters.map((r) => {
+      const avg = avgValueByPos(r);
       const withValues = posGroups.filter((p) => avg[p].avgEcr != null && avg[p].count >= 1);
-      // Lower average ECR = better (rank 1 is the best player at a position).
+      // Lower average value = better (rank 1 is the best player at a position).
       const ranked = [...withValues].sort((a, b) => avg[a].avgEcr - avg[b].avgEcr);
       const strengths = ranked.slice(0, Math.min(2, ranked.length));
       const weaknesses = [...ranked].reverse().slice(0, Math.min(2, ranked.length));
@@ -490,7 +584,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       return { rosterId: r.roster_id, label, isMe: r.roster_id === myRoster.roster_id, avg, strengths, weaknesses };
     });
 
-    const myAnalysis = teamAnalyses.find((t) => t.isMe);
+    myAnalysis = teamAnalyses.find((t) => t.isMe);
 
     leagueTeams = teamAnalyses.map((t) => ({
       team: t.label,
@@ -516,7 +610,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
             severity: gap > 25 ? "major" : "minor",
             give: `A ${mutualGive}`,
             get: `A ${myWeak}`,
-            note: `You're weak at ${myWeak} (avg ECR ~${Math.round(myAnalysis.avg[myWeak].avgEcr)}) — they're strong there (avg ECR ~${Math.round(other.avg[myWeak].avgEcr)}). You're strong at ${mutualGive}, which is one of their weak spots — mutually beneficial.`,
+            note: `You're weak at ${myWeak} (avg ${tradeBasis === "ecr" ? "ECR" : "proj. rank"} ~${Math.round(myAnalysis.avg[myWeak].avgEcr)}) — they're strong there (~${Math.round(other.avg[myWeak].avgEcr)}). You're strong at ${mutualGive}, which is one of their weak spots — mutually beneficial.`,
           });
         }
         const capped = suggestionsForTeam.slice(0, 2);
@@ -525,65 +619,77 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
         }
       }
     }
-  } catch {
-    // Trade Radar is a bonus heuristic — fail soft, not a build failure.
+  } catch (err) {
+    console.warn(`[buildLeague] Trade Radar failed for league ${leagueId}, continuing without it: ${err.message}`);
   }
 
-  // --- Trade Finder: concrete 1-for-1 player swaps against each rival ---
-  // A real swap suggestion, not a positional heuristic: for each of your
-  // CURRENT STARTERS, look at every rival roster for a same-position
-  // player whose ECR is close enough to yours that they'd plausibly say
-  // yes (the FAIRNESS_ECR_TOLERANCE below is what filters out "my worst
-  // bench guy for their All-Pro"-style lopsided offers), then only
-  // resolve full point projections for that short, promising list — not
-  // every player on every roster — to stay within FantasyPros' rate
-  // limit. Ranked by actual projected-points gain to your starting lineup.
+  // --- Trade Finder (v2.9): concrete 1-for-1 swaps, never the same position ---
+  // You SELL from a position of strength and BUY at a position of weakness:
+  // give one of your players at a strength position, get one of a rival's at
+  // a position where you're weak. Kept only when the two are close enough in
+  // trade value (|Δ| <= 20 on the value scale) that the rival could plausibly
+  // say yes, and when the swap raises YOUR projected starting lineup:
+  //   net gain = (what the new player adds over the starter he'd replace)
+  //            - (what you lose if the player you give is a starter, i.e. he
+  //               drops to the best bench player at his position)
+  // `mutual` marks rivals who are themselves weak where you're giving.
   const tradeFinder = [];
   try {
-    const posGroups = ["QB", "RB", "WR", "TE"];
-    const FAIRNESS_ECR_TOLERANCE = 20;
-    const myStarterPlayers = starters.filter((s) => s.player && posGroups.includes(s.player.pos)).map((s) => s.player);
-
-    const quickEval = async (id) => {
-      const meta = sleeperPlayers[id];
-      if (!meta || !posGroups.includes(meta.position)) return null;
-      const name = playerName(meta, id);
-      const fpPos = toFpPosition(meta.position);
-      const crosswalk = await lookupBySleeperId(id).catch(() => null);
-      const ecrRec = lookupFpMulti(ecrIndex, crosswalk?.name ? [name, crosswalk.name] : [name], fpPos);
-      const ecr = ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null;
-      if (ecr == null || Number.isNaN(ecr)) return null;
-      return { id, name, pos: meta.position, ecr, meta, crosswalk };
+    const FAIRNESS_TOLERANCE = 20;
+    const eligibleForSlot = (slot, pos) => (FLEX_ELIGIBLE[slot] ? FLEX_ELIGIBLE[slot].includes(pos) : slot === pos);
+    const myStarters = starters.filter((s) => s.player);
+    const gainFromAdding = (pos, proj) => {
+      const slots = starters.map((s, i) => ({ s, i })).filter(({ s }) => eligibleForSlot(s.slot, pos));
+      if (!slots.length) return 0;
+      const low = Math.min(...slots.map(({ s }) => (s.player ? s.player.proj ?? 0 : 0)));
+      return Math.max(0, proj - low);
+    };
+    const myByPos = (pos) => [...myStarters.map((s) => ({ ...s.player, starter: true })), ...bench.filter(Boolean).map((p) => ({ ...p, starter: false }))].filter((p) => p.pos === pos && p.proj != null);
+    const lossFromGiving = (g) => {
+      if (!g.starter) return 0;
+      const replacement = bench.filter(Boolean).filter((p) => p.pos === g.pos && p.proj != null).sort((x, y) => y.proj - x.proj)[0];
+      return Math.max(0, g.proj - (replacement?.proj ?? 0));
     };
 
-    if (myStarterPlayers.length) {
+    if (myAnalysis?.strengths.length && myAnalysis?.weaknesses.length) {
+      const myWeakSet = new Set(myAnalysis.weaknesses);
+      const giveCandidates = myAnalysis.strengths
+        .filter((sPos) => !myWeakSet.has(sPos))
+        .flatMap((sPos) => myByPos(sPos).sort((x, y) => y.proj - x.proj).slice(0, 4))
+        .map((p) => ({ ...p, value: valueById.get(String(p.id)) ?? null }))
+        .filter((p) => p.value != null);
       for (const otherRoster of rosters) {
         if (otherRoster.roster_id === myRoster.roster_id) continue;
+        const theirs = teamAnalyses.find((t) => t.rosterId === otherRoster.roster_id);
         const owner = leagueUsers.find((u) => u.user_id === otherRoster.owner_id);
         const theirLabel = otherRoster.metadata?.team_name || owner?.metadata?.team_name || owner?.display_name || `Roster #${otherRoster.roster_id}`;
-        const candidates = (await Promise.all((otherRoster.players || []).map(quickEval))).filter(Boolean);
+        const wants = (otherRoster.players || [])
+          .map((id) => ({ id: String(id), meta: sleeperPlayers[id], value: valueById.get(String(id)) }))
+          .filter((c) => c.meta && myWeakSet.has(c.meta.position) && c.value != null)
+          .sort((x, y) => x.value - y.value)
+          .slice(0, 8);
         const swapsForTeam = [];
-
-        for (const give of myStarterPlayers) {
-          if (give.ecr == null || give.proj == null) continue;
-          const near = candidates
-            .filter((c) => c.pos === give.pos && c.ecr < give.ecr && give.ecr - c.ecr <= FAIRNESS_ECR_TOLERANCE)
-            .sort((a, b) => a.ecr - b.ecr)
-            .slice(0, 3); // only the closest few — bounds the extra projection lookups per rival
+        for (const give of giveCandidates) {
+          if (!give.proj) continue;
+          const near = wants.filter((c) => c.meta.position !== give.pos && Math.abs(c.value - give.value) <= FAIRNESS_TOLERANCE).slice(0, 3);
           for (const cand of near) {
             const { proj: candProj } = await resolveProjection(cand.id);
             if (candProj == null) continue;
-            const gain = candProj - give.proj;
-            if (gain <= 0) continue;
+            const add = gainFromAdding(cand.meta.position, candProj);
+            const loss = lossFromGiving(give);
+            const net = add - loss;
+            if (net <= 0.5) continue;
             swapsForTeam.push({
               theirTeam: theirLabel,
-              give: { name: give.name, pos: give.pos, proj: give.proj, ecr: give.ecr },
-              get: { name: cand.name, pos: cand.pos, proj: candProj, ecr: cand.ecr },
-              gain: Math.round(gain * 10) / 10,
+              mutual: Boolean(theirs?.weaknesses.includes(give.pos)),
+              give: { name: give.name, pos: give.pos, proj: give.proj, ecr: give.value },
+              get: { name: cand.meta ? playerName(cand.meta, cand.id) : cand.id, pos: cand.meta.position, proj: candProj, ecr: cand.value },
+              gain: Math.round(net * 10) / 10,
+              gainParts: { add: Math.round(add * 10) / 10, loss: Math.round(loss * 10) / 10 },
             });
           }
         }
-        swapsForTeam.sort((a, b) => b.gain - a.gain);
+        swapsForTeam.sort((a, b) => Number(b.mutual) - Number(a.mutual) || b.gain - a.gain);
         tradeFinder.push(...swapsForTeam.slice(0, 2)); // cap per rival so one team doesn't crowd out the rest
       }
       tradeFinder.sort((a, b) => b.gain - a.gain);
@@ -592,12 +698,93 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     console.warn(`[buildLeague] Trade Finder failed for league ${leagueId}, continuing without it: ${err.message}`);
   }
 
+  // --- v2.9 league facts: slots, FAAB budget, trade deadline, recent drops, ownership ---
+  const countSlots = (name) => (league.roster_positions || []).filter((p) => p === name).length;
+  const benchSlots = countSlots("BN");
+  const irSlots = Number(league.settings?.reserve_slots ?? countSlots("IR")) || 0;
+  const waiverBudgetTotal = Number(league.settings?.waiver_budget ?? 0) || 0;
+  const waiverBudgetUsed = Number(myRoster.settings?.waiver_budget_used ?? 0) || 0;
+  const waiverInfo = {
+    type: league.settings?.waiver_type ?? null, // Sleeper: 0 = rolling/standard, 1 = reverse standings, 2 = FAAB (unverified mapping)
+    faab: waiverBudgetTotal > 0,
+    budget: waiverBudgetTotal,
+    used: waiverBudgetUsed,
+    remaining: Math.max(0, waiverBudgetTotal - waiverBudgetUsed),
+    priority: myRoster.settings?.waiver_position ?? null,
+  };
+  const tradeDeadline = await deadlineInfo({ settings: league.settings || {}, currentWeek: week, season, getWeekSchedule: schedule.getWeekSchedule }).catch(() => null);
+
+  let dropSummary = { windowDays: 3, items: [], error: null };
+  try {
+    const activity = await transactions.getLeagueActivity(leagueId, { week });
+    const items = transactions.decorate(activity.drops, { sleeperPlayers, rosters, leagueUsers }).map((d) => {
+      const r = hub.pick(projWeek, d.playerId);
+      return { ...d, available: !allRosteredIds.has(String(d.playerId)), proj: r.proj ?? null, projSource: r.projSource ?? null };
+    });
+    dropSummary = { windowDays: 3, items, error: null };
+  } catch (err) {
+    dropSummary = { windowDays: 3, items: [], error: err.message };
+  }
+
+  // Players on your roster that opponents ALSO roster in their other leagues.
+  // ~60 Sleeper calls, so it is computed in the background and cached 6h; the
+  // first build after a cold start shows `pending: true`.
+  let ownershipInfo = { pending: true, at: null, players: [] };
+  try {
+    const oppIds = rosters.filter((r) => r.roster_id !== myRoster.roster_id && r.owner_id).map((r) => r.owner_id);
+    const res = ownership.getOrStart({
+      key: `own:${leagueId}:${userId}:${season}`,
+      compute: () => ownership.computeOwnership({ leagueId, myPlayerIds: myRoster.players || [], opponentOwnerIds: oppIds, season, sleeperPlayers }),
+    });
+    if (res) {
+      const high = new Set(ownership.highOwnership(res, { opponentsTotal: oppIds.length }));
+      const labelOf = (ownerId) => {
+        const r = rosters.find((x) => x.owner_id === ownerId);
+        const u = leagueUsers.find((x) => x.user_id === ownerId);
+        return r?.metadata?.team_name || u?.metadata?.team_name || u?.display_name || ownerId;
+      };
+      ownershipInfo = {
+        pending: false,
+        at: res.at,
+        opponents: oppIds.length,
+        leaguesChecked: res.leaguesChecked,
+        errors: res.errors,
+        capped: res.capped,
+        min: { opponents: ownership.MIN_OPPONENTS, pct: ownership.MIN_PCT },
+        players: Object.entries(res.players || {})
+          .filter(([, p]) => p.opponentCount > 0)
+          .map(([id, p]) => ({
+            id,
+            name: playerName(sleeperPlayers[id], id),
+            pos: sleeperPlayers[id]?.position || "?",
+            opponentCount: p.opponentCount,
+            leagueCount: p.leagueCount,
+            high: high.has(id),
+            opponents: p.opponents.map((o) => ({ team: labelOf(o.ownerId), leagues: o.leagues })),
+          }))
+          .sort((a, b) => Number(b.high) - Number(a.high) || b.opponentCount - a.opponentCount),
+      };
+    }
+  } catch (err) {
+    console.warn(`[buildLeague] Ownership lookup skipped: ${err.message}`);
+  }
+
   const built = {
     id: leagueId,
     name: league.name,
     teamName,
     week,
+    season,
     scoring: scoringLabel(league.scoring_settings),
+    benchSlots,
+    irSlots,
+    waiverInfo,
+    tradeDeadline,
+    dropSummary,
+    ownership: ownershipInfo,
+    tradeBasis,
+    myRosterId: myRoster.roster_id,
+    ownerId: userId,
     scoringProfile: store.profileOf(league.scoring_settings).key, // v2.8: which matchup-difficulty table to colour with
     superflex,
     lockLabel: weekSchedule ? `Week ${week} — live kickoff times from ESPN` : "Live from Sleeper",

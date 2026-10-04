@@ -93,7 +93,7 @@ async function refreshUser(state) {
     const week = state.week || sleeperState.week;
     const leaguesRaw = await sleeper.getUserLeagues(sleeperUser.user_id, sleeperState.season);
     const chosen = leaguesRaw.filter((l) => state.leagueIds.includes(l.league_id));
-    const trending = await sleeper.getTrendingAdds(60, 24);
+    const trending = await sleeper.getTrendingAdds(200, 24);
 
     for (const leagueSummary of chosen) {
       try {

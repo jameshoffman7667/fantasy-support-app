@@ -25,12 +25,18 @@ export function connect() {
   return request(`/api/connect`);
 }
 
-export function buildLeagues(sessionId, leagueIds, week) {
+// v2.9: `leagueIds` = build these now; `trackedIds` = the full tracked list to remember.
+export function buildLeagues(sessionId, leagueIds, week, trackedIds) {
   return request(`/api/leagues/build`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, leagueIds, week }),
+    body: JSON.stringify({ sessionId, leagueIds, week, trackedIds }),
   });
+}
+
+// v2.9: the last saved build of every tracked league, instantly (no Sleeper calls).
+export function getCachedLeagues() {
+  return request(`/api/leagues/cached`);
 }
 
 export function getFaabSuggestions(sessionId, leagueId) {
@@ -181,4 +187,15 @@ export function ackVariances(keys) {
 }
 export function pruneVarianceAcks(leagueIds, week, present) {
   return jsonPost(`/api/variances/prune`, { leagueIds, week, present });
+}
+
+/* ---------------- Waiver plan + trade advice (v2.9) ---------------- */
+export function getWaiverPlan(leagueId) {
+  return request(`/api/waiver-plan?leagueId=${encodeURIComponent(leagueId)}`);
+}
+export function saveWaiverPlan(leagueId, plan) {
+  return jsonPost(`/api/waiver-plan`, { leagueId, plan });
+}
+export function getTradeAdvice(sessionId, leagueId, force = false) {
+  return jsonPost(`/api/trade/advice`, { sessionId, leagueId, force });
 }

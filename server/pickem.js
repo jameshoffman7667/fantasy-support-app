@@ -3,6 +3,7 @@ import * as sleeper from "./sleeper.js";
 import * as schedule from "./schedule.js";
 import * as tank01 from "./tank01.js";
 import * as gemini from "./gemini.js";
+import * as weather from "./weather.js";
 import * as store from "./projectionStore.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
 
@@ -190,7 +191,13 @@ export async function getBoard({ season, week } = {}) {
   } catch (err) {
     console.warn(`[pickem] Gemini scan failed: ${err.message}`);
   }
+  // v2.9: each game's forecast (flagged yellow in the app when it's bad). Open-Meteo, cached by weather.js.
+  const wx = await weather.getWeekWeather(season, week, sched).catch((err) => {
+    console.warn(`[pickem] Weather unavailable: ${err.message}`);
+    return null;
+  });
   for (const g of games) {
+    g.weather = wx?.byTeam?.[g.home] || null;
     const gi = gem?.byGame?.[g.key] || null;
     g.gemini = gi;
     const up = upsetPotential({ dogProb: g.dogProb ?? 0, dogShift: g.dogShift, mentions: gi?.upsetMentions });

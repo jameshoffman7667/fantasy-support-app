@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,39 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v2.9 — Waiver pages, trade tools, faster loads (public API)
+
+**Commit (short):** `v2.9: feat: waiver pages, trade tools, speed`
+
+**Commit (extended):**
+v2.9 collects every change that needs only public Sleeper data. Waivers
+split into Available (top 5 projected and top 5 trending per position,
+bid box on every player, $ or % entry) and Claims (grouped by bid, drag
+to reorder within a group, edit, delete, add custom claims, reset, FAAB
+now vs predicted after, checklist to enter in Sleeper). FAAB bid history
+and a 3-day drop summary were added.
+
+Trades gain a Gemini news flag, a reworked Trade Finder, a deadline
+countdown and other-league ownership. Game Day gets a league filter,
+time slots and for/against chips; Pick'em a weather chip and longer
+notes; Analytics Last 4/ROS/Blend matchup ranks and a sortable accuracy
+matrix by position.
+
+The dashboard paints from the last saved build and refreshes leagues two
+at a time. Variance rules changed: weather and big-gap trades auto-clear
+after being seen, waiver flags compare projections with starters and
+bench, trending flags are gone, and players with no projection are
+flagged. Bug fixes: IR flag, cleared variances reappearing.
+
+**Details**
+- New: `client/src/waiverPlan.js`, `server/waiverPlan.js`, `faab.js` history, `transactions.js`, `crossOwnership.js`, `tradeDeadline.js`; routes `/api/waiver-plan`, `/api/leagues/cached`, `/api/trade/advice`; build accepts `trackedIds`.
+- Behaviour changes to expect: more "Open bench slot" yellows (bench padding); waiver red/yellow rules changed; trending variance removed; "last 4 sample" option removed (saved value reads as blended); non-fantasy positions no longer recorded in accuracy; acks have a 12 h prune grace.
+- Waiver plan validation rejects negative bids rather than clamping them to 0.
+- Unverified: equal-bid processing order, ROS, trade deadline source, ownership data, Game Day for/against orientation. Tailwind layout could not be rendered in the test harness; structure was tested, visual layout was not.
+- Tests: 117 browser-harness checks, build/acks/dvp/routes server tests, pure waiver and variance tests all pass.
 
 ---
 

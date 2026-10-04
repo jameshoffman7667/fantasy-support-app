@@ -25,7 +25,11 @@ export function getRosters(leagueId) {
 export function getLeagueUsers(leagueId) {
   return sleeperFetch(`/league/${leagueId}/users`);
 }
-export function getTrendingAdds(limit = 60, lookbackHours = 24) {
+// v2.9: the waiver page wants the top 5 trending PER POSITION, so ask for more
+// than the old 60 (the feed is ordered by add count; the cap Sleeper applies to
+// `limit` is not documented — if it silently caps lower, positions fill up
+// less, nothing breaks).
+export function getTrendingAdds(limit = 200, lookbackHours = 24) {
   return sleeperFetch(`/players/nfl/trending/add?lookback_hours=${lookbackHours}&limit=${limit}`);
 }
 export function getTransactions(leagueId, round) {

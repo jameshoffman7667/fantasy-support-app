@@ -1,4 +1,4 @@
-import * as sleeper from "./sleeper.js";
+import { fetchLeagueTransactions, winningBids } from "./transactions.js";
 
 /**
  * SCOPE REALITY CHECK (read this before the math below):
@@ -21,16 +21,19 @@ import * as sleeper from "./sleeper.js";
  * players like this one" — a directional guide, not a confidence
  * interval on one player. Framed any more precisely than that would be
  * overstating what a few tracked leagues' worth of data can support.
+ *
+ * v2.9: the lookback was widened from "since last Tuesday" to the last 21
+ * days (weeks currentWeek-2..currentWeek) because one waiver run is far too
+ * thin a sample. That makes the percentiles less "this week's market" and
+ * more "the last three weeks' market"; early-season bids and late-season
+ * bids are mixed together. Per-player history (`playerBids`) is just
+ * whatever winning bids for that exact player happened to be in the
+ * tracked leagues -- usually none.
  */
 
-function mostRecentTuesdayMidnightUTC(now = new Date()) {
-  const d = new Date(now);
-  const day = d.getUTCDay(); // 0=Sun..6=Sat
-  const diff = (day - 2 + 7) % 7; // days since Tuesday
-  d.setUTCDate(d.getUTCDate() - diff);
-  d.setUTCHours(0, 0, 0, 0);
-  return d.getTime();
-}
+
+const WINDOW_DAYS = 21;
+const DAY_MS = 24 * 3600e3;
 
 function percentile(sortedAsc, p) {
   if (sortedAsc.length === 0) return null;
@@ -38,74 +41,108 @@ function percentile(sortedAsc, p) {
   return sortedAsc[Math.max(0, idx)];
 }
 
-/** Pulls recent waiver transactions from the tracked leagues, since the last Tuesday 12am UTC. */
-async function collectRecentWaiverBids(leagueSummaries, currentWeek) {
-  const cutoff = mostRecentTuesdayMidnightUTC();
-  const bids = []; // { leagueId, playerId, bidPct, budget, bidAmount }
+function median(sortedAsc) {
+  const n = sortedAsc.length;
+  if (!n) return null;
+  return n % 2 ? sortedAsc[(n - 1) / 2] : (sortedAsc[n / 2 - 1] + sortedAsc[n / 2]) / 2;
+}
 
-  for (const leagueSummary of leagueSummaries) {
-    const budget = leagueSummary.settings?.waiver_budget ?? leagueSummary.waiver_budget ?? null;
-    if (!budget) continue; // this league isn't FAAB-based — nothing to compute
+/** Weeks to request: [week-2 .. week], clamped to >= 1 (so week 1-2 gives 1..week). */
+function lookbackWeeks(currentWeek) {
+  const w = Math.max(1, Number(currentWeek) || 1);
+  const out = [];
+  for (let k = Math.max(1, w - 2); k <= w; k++) out.push(k);
+  return out;
+}
 
-    // Check this week's and last week's rounds — Sleeper's waiver
-    // processing schedule varies by league, so "since Tuesday" can land
-    // in either depending on exactly when it ran.
-    const rounds = [currentWeek, Math.max(1, currentWeek - 1)];
-    for (const round of rounds) {
-      let transactions;
-      try {
-        transactions = await sleeper.getTransactions(leagueSummary.league_id, round);
-      } catch {
-        continue;
-      }
-      for (const t of transactions || []) {
-        if (t.type !== "waiver" || t.status !== "complete") continue;
-        if (!t.created || t.created < cutoff) continue;
-        const bidAmount = t.settings?.waiver_bid ?? t.settings?.waiverBid;
-        if (bidAmount == null) continue;
-        const addedPlayerId = t.adds ? Object.keys(t.adds)[0] : null;
-        if (!addedPlayerId) continue;
-        bids.push({
-          leagueId: leagueSummary.league_id,
-          playerId: addedPlayerId,
-          bidAmount,
-          budget,
-          bidPct: (bidAmount / budget) * 100,
-        });
-      }
+/** Winning FAAB bids from the tracked leagues in the last 21 days. */
+async function collectRecentWaiverBids(leagueSummaries, currentWeek, { now, getTransactions }) {
+  const cutoff = now - WINDOW_DAYS * DAY_MS;
+  const weeks = lookbackWeeks(currentWeek);
+  const bids = []; // { leagueId, leagueName, playerId, bidAmount, budget, bidPct, at, week }
+  for (const league of leagueSummaries) {
+    const budget = league.settings?.waiver_budget ?? league.waiver_budget ?? null;
+    if (!budget) continue; // not a FAAB league
+    const rows = await fetchLeagueTransactions(league.league_id, weeks, { getTransactions });
+    for (const b of winningBids(rows)) {
+      if (b.at == null || b.at < cutoff || b.at > now) continue;
+      bids.push({
+        leagueId: league.league_id,
+        leagueName: league.name || String(league.league_id),
+        playerId: b.playerId,
+        bidAmount: b.bid,
+        budget,
+        bidPct: (b.bid / budget) * 100,
+        at: b.at,
+        week: b.week,
+      });
     }
   }
   return bids;
 }
 
+const posOf = (sleeperPlayers, id) => sleeperPlayers?.[id]?.position || (/^[A-Z]{2,3}$/.test(String(id)) ? "DEF" : "?");
+const nameOf = (sleeperPlayers, id) => {
+  const p = sleeperPlayers?.[id];
+  const nm = p ? `${p.first_name || ""} ${p.last_name || ""}`.trim() : "";
+  return nm || (/^[A-Z]{2,3}$/.test(String(id)) ? `${id} D/ST` : `Player ${id}`);
+};
+const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
 /**
- * Returns { players, sampleSize, note } for the given free-agent
+ * Returns { players, sampleSize, note, history } for the given free-agent
  * candidates. sleeperPlayers is Sleeper's full player dict (for position
  * lookups); leagueSummaries are the raw league objects for every league
  * currently tracked (need .settings for budget); currentWeek from the
- * connected session.
+ * connected session. Optional 5th arg { now, getTransactions } is for tests.
  */
-export async function getFaabSuggestions(freeAgents, leagueSummaries, sleeperPlayers, currentWeek) {
-  const bids = await collectRecentWaiverBids(leagueSummaries, currentWeek);
-  if (bids.length === 0) {
-    return { players: [], sampleSize: 0, note: "No completed FAAB waiver transactions found in tracked leagues since last Tuesday." };
-  }
+export async function getFaabSuggestions(freeAgents, leagueSummaries, sleeperPlayers, currentWeek, opts = {}) {
+  const now = opts.now ?? Date.now();
+  const bids = await collectRecentWaiverBids(leagueSummaries || [], currentWeek, { now, getTransactions: opts.getTransactions });
+  const windowLabel = `Last ${WINDOW_DAYS} days (weeks ${lookbackWeeks(currentWeek)[0]}-${lookbackWeeks(currentWeek).slice(-1)[0]}) across tracked FAAB leagues`;
 
-  const byPosition = {};
+  const enriched = bids
+    .map((b) => ({ ...b, pos: posOf(sleeperPlayers, b.playerId), playerName: nameOf(sleeperPlayers, b.playerId) }))
+    .sort((a, b) => b.at - a.at);
+
+  const recent = enriched.slice(0, 15).map((b) => ({
+    playerName: b.playerName, pos: b.pos, bid: b.bidAmount, budget: b.budget,
+    pct: Math.round(b.bidPct * 10) / 10, leagueName: b.leagueName, at: b.at,
+  }));
+
+  const posBuckets = {};
+  const posPct = {};
   const allPct = [];
-  for (const b of bids) {
-    const pos = sleeperPlayers[b.playerId]?.position || "?";
-    byPosition[pos] = byPosition[pos] || [];
-    byPosition[pos].push(b.bidPct);
+  for (const b of enriched) {
+    (posBuckets[b.pos] = posBuckets[b.pos] || []).push(b.bidAmount);
+    (posPct[b.pos] = posPct[b.pos] || []).push(b.bidPct);
     allPct.push(b.bidPct);
   }
-  for (const pos in byPosition) byPosition[pos].sort((a, b) => a - b);
+  const byPositionHistory = {};
+  for (const pos of Object.keys(posBuckets)) {
+    const amt = posBuckets[pos].sort((a, b) => a - b);
+    const pct = posPct[pos].sort((a, b) => a - b);
+    byPositionHistory[pos] = { n: amt.length, min: amt[0], median: median(amt), max: amt[amt.length - 1], medianPct: Math.round(median(pct) * 10) / 10 };
+  }
+  const history = { windowLabel, bids: recent, byPosition: byPositionHistory };
+
+  if (bids.length === 0) {
+    return { players: [], sampleSize: 0, note: `No completed FAAB waiver transactions found in tracked leagues in the ${windowLabel.toLowerCase()}.`, history };
+  }
+
+  for (const pos in posPct) posPct[pos].sort((a, b) => a - b);
   allPct.sort((a, b) => a - b);
 
-  const players = freeAgents.map((fa) => {
-    const posSample = byPosition[fa.pos] || [];
+  const players = (freeAgents || []).map((fa) => {
+    const posSample = posPct[fa.pos] || [];
     const useSample = posSample.length >= 10 ? posSample : allPct;
     const sampleScope = posSample.length >= 10 ? `${fa.pos} bids` : "all tracked-league bids (too few at this position alone)";
+    // Free agents from buildLeague carry no Sleeper id, so match by id when
+    // present, else by normalised name + position.
+    const faId = fa.playerId ?? fa.player_id ?? fa.id ?? null;
+    const playerBids = enriched
+      .filter((b) => (faId != null ? String(b.playerId) === String(faId) : norm(b.playerName) === norm(fa.name) && (!fa.pos || b.pos === fa.pos)))
+      .map((b) => ({ bid: b.bidAmount, budget: b.budget, pct: Math.round(b.bidPct * 10) / 10, leagueName: b.leagueName, at: b.at }));
     return {
       name: fa.name,
       pos: fa.pos,
@@ -113,8 +150,9 @@ export async function getFaabSuggestions(freeAgents, leagueSummaries, sleeperPla
       suggestion95Pct: percentile(useSample, 95),
       sampleSize: useSample.length,
       sampleScope,
+      playerBids,
     };
   });
 
-  return { players, sampleSize: bids.length, note: null };
+  return { players, sampleSize: bids.length, note: null, history };
 }

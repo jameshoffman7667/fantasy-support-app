@@ -1,4 +1,4 @@
-// v2.8.1 variance report + "clear minor variances".
+// v2.8.1 variance report + "clear minor variances" (v2.9: auto-clearing rules).
 //
 // Every yellow (minor) or red (major) flag in a league's pages becomes one
 // variance: { key, leagueId, league, page, rule, subject, text, severity }.
@@ -12,6 +12,12 @@
 // cleared) colours them again; a cleared minor that becomes major always
 // shows (reds can't be cleared). Acknowledgements for issues that have gone
 // away are pruned, so if the same issue comes back later it's new again.
+//
+// v2.9: some minor variances are "auto-clearing" (a weather warning, a big-gap
+// trade opportunity): they show on the first visit to their page and are
+// acknowledged automatically once the page has been viewed and left
+// (see autoClearKeys). If the same issue goes away and returns later it's new
+// again. Incoming trade offers deliberately do NOT auto-clear.
 //
 // Pure — no React — so it can be unit-tested.
 
@@ -39,9 +45,9 @@ export function keyParts(key) {
 export function collectVariances(lg) {
   if (!lg || lg.error) return [];
   const out = [];
-  const add = (page, rule, subject, severity, text) => {
+  const add = (page, rule, subject, severity, text, auto = false) => {
     if (severity !== "minor" && severity !== "major") return;
-    out.push({ key: varianceKey(lg.id, lg.week, page, rule, subject), leagueId: lg.id, league: lg.name, page, rule, subject, severity, text: text || subject });
+    out.push({ key: varianceKey(lg.id, lg.week, page, rule, subject), leagueId: lg.id, league: lg.name, page, rule, subject, severity, text: text || subject, auto: Boolean(auto) && severity === "minor" });
   };
 
   // Roster: one variance per rule broken per row.
@@ -64,17 +70,24 @@ export function collectVariances(lg) {
       const changed = (L.rows || []).filter((r) => r.changed);
       add("lineup", "Optimal lineup is better", "Starting lineup", L.delta < 5 ? "minor" : "major", `Optimal lineup gains +${L.delta.toFixed(1)} pts${changed.length ? `: ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}` : ""}`);
     }
-    for (const p of L.weatherStarters || []) add("lineup", "Weather", p.name, "minor", `${p.name} (${p.team}): ${(p.weather?.reasons || []).join("; ")}`);
+    for (const p of L.weatherStarters || []) add("lineup", "Weather", p.name, "minor", `${p.name} (${p.team}): ${(p.weather?.reasons || []).join("; ")}`, true);
+  }
+  // v2.9: a starter or bench player with no projection from any source (kept
+  // for troubleshooting; IR / taxi players can't be started so aren't checked).
+  const noProj = [...(lg.starters || []).map((s) => (s.player ? { p: s.player, slot: s.slot } : null)), ...(lg.bench || []).map((p) => (p ? { p, slot: "BN" } : null))];
+  for (const x of noProj) {
+    if (x && x.p.proj == null && !x.p.played) add("lineup", "No projection for player", `${x.slot} ${x.p.name}`, "minor", `${x.p.name} (${x.slot}) has no projection from any source`);
   }
 
-  // Waivers.
+  // Waivers (v2.9): by projection, not ECR or trending. `fa.rule` / `fa.note`
+  // are set in computeWaiver (App.jsx).
   for (const fa of lg.waiver?.rows || []) {
-    const rule = fa.rankHit && fa.trendHit ? "Top-ranked and trending free agent" : fa.rankHit ? "Top-ranked free agent" : "Trending add";
-    add("waiver", rule, fa.name, fa.severity, `${fa.name} (${fa.pos})${fa.ecr != null ? ` · ECR #${fa.ecr}` : ""}${fa.trendHit ? " · trending" : ""}`);
+    if (fa.rule) add("waiver", fa.rule, fa.name, fa.severity, `${fa.name} (${fa.pos}) — ${fa.note}`);
   }
 
-  // Trades.
-  for (const t of lg.trade?.rows || []) add("trade", "Trade opportunity", `${t.theirTeam}: give ${t.give}, get ${t.get}`, t.severity, `${t.theirTeam}: give ${t.give}, get ${t.get}`);
+  // Trades. Only big-gap opportunities are flagged (yellow, auto-clearing);
+  // smaller ones are shown on the page but are not variances.
+  for (const t of lg.trade?.rows || []) add("trade", "Trade opportunity (big gap)", `${t.theirTeam}: give ${t.give}, get ${t.get}`, t.severity, `${t.theirTeam}: give ${t.give}, get ${t.get}`, t.auto);
 
   // Injuries.
   for (const e of lg.injury?.rows || []) {
@@ -169,6 +182,14 @@ export function groupTree(variances) {
     for (const p of l.pages) delete p.byRule;
   }
   return leagues;
+}
+
+/**
+ * v2.9: keys of auto-clearing minor variances in a scope (a league + page),
+ * to acknowledge once that page has been viewed and left.
+ */
+export function autoClearKeys(variances, { leagueId, page } = {}) {
+  return [...new Set(variances.filter((v) => v.auto && v.severity === "minor" && !v.cleared && (!leagueId || v.leagueId === leagueId) && (!page || v.page === page)).map((v) => v.key))];
 }
 
 /** Keys to acknowledge when "Clear minor variances" is pressed in a scope. */
