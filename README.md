@@ -473,6 +473,9 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v3.1 additions
+Account → Sleeper access now has four switches: Read from Sleeper, Roster changes, Waiver claims, Trades. Outgoing trade offers all show, with a Withdraw button (unverified; it uses reject_trade and reads back). Players are unavailable on waivers from their kickoff until the week's last game ends. Injury opportunities (depth chart, next two backups) appear on Waivers, Roster and Injury. See CHANGELOG v3.1 for the unverified items.
+
 ### Sleeper private access, roster push, trade offers, League page (v3.0)
 
 Everything in this section is **optional and off until you turn it on**. Without a token the app behaves exactly as v2.9.

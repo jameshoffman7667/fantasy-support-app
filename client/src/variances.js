@@ -46,14 +46,26 @@ export function keyParts(key) {
 export function collectVariances(lg) {
   if (!lg || lg.error) return [];
   const out = [];
+  // v3.1: push marks. A successful lineup push quiets the lineup-gap rules (until the gap grows by
+  // more than a point) and the keys it listed; a waiver push quiets the keys it listed.
+  const pm = lg.pushMarks || {};
+  const lineupMark = pm.lineup && String(pm.lineup.week) === String(lg.week) ? pm.lineup : null;
+  const waiverMark = pm.waiver && Date.now() - (pm.waiver.at || 0) < 7 * 86400000 ? pm.waiver : null;
+  const marked = new Set([...(lineupMark?.keys || []), ...(waiverMark?.keys || [])]);
+  const gapQuiet = (gap) => lineupMark != null && gap <= lineupMark.gap + 1;
   const add = (page, rule, subject, severity, text, auto = false) => {
     if (severity !== "minor" && severity !== "major") return;
+    if (marked.has(varianceKey(lg.id, lg.week, page, rule, subject))) return;
     out.push({ key: varianceKey(lg.id, lg.week, page, rule, subject), leagueId: lg.id, league: lg.name, page, rule, subject, severity, text: text || subject, auto: Boolean(auto) && severity === "minor" });
   };
 
   // Roster: one variance per rule broken per row.
   for (const r of lg.roster?.rows || []) {
     for (const i of r.issues || []) add("roster", i.rule, `${r.slot} ${r.label}`, i.severity, `${r.slot} ${r.label}: ${i.text}`);
+  }
+
+  for (const r of lg.roster?.irRows || []) {
+    for (const i of r.issues || []) add("roster", i.rule, `IR ${r.label}`, i.severity, `IR ${r.label}: ${i.text}`);
   }
 
   // Lineup.
@@ -64,10 +76,10 @@ export function collectVariances(lg) {
       const changed = (L.rows || []).filter((r) => r.changed);
       if (changed.length) {
         const swing = changed.reduce((s, r) => s + Math.abs(r.delta), 0);
-        add("roster", "Lineup differs from your ranking", "Starting lineup", swing < 5 ? "minor" : "major", `Your ranking changes ${changed.length} slot(s) (${swing.toFixed(1)} pts): ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}`);
+        if (!(swing >= 5 && gapQuiet(swing))) add("roster", "Lineup differs from your ranking", "Starting lineup", swing < 5 ? "minor" : "major", `Your ranking changes ${changed.length} slot(s) (${swing.toFixed(1)} pts): ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}`);
       }
       if ((L.betterDelta ?? 0) > 0.05) add("roster", "Better lineup than your ranking", "Player Rankings", "minor", `A better projected lineup exists: +${L.betterDelta.toFixed(1)} pts over your ranking`);
-    } else if ((L.delta ?? 0) > 0) {
+    } else if ((L.delta ?? 0) > 0 && !(L.delta >= 5 && gapQuiet(L.delta))) {
       const changed = (L.rows || []).filter((r) => r.changed);
       add("roster", "Optimal lineup is better", "Starting lineup", L.delta < 5 ? "minor" : "major", `Optimal lineup gains +${L.delta.toFixed(1)} pts${changed.length ? `: ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}` : ""}`);
     }
@@ -84,6 +96,25 @@ export function collectVariances(lg) {
   // are set in computeWaiver (App.jsx).
   for (const fa of lg.waiver?.rows || []) {
     if (fa.rule) add("waiver", fa.rule, fa.name, fa.severity, `${fa.name} (${fa.pos}) — ${fa.note}`);
+  }
+
+  // v3.1: injury opportunities. Definite injuries (Out/IR/PUP/Suspended/Doubtful) with an available add:
+  // yellow on Waivers (auto-clears once viewed), RED when the injured player is on your active roster;
+  // a Questionable player only counts after the news check / trending signal and is only ever yellow.
+  // You owning a backup is a yellow play-opportunity on Roster. The Injury page gets notes only.
+  for (const e of lg.injuryOpportunities?.events || []) {
+    const subj = `${e.injured.name} (${e.injured.status})`;
+    const adds = (e.freeAdds || []).map((a) => `${a.name} (${a.pos})`).join(", ");
+    if (e.questionable) {
+      if (adds) add("waiver", RULE.INJ_QUESTIONABLE, subj, "minor", `${subj}: ${(e.signals || []).join("; ")}. Possible adds: ${adds}`);
+    } else if (adds && e.mine === "active") {
+      add("waiver", RULE.INJ_ADD_OWN, subj, "major", `Your ${e.injured.slot} ${subj}. Available now: ${adds}`);
+    } else if (adds && !e.mine) {
+      add("waiver", RULE.INJ_ADD, subj, "minor", `${subj} (${e.injured.team} ${e.injured.slot}). Available: ${adds}`, true);
+    }
+    for (const b of e.backups || []) {
+      if (b.owner === "mine") add("roster", RULE.PLAY_OPP, `${b.name} for ${e.injured.name}`, "minor", `${b.name} (${b.pos}${b.rank}) moves up with ${e.injured.name} (${e.injured.slot}) ${e.injured.status}. You already own him.`);
+    }
   }
 
   // Trades. Only big-gap opportunities are flagged (yellow, auto-clearing);
@@ -136,6 +167,8 @@ export function applyAcks(lg, acks) {
   };
   const waiverRows = (lg.waiver.rows || []).map((fa) => {
     const v = variances.find((x) => x.page === "waiver" && x.subject === fa.name);
+    // v3.1: no variance at all for a flagged player means a waiver push quieted it.
+    if (fa.rule && !v) return { ...fa, severity: "ok", cleared: true };
     return v?.cleared ? { ...fa, severity: "ok", cleared: true } : fa;
   });
   const tradeRows = (lg.trade.rows || []).map((t) => {
@@ -150,7 +183,7 @@ export function applyAcks(lg, acks) {
   const T = lg.privateInfo?.trades;
   const tradeOffers = T ? { ...T, incoming: (T.incoming || []).map((o) => ({ ...o, cleared: offerCleared("Incoming trade offer", o) })), outgoing: (T.outgoing || []).map((o) => ({ ...o, cleared: false })) } : null;
   const logItems = (lg.privateInfo?.log?.items || []).map((it) => ({ ...it, cleared: acks.has(varianceKey(lg.id, lg.week, "league", "Settings change", `log ${it.id}`)) }));
-  const leaguePage = { configured: Boolean(lg.privateInfo?.configured), error: lg.privateInfo?.log?.error || null, items: logItems, status: lg.privateInfo?.configured ? status("league") : "na" };
+  const leaguePage = { configured: Boolean(lg.privateInfo?.configured) && !lg.privateInfo?.readsOff, error: lg.privateInfo?.log?.error || null, items: logItems, status: lg.privateInfo?.configured && !lg.privateInfo?.readsOff ? status("league") : "na", readsOff: Boolean(lg.privateInfo?.readsOff) };
   return {
     ...lg,
     variances,
@@ -215,4 +248,30 @@ export function autoClearKeys(variances, { leagueId, page } = {}) {
 /** Keys to acknowledge when "Clear minor variances" is pressed in a scope. */
 export function minorKeys(variances) {
   return [...new Set(variances.filter((v) => v.severity === "minor" && !v.cleared).map((v) => v.key))];
+}
+
+
+/* ---------------- v3.1: what a push clears ---------------- */
+export const RULE = {
+  FA_BENCH: "Free agent outprojects a bench player",
+  INJ_ADD: "Injury add available",
+  INJ_ADD_OWN: "Injury add: your player is injured",
+  INJ_QUESTIONABLE: "Questionable player (news check)",
+  PLAY_OPP: "Play opportunity",
+};
+// Waiver push quiets these (V16, P03, P04); a lineup push quiets P05. P02 clears once viewed instead.
+export const WAIVER_PUSH_RULES = new Set([RULE.FA_BENCH, RULE.INJ_ADD_OWN, RULE.INJ_QUESTIONABLE]);
+export const LINEUP_PUSH_RULES = new Set([RULE.PLAY_OPP]);
+
+/** Keys of the currently shown (not cleared) variances that a push of this kind quiets. */
+export function pushKeys(lg, kind) {
+  const rules = kind === "lineup" ? LINEUP_PUSH_RULES : WAIVER_PUSH_RULES;
+  return (lg?.variances || []).filter((v) => rules.has(v.rule) && !v.cleared).map((v) => v.key);
+}
+/** The gap the V09 / V10 rules are currently measuring (points), 0 when none. */
+export function lineupGap(lg) {
+  const L = lg?.lineup;
+  if (!L) return 0;
+  if (L.custom) return (L.rows || []).filter((r) => r.changed).reduce((s, r) => s + Math.abs(r.delta), 0);
+  return L.delta ?? 0;
 }

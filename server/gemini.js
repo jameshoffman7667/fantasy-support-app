@@ -145,3 +145,60 @@ Reply with ONLY a JSON array, no prose: [{"key":"<the key before the colon>","fl
   cacheSet(cacheKey, out, TRADE_TTL);
   return out;
 }
+
+/**
+ * v3.1: news check for Questionable players at relevant depth-chart slots (injury opportunities).
+ * Reads practice participation through the week (a downgrade, or no practice at all), and the tone
+ * of recent articles / posts. It only READS news; it never decides anything by itself — the caller
+ * combines this with whether the backup is trending on Sleeper.
+ *
+ * items: [{ key, name, pos, team, note }]
+ * Returns { at, model, byKey: { [key]: { flag: "down"|"ok"|"unclear", practice, note } }, sources } or null.
+ * One call covers the whole list; cached 3 hours per list.
+ */
+export async function injurySentiment(season, week, items, { force = false } = {}) {
+  if (!isConfigured() || !items?.length) return null;
+  const listKey = items.map((i) => i.key).sort().join("~");
+  let h = 0;
+  for (const ch of listKey) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  const cacheKey = `gemini:injsent:${season}:${week}:${h}`;
+  const cached = cacheGet(cacheKey);
+  if (cached && !force) return cached;
+
+  const lines = items.map((i) => `- ${i.key}: ${i.name} (${i.pos}, ${i.team})${i.note ? ` — listed ${i.note}` : " — listed Questionable"}`).join("\n");
+  const prompt = `You are checking NFL injury news for ${season} week ${week}. Each player below is listed Questionable.
+Search the web for the latest practice reports (Wednesday / Thursday / Friday participation) and recent articles or posts from reporters about each player's chances of playing.
+For EACH player reply with:
+- "flag": "down" if practice participation was downgraded through the week (for example limited then did not practice) or he did not practice at all, or recent reporting trends toward him missing the game; "ok" if he practiced fully or reporting says he is expected to play; "unclear" if you cannot tell.
+- "practice": a few words, for example "DNP, DNP, limited" or "unknown".
+- "note": max 30 words of what you found. Do not invent news; say "unclear" if you find nothing.
+Players:
+${lines}
+Reply with ONLY a JSON array, no prose: [{"key":"<the key before the colon>","flag":"unclear","practice":"unknown","note":"..."}]`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }),
+  });
+  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const json = await res.json();
+  const cand = json?.candidates?.[0];
+  const text = (cand?.content?.parts || []).map((p) => p.text || "").join("\n");
+  const arr = extractJson(text);
+  if (!Array.isArray(arr)) {
+    console.warn("[gemini] Injury sentiment: couldn't read a JSON array:", text.slice(0, 400));
+    return null;
+  }
+  const byKey = {};
+  for (const r of arr) {
+    if (!r?.key) continue;
+    byKey[String(r.key)] = { flag: ["down", "ok", "unclear"].includes(r.flag) ? r.flag : "unclear", practice: r.practice ? String(r.practice).slice(0, 80) : null, note: r.note ? String(r.note).slice(0, 240) : null };
+  }
+  const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 12);
+  const out = { at: Date.now(), model: MODEL(), byKey, sources };
+  console.log(`[gemini] Injury sentiment ${season} wk${week}: ${Object.keys(byKey).length}/${items.length} players, ${sources.length} sources.`);
+  cacheSet(cacheKey, out, TRADE_TTL);
+  return out;
+}

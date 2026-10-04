@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,41 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.1 — Account toggles, withdraw offers, waiver lock, injury opportunities
+
+**Commit (short):** `v3.1: feat: toggles, withdraw, injury adds`
+
+**Commit (extended):**
+v3.1 adds per-feature switches under Account: Read from Sleeper, plus
+separate write permissions for Roster changes (lineup and IR), Waiver
+claims, and Trades. With reads off, the private-only parts (trade
+offers, League log, pending claims) are hidden.
+
+The Trade page now shows every outgoing offer (only stale ones raise a
+red variance) and each outgoing offer has a Withdraw button. Withdraw
+is unverified: it calls reject_trade on your own offer and reports
+success only if the offer is gone when read back.
+
+A player is unavailable on waivers from his own game's kickoff until
+the week's last game ends, and is hidden from Available, injury adds,
+proposed claims and the claim simulation.
+
+Variance rules: V05, V09/V10, V16 now clear on the actions agreed, and
+a new red rule flags a non-IR-eligible player in an IR slot on game day.
+New injury opportunities (depth chart, next two backups, WR/TE
+opposite-position add) appear on Waivers, Roster and Injury.
+
+**Details**
+- New: `server/injuryOpps.js`; Gemini `injurySentiment`; push marks (`push_marks:{user}:{league}`); routes `POST /api/private/perms` and `/api/private/withdraw-trade`.
+- Permissions: legacy "Allow changes" maps to all three write groups on; every push still needs confirm, is logged and read back.
+- IR eligibility is read per league from Sleeper settings (setting names unverified); default is Out/IR/PUP only. V07 uses the same rule.
+- Injury page: notes only (no variances). Waivers: "Injury adds" section; P02 yellow (clears once viewed), P03 red when your active player is injured (clears when dealt with, or on a waiver push), P04 Questionable yellow. Roster: P05 yellow when you own a backup (clears on a lineup push) plus a replacements note.
+- Not included: player-card note edits (awaiting your file). CBS pick'em push is v3.2.
+- Tests: 170+ browser checks, server tests (permissions, withdraw, marks, injury opportunities) and rule tests pass against mocks.
+- Unverified: withdraw via reject_trade; IR move, claim submit/cancel and pending-claims status word; ESPN depth chart shape and team ids; league IR-flag setting names; Gemini model id; Tailwind layout (never rendered in the harness); the private API has never run live.
 
 ---
 

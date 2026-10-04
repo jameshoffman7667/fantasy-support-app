@@ -491,6 +491,14 @@ app.post("/api/private/writes", (req, res) => {
     privError(res, e);
   }
 });
+// v3.1: per-group switches. Body: any of { reads, roster, claims, trades } as booleans.
+app.post("/api/private/perms", (req, res) => {
+  try {
+    res.json(priv.setPerms(req.user.username, req.body || {}));
+  } catch (e) {
+    privError(res, e);
+  }
+});
 app.post("/api/private/reject-trade", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
@@ -500,11 +508,22 @@ app.post("/api/private/reject-trade", async (req, res) => {
     privError(res, e);
   }
 });
+app.post("/api/private/withdraw-trade", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    res.json(await priv.withdrawTrade(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: Number(req.body?.leg ?? lg.week), confirm: req.body?.confirm }));
+  } catch (e) {
+    privError(res, e);
+  }
+});
 app.post("/api/private/lineup", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
-    res.json(await priv.updateStarters(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, round: Number(lg.week), starters: req.body?.starters, confirm: req.body?.confirm }));
+    const out = await priv.updateStarters(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, round: Number(lg.week), starters: req.body?.starters, confirm: req.body?.confirm });
+    if (out?.ok) privateData.recordPush(req.user.username, lg.id, "lineup", { week: lg.week, gap: req.body?.gap, keys: req.body?.keys });
+    res.json(out);
   } catch (e) {
     privError(res, e);
   }
@@ -522,7 +541,9 @@ app.post("/api/private/claim", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
-    res.json(await priv.submitClaim(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, leg: Number(lg.week), addId: req.body?.addId, dropId: req.body?.dropId, bid: req.body?.bid, confirm: req.body?.confirm }));
+    const out = await priv.submitClaim(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, leg: Number(lg.week), addId: req.body?.addId, dropId: req.body?.dropId, bid: req.body?.bid, confirm: req.body?.confirm });
+    if (out?.ok) privateData.recordPush(req.user.username, lg.id, "waiver", { keys: req.body?.keys });
+    res.json(out);
   } catch (e) {
     privError(res, e);
   }

@@ -14,6 +14,25 @@ import * as store from "./projectionStore.js";
  * Every failure is reported in `error` fields and never fails the build.
  */
 const snapKey = (u, l) => `private_snapshot:${u}:${l}`;
+const marksKey = (u, l) => `push_marks:${u}:${l}`;
+
+/**
+ * v3.1 — push marks. A successful push from the app marks some variances as handled:
+ *  - lineup push: records the lineup gap at push time (the gap rules stay quiet until it grows by
+ *    more than a point) and the keys of variances a lineup push clears;
+ *  - waiver push: records the keys of waiver-page variances it clears.
+ * The client sends the gap and keys (it computed them); this just stores them, per user and league.
+ */
+export function recordPush(username, leagueId, kind, { week, gap, keys } = {}) {
+  const cur = store.getState(marksKey(username, leagueId), null) || {};
+  const cleanKeys = (Array.isArray(keys) ? keys : []).map(String).slice(0, 300);
+  if (kind === "lineup") cur.lineup = { week: week ?? null, gap: Number.isFinite(Number(gap)) ? Number(gap) : 0, keys: cleanKeys, at: Date.now() };
+  else if (kind === "waiver") cur.waiver = { keys: [...new Set([...(cur.waiver?.keys || []), ...cleanKeys])].slice(0, 600), at: Date.now() };
+  else return null;
+  store.setState(marksKey(username, leagueId), cur);
+  return cur;
+}
+export const getMarks = (username, leagueId) => store.getState(marksKey(username, leagueId), null) || {};
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 export const STALE_OFFSEASON_MS = WEEK_MS;
 
@@ -112,6 +131,8 @@ async function fetchLeague(username, lg, ctx) {
 export async function attach(username, leagues, { live = false } = {}) {
   const st = priv.status(username);
   if (!st.configured) return leagues.map((l) => (l.error ? l : { ...l, privateInfo: { configured: false } }));
+  // v3.1: reads switched off → no private data at all (and no calls); the client hides the private-only parts.
+  if (!st.perms.reads) return leagues.map((l) => (l.error ? l : { ...l, pushMarks: getMarks(username, l.id), privateInfo: { configured: true, readsOff: true, perms: st.perms, writesEnabled: st.writesEnabled } }));
   let ctx = null;
   if (live) {
     const [state, players] = await Promise.all([sleeper.getState().catch(() => null), sleeper.getPlayers().catch(() => ({}))]);
@@ -129,7 +150,7 @@ export async function attach(username, leagues, { live = false } = {}) {
       } else {
         info = store.getState(snapKey(username, l.id), null) || { empty: true };
       }
-      return { ...l, privateInfo: { configured: true, writesEnabled: st.writesEnabled, ...info } };
+      return { ...l, pushMarks: getMarks(username, l.id), privateInfo: { configured: true, perms: st.perms, writesEnabled: st.writesEnabled, ...info } };
     })
   );
 }

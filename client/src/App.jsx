@@ -37,7 +37,7 @@ import {
 import * as api from "./api.js";
 import { claimKey, generateClaims, effectiveClaims, groupClaims, flatten, simulate, toDollars, fromDollars, setBid, syncDrops, describeClaim, resetClaims } from "./waiverPlan.js";
 import { effectiveLineup, isZeroProjection, GROUP_LABEL, hasStarted } from "./lineup.js";
-import { applyAcks, collectVariances, groupTree, minorKeys, autoClearKeys, PAGE_LABEL, varianceKey } from "./variances.js";
+import { applyAcks, collectVariances, groupTree, minorKeys, autoClearKeys, PAGE_LABEL, varianceKey, pushKeys, lineupGap, RULE } from "./variances.js";
 import { proposeChanges, toggle as toggleChange, buildPush } from "./rosterChanges.js";
 
 /* ------------------------------------------------------------------ */
@@ -83,7 +83,12 @@ function computeRoster(league) {
     if (!player) return { slot, label: "(empty)", issues: [iss("Empty starting slot", "major", "Empty starting roster slot")] };
     if (player.status === "Bye") return { slot, label: player.name, issues: [iss("Starter on bye", "major", "On bye — guaranteed zero")] };
     if (OUT_LIKE.includes(player.status)) return { slot, label: player.name, issues: [iss("Starter out / doubtful / IR", "major", player.note || `${player.status} — hasn't been swapped`)] };
-    if (player.status === "Questionable") return { slot, label: player.name, issues: [iss("Questionable starter", "minor", player.note || "Questionable — game-time decision")] };
+    // v3.1: a Questionable starter stops being flagged once his game has kicked off, and is flagged
+    // again after the week's last game if he still carries the status.
+    if (player.status === "Questionable") {
+      if (hasStarted(player) && !league.weekOver) return { slot, label: player.name, issues: [] };
+      return { slot, label: player.name, issues: [iss("Questionable starter", "minor", player.note || "Questionable — game-time decision")] };
+    }
     return { slot, label: player.name, issues: [] };
   });
 
@@ -115,7 +120,13 @@ function computeRoster(league) {
     }
     return { slot: "BN", label: p.name, issues: [], usage: p.usage };
   });
-  const irRows = (league.ir || []).map((p) => ({ slot: "IR", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
+  // v3.1: a player who isn't IR-eligible in this league sitting in an IR slot is red from his game
+  // day until his game ends (he can't be played from there and should be moved).
+  const irRows = (league.ir || []).map((p) => {
+    const bad = !p.irEligible && p.gameToday && p.gameState !== "post";
+    const issues = bad ? [iss("Non-IR-eligible player in IR slot", "major", `${p.name} is ${p.status || "healthy"} — not IR-eligible here, and his game is ${p.gameState === "in" ? "in progress" : "today"}. Move him out of the IR slot.`)] : [];
+    return { slot: "IR", label: p.name, issues, severity: worst(issues.map((i) => i.severity)), reasons: issues.map((i) => i.text), reason: issues.map((i) => i.text).join(" ") || null, kickoffLabel: p.kickoffLabel };
+  });
   const taxiRows = (league.taxi || []).map((p) => ({ slot: "TAXI", label: p.name, severity: "ok", reasons: [], kickoffLabel: p.kickoffLabel }));
 
   // Open bench slots share a label; number them so each is its own variance.
@@ -129,7 +140,7 @@ function computeRoster(league) {
     reasons: r.issues.map((i) => i.text),
     reason: r.issues.map((i) => i.text).join(" ") || null,
   }));
-  return { rows, irRows, taxiRows, status: worst(rows.map((r) => r.severity)) };
+  return { rows, irRows, taxiRows, status: worst([...rows, ...irRows].map((r) => r.severity)) };
 }
 
 // The Lineup tab's numbers, status and per-slot rows — including the user's
@@ -971,6 +982,8 @@ function LeagueOverview({ league, onOpenTab, onOpenVariances }) {
     })(),
     league: !league.privateInfo?.configured
       ? "Settings change log — needs your Sleeper token"
+      : league.privateInfo?.readsOff
+      ? "Settings change log — reading from Sleeper is switched off"
       : (league.leaguePage?.items || []).filter((i) => !i.cleared).length
       ? `${(league.leaguePage.items || []).filter((i) => !i.cleared).length} settings change(s) to review`
       : "No new settings changes",
@@ -1056,6 +1069,15 @@ function UsageBadge({ usage }) {
 }
 
 function RosterTab({ league }) {
+  // v3.1: injury-opportunity notes on roster rows — a backup you own who moves up, and
+  // replacement options (free agents or not) for your own injured starter or backup.
+  const ioEvents = league.injuryOpportunities?.events || [];
+  const playNotes = new Map();
+  const replNotes = new Map();
+  for (const e of ioEvents) {
+    for (const b of e.backups || []) if (b.owner === "mine") playNotes.set(b.name, `Opportunity: ${e.injured.name} (${e.injured.slot}, ${e.injured.status}) is hurt and ${b.name} moves up.`);
+    if (e.mine) replNotes.set(e.injured.name, `Replacements: ${(e.backups || []).map(backupLine).join("; ") || "none on the depth chart"}${e.opposite ? `; also ${backupLine({ ...e.opposite, rank: null })}` : ""}`);
+  }
   const starterRows = league.roster.rows.filter((r) => r.slot !== "BN");
   const benchRows = league.roster.rows.filter((r) => r.slot === "BN");
   const Row = ({ r }) => {
@@ -1068,6 +1090,8 @@ function RosterTab({ league }) {
           {r.kickoffLabel && <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{r.kickoffLabel}</div>}
           {r.reason && <div style={{ color: s.color }} className="text-xs mt-0.5">{r.reason}</div>}
           {r.note && !r.reason && <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{r.note}</div>}
+          {playNotes.get(r.label) && <div style={{ color: C.minor }} className="text-xs mt-0.5" data-play-note>{playNotes.get(r.label)}</div>}
+          {replNotes.get(r.label) && <div style={{ color: C.minor }} className="text-xs mt-0.5" data-repl-note>{replNotes.get(r.label)}</div>}
           {r.usage && <div className="mt-1"><UsageBadge usage={r.usage} /></div>}
         </div>
         <s.Icon size={16} style={{ color: s.color }} className="shrink-0 mt-0.5" />
@@ -1801,7 +1825,7 @@ function DropSummary({ league }) {
                 <div style={{ color: C.textFaint }} className="text-[10px]">dropped by {x.teamLabel || "a team"} · {fmtWhen(x.at)}</div>
               </div>
               <div className="text-right shrink-0">
-                <div style={{ color: x.available ? C.ok : C.textMuted }} className="text-[11px]">{x.available ? "Available" : x.readded ? "Re-added" : "Rostered"}</div>
+                <div style={{ color: x.available ? C.ok : C.textMuted }} className="text-[11px]">{x.available ? "Available" : x.locked ? "Locked until week ends" : x.readded ? "Re-added" : "Rostered"}</div>
                 {x.proj != null && <div style={{ color: C.textFaint }} className="text-[10px]">proj {x.proj.toFixed(1)}</div>}
               </div>
             </div>
@@ -1862,6 +1886,48 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile 
   );
 }
 
+// v3.1: pickups caused by injuries at relevant depth-chart slots (only players you can actually claim).
+function InjuryAddsSection({ league, plan, mode, budget, isFaab, onBid }) {
+  const events = (league.injuryOpportunities?.events || []).filter((e) => (e.freeAdds || []).length > 0 && (!e.questionable || e.flagged));
+  if (events.length === 0) return null;
+  const sevOf = (e) => {
+    const v = (league.variances || []).find((x) => x.page === "waiver" && x.subject === `${e.injured.name} (${e.injured.status})`);
+    return v && !v.cleared ? (v.severity === "major" ? "major" : "minor") : "ok";
+  };
+  return (
+    <div className="mb-3" data-injury-adds>
+      <SectionLabel>Injury adds — {events.length}</SectionLabel>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Starters and top backups who are out, doubtful or likely to miss (QB{league.superflex ? "1-2" : "1"}, RB1-2, WR1-3, TE1), and the next players on their depth chart. Only players you can claim are listed.
+      </div>
+      <div className="space-y-2.5">
+        {events.map((e) => {
+          const sev = sevOf(e);
+          const s = STATUS[sev];
+          return (
+            <div key={e.key} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-2.5 py-2.5 space-y-1.5" data-injury-event={e.key}>
+              <div style={{ color: C.text }} className="text-sm">
+                <span style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs mr-1.5">{e.injured.team} {e.injured.slot}</span>
+                {e.injured.name} <span style={{ color: s.color }} className="text-xs">{e.injured.status}{e.injured.note ? ` — ${e.injured.note}` : ""}</span>
+                {e.mine === "active" && <span style={{ color: C.major }} className="text-[10px] ml-1.5">On your roster</span>}
+              </div>
+              {e.questionable && <div style={{ color: C.minor }} className="text-[11px]">News check: {(e.signals || []).join("; ")}{e.news?.note ? ` — ${e.news.note}` : ""}</div>}
+              <div className="space-y-1.5">
+                {e.freeAdds.map((p) => (
+                  <div key={p.id}>
+                    {p.pos !== e.injured.pos && <div style={{ color: C.textFaint }} className="text-[10px] px-1 pb-0.5">Also consider (top available {p.pos})</div>}
+                    <AvailableRow p={{ ...p, severity: "ok" }} plan={plan} mode={mode} budget={budget} isFaab={isFaab} faabHint={null} onBid={onBid} profile={league.scoringProfile} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AvailablePage({ league, plan, setPlan, faab, onRunFaab }) {
   const budget = league.waiverInfo?.budget || 0;
   const isFaab = Boolean(league.waiverInfo?.faab);
@@ -1875,6 +1941,7 @@ function AvailablePage({ league, plan, setPlan, faab, onRunFaab }) {
   return (
     <div>
       {isFaab && <FaabPanel faab={faab} onRun={onRunFaab} />}
+      <InjuryAddsSection league={league} plan={plan} mode={mode} budget={budget} isFaab={isFaab} onBid={onBid} />
       <DropSummary league={league} />
       <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap">
         <div style={{ color: C.textMuted }} className="text-xs max-w-[60%]">
@@ -1882,6 +1949,7 @@ function AvailablePage({ league, plan, setPlan, faab, onRunFaab }) {
         </div>
         {isFaab && <EntryModeToggle mode={mode} onChange={(m) => setPlan((pl) => ({ ...pl, entryMode: m }))} />}
       </div>
+      {league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
       {groups.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No notable free agents right now.</div>}
       {groups.map((g) => (
         <div key={g.pos} data-pos-group={g.pos}>
@@ -1961,7 +2029,9 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
     [pending]
   );
   const existingKeys = useMemo(() => new Set(existing.map((x) => claimKey(x.addId, x.dropId))), [existing]);
-  const visibleClaims = useMemo(() => eff.claims.filter((c) => !existingKeys.has(claimKey(c.addId, c.dropId))), [eff.claims, existingKeys]);
+  // v3.1: a claim for a player whose game has started is hidden until the week's last game ends.
+  const lockedIds = useMemo(() => new Set((league.waiverLock?.lockedIds || []).map(String)), [league.waiverLock]);
+  const visibleClaims = useMemo(() => eff.claims.filter((c) => !existingKeys.has(claimKey(c.addId, c.dropId)) && !lockedIds.has(String(c.addId))), [eff.claims, existingKeys, lockedIds]);
   const hiddenCount = eff.claims.length - visibleClaims.length;
   const groups = useMemo(() => groupClaims(visibleClaims, plan.order), [visibleClaims, plan.order]);
   const ordered = useMemo(() => flatten(groups), [groups]);
@@ -2175,7 +2245,7 @@ function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccoun
     const out = [];
     for (const c of batch) {
       try {
-        const r = await api.pushClaim(league.id, { addId: c.addId, dropId: c.dropId, bid: c.bid });
+        const r = await api.pushClaim(league.id, { addId: c.addId, dropId: c.dropId, bid: c.bid }, { keys: pushKeys(league, "waiver") });
         out.push({ label: label(c), ok: r.ok, verified: r.verified, detail: r.detail });
         if (!r.ok) break; // stop at the first claim Sleeper doesn't confirm
       } catch (e) {
@@ -2201,7 +2271,7 @@ function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccoun
   return (
     <div className="mt-3 space-y-2" data-claims-push>
       <SectionLabel>Push to Sleeper</SectionLabel>
-      <PrivateGate league={league} write onOpenAccount={onOpenAccount}>
+      <PrivateGate league={league} group="claims" onOpenAccount={onOpenAccount}>
         {league.privateInfo?.claims?.error && <div style={{ color: C.minor }} className="text-[11px] px-1">Couldn't read your queued claims from Sleeper ({league.privateInfo.claims.error}) — proposed claims may duplicate ones already there.</div>}
         {existing.length > 0 && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y" data-existing-claims>
@@ -2532,7 +2602,15 @@ function TradeTab({ league, sessionId, onRefresh, onOpenAccount }) {
   );
 }
 
+const OWNER_LABEL = { mine: "you own him", other: "owned by another team", free: "available" };
+function backupLine(b) {
+  return `${b.name} (${b.pos}${b.rank != null ? b.rank : ""}${b.team ? `, ${b.team}` : ""})${b.proj != null ? ` proj ${b.proj.toFixed(1)}` : ""} — ${b.owner === "free" && b.locked ? "locked until the week's last game ends" : OWNER_LABEL[b.owner] || b.owner}`;
+}
+
 function InjuryTab({ league }) {
+  const io = league.injuryOpportunities;
+  const events = io?.events || [];
+  const mineByName = new Map(events.filter((e) => e.mine).map((e) => [e.injured.name, e]));
   return (
     <div className="px-4 py-3">
       <SectionLabel>Currently Tracked</SectionLabel>
@@ -2552,11 +2630,44 @@ function InjuryTab({ league }) {
                 <div className="min-w-0 flex-1">
                   <div style={{ color: C.text }} className="text-sm font-medium">{e.player}</div>
                   <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{e.status}{e.note ? ` — ${e.note}` : ""}</div>
+                  {mineByName.get(e.player) && (
+                    <div style={{ color: C.minor }} className="text-[11px] mt-0.5" data-injury-note>
+                      Replacements: {mineByName.get(e.player).backups.map(backupLine).join("; ") || "none on the depth chart"}
+                      {mineByName.get(e.player).opposite ? `; also ${backupLine({ ...mineByName.get(e.player).opposite, rank: null })}` : ""}
+                    </div>
+                  )}
                 </div>
                 <div style={{ color: C.textFaint }} className="text-xs shrink-0">{e.cleared ? "Cleared" : e.seen ? "Seen before" : "New"}</div>
               </div>
             );
           })}
+        </div>
+      )}
+      <SectionLabel>Injury opportunities</SectionLabel>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Notes only. Starters and top backups (QB{league.superflex ? "1-2" : "1"}, RB1-2, WR1-3, TE1) who are out, doubtful or likely to miss, with who moves up. Depth chart from {io?.depthSource?.espnTeams ? `ESPN (${io.depthSource.espnTeams}/32 teams; the rest from Sleeper)` : "Sleeper's depth order (ESPN's depth chart wasn't available)"}.
+        {io?.newsConfigured === false ? " Questionable players are only included when their backup is trending, because no Gemini key is set." : ""}
+        {io?.newsError ? ` The news check failed (${io.newsError.slice(0, 80)}).` : ""}
+      </div>
+      {events.length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No injuries at these depth-chart slots right now.</div>
+      ) : (
+        <div className="space-y-1.5" data-injury-opps>
+          {events.map((e) => (
+            <div key={e.key} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-2.5 space-y-1" data-injury-opp={e.key}>
+              <div style={{ color: C.text }} className="text-sm font-medium">
+                <span style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs mr-1.5">{e.injured.team} {e.injured.slot}</span>
+                {e.injured.name} <span style={{ color: C.minor }} className="text-xs font-normal">{e.injured.status}{e.injured.note ? ` — ${e.injured.note}` : ""}</span>
+                {e.mine && <span style={{ color: C.brand }} className="text-[10px] ml-1.5">{e.mine === "active" ? "On your roster" : "On your IR/taxi"}</span>}
+              </div>
+              {e.questionable && <div style={{ color: C.minor }} className="text-[11px]">News check: {(e.signals || []).join("; ")}{e.news?.practice ? ` · practice: ${e.news.practice}` : ""}{e.news?.note ? ` — ${e.news.note}` : ""}</div>}
+              {e.backups.length === 0 && <div style={{ color: C.textFaint }} className="text-[11px]">No healthy backups on the depth chart.</div>}
+              {e.backups.map((b) => (
+                <div key={b.id} style={{ color: C.minor }} className="text-[11px]">{backupLine(b)}</div>
+              ))}
+              {e.opposite && <div style={{ color: C.minor }} className="text-[11px]">Also consider: {backupLine({ ...e.opposite, rank: null })}</div>}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -2635,7 +2746,10 @@ function SeasonOutlookTab({ league, sessionId }) {
 /* ------------------------------------------------------------------ */
 /*  v3.0 — Sleeper private access: gate, confirm box, results          */
 /* ------------------------------------------------------------------ */
-function PrivateGate({ league, write = false, onOpenAccount, children }) {
+const GROUP_NAME = { roster: "Roster changes", claims: "Waiver claims", trades: "Trades" };
+// v3.1: `group` is one of roster | claims | trades (the three write switches); a read-only
+// gate has none. Reads switched off hides everything private.
+function PrivateGate({ league, group = null, write = false, onOpenAccount, children }) {
   const pi = league.privateInfo;
   const box = (text) => (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-3 text-xs space-y-2" data-private-gate>
@@ -2648,7 +2762,9 @@ function PrivateGate({ league, write = false, onOpenAccount, children }) {
     </div>
   );
   if (!pi?.configured) return box("This needs your Sleeper login token (Account → Sleeper access). It stays on your server and is optional — everything else works without it.");
-  if (write && !pi.writesEnabled) return box("Pushing changes to Sleeper is switched off. Turn on \"Allow changes\" under Account → Sleeper access to use this.");
+  if (pi.readsOff) return box("Reading from Sleeper's private API is switched off. Turn on \"Read from Sleeper\" under Account → Sleeper access to use this.");
+  const g = group || (write ? "roster" : null);
+  if (g && !(pi.perms ? pi.perms[g] : pi.writesEnabled)) return box(`Pushing ${GROUP_NAME[g].toLowerCase()} to Sleeper is switched off. Turn on "${GROUP_NAME[g]}" under Account → Sleeper access to use this.`);
   return children;
 }
 
@@ -2788,7 +2904,7 @@ function UpdateRoster({ league, changes, checked, onRefresh, onOpenAccount, onDo
     try {
       if (push.starters) {
         try {
-          const r = await api.pushLineup(league.id, push.starters);
+          const r = await api.pushLineup(league.id, push.starters, { gap: lineupGap(league), keys: pushKeys(league, "lineup") });
           out.push({ label: "Starting lineup", ok: r.ok, verified: r.verified, detail: r.detail });
         } catch (e) {
           out.push({ label: "Starting lineup", ok: false, detail: e.message });
@@ -2814,7 +2930,7 @@ function UpdateRoster({ league, changes, checked, onRefresh, onOpenAccount, onDo
   };
   return (
     <div data-update-roster>
-      <PrivateGate league={league} write onOpenAccount={onOpenAccount}>
+      <PrivateGate league={league} group="roster" onOpenAccount={onOpenAccount}>
         {checked.size === 0 && !results ? (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-3 text-sm">
             Nothing approved yet. Tick changes on the Proposed changes tab.
@@ -2903,6 +3019,16 @@ function OfferCard({ o, kind, league, onRefresh, onOpenAccount }) {
       setState({ confirming: false, busy: false, result: { ok: false, detail: e.message } });
     }
   };
+  const withdraw = async () => {
+    setState((s) => ({ ...s, busy: true }));
+    try {
+      const r = await api.withdrawTrade(league.id, o.id, o.leg ?? league.week);
+      setState({ confirming: false, busy: false, result: { ok: r.ok, verified: r.verified, detail: r.detail } });
+      if (r.ok) onRefresh?.();
+    } catch (e) {
+      setState({ confirming: false, busy: false, result: { ok: false, detail: e.message } });
+    }
+  };
   const color = kind === "outgoing" && o.stale ? C.major : kind === "incoming" && !o.cleared ? C.minor : C.border;
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${color}` }} className="rounded-md px-3 py-2.5 space-y-1.5" data-offer={o.id} data-offer-kind={kind}>
@@ -2910,8 +3036,19 @@ function OfferCard({ o, kind, league, onRefresh, onOpenAccount }) {
       <div style={{ color: C.text }} className="text-sm">You get: <b>{side(o.get, o.getPicks)}</b></div>
       <div style={{ color: C.text }} className="text-sm">You give: <b>{side(o.give, o.givePicks)}</b></div>
       {kind === "outgoing" && o.stale && <div style={{ color: C.major }} className="text-xs">Stale — {o.stale}</div>}
+      {kind === "outgoing" && (
+        <PrivateGate league={league} group="trades" onOpenAccount={onOpenAccount}>
+          {!state.confirming && !state.result?.ok && (
+            <button type="button" onClick={() => setState((s) => ({ ...s, confirming: true }))} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2.5 py-1 text-xs" data-withdraw-trade>
+              Withdraw this offer
+            </button>
+          )}
+          {state.confirming && <ConfirmPush title="Withdraw this trade offer in Sleeper?" lines={[`Withdraw your offer to ${o.partner || "the other team"}: you give ${side(o.give, o.givePicks)}; you get ${side(o.get, o.getPicks)}`]} buttonLabel="Yes, withdraw it" busy={state.busy} onConfirm={withdraw} onCancel={() => setState((s) => ({ ...s, confirming: false }))} note="Withdrawing through Sleeper's private API is untested. The offer is read back afterwards, and this says so if it is still open." />}
+          {state.result && <PushResults results={[{ label: "Withdraw offer", ...state.result }]} />}
+        </PrivateGate>
+      )}
       {kind === "incoming" && (
-        <PrivateGate league={league} write onOpenAccount={onOpenAccount}>
+        <PrivateGate league={league} group="trades" onOpenAccount={onOpenAccount}>
           {!state.confirming && !state.result?.ok && (
             <button type="button" onClick={() => setState((s) => ({ ...s, confirming: true }))} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2.5 py-1 text-xs" data-reject-trade>
               Reject this offer
@@ -2930,8 +3067,15 @@ function TradeOffers({ league, onRefresh, onOpenAccount }) {
   if (!pi?.configured) {
     return (
       <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2" data-offers-hint>
-        Trade offers waiting on you (and your own stale offers) appear here once you add your Sleeper token under Account → Sleeper access.
+        Trade offers waiting on you (and all your own outstanding offers) appear here once you add your Sleeper token under Account → Sleeper access.
         {onOpenAccount && <> <button type="button" onClick={onOpenAccount} style={{ color: C.brand }} className="underline">Set up</button></>}
+      </div>
+    );
+  }
+  if (pi.readsOff) {
+    return (
+      <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2" data-offers-hint>
+        Trade offers are hidden because reading from Sleeper is switched off (Account → Sleeper access).
       </div>
     );
   }
@@ -2945,7 +3089,7 @@ function TradeOffers({ league, onRefresh, onOpenAccount }) {
       <SectionLabel>Offers waiting on you — {inc.length}</SectionLabel>
       {inc.length === 0 ? <div style={{ color: C.textMuted }} className="text-sm px-1">No incoming offers.</div> : <div className="space-y-1.5">{inc.map((o) => <OfferCard key={o.id} o={o} kind="incoming" league={league} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />)}</div>}
       <SectionLabel>Your outstanding offers — {out.length}</SectionLabel>
-      {out.length === 0 ? <div style={{ color: C.textMuted }} className="text-sm px-1">None outstanding.</div> : <div className="space-y-1.5">{out.map((o) => <OfferCard key={o.id} o={o} kind="outgoing" league={league} />)}</div>}
+      {out.length === 0 ? <div style={{ color: C.textMuted }} className="text-sm px-1">None outstanding.</div> : <div className="space-y-1.5">{out.map((o) => <OfferCard key={o.id} o={o} kind="outgoing" league={league} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />)}</div>}
     </div>
   );
 }
@@ -2986,10 +3130,17 @@ function SleeperAccessPanel() {
       ) : st.configured ? (
         <>
           <div style={{ color: C.ok }} className="text-xs">Connected{st.sleeperUsername ? ` as ${st.sleeperUsername}` : ""}{st.verifiedAt ? ` · verified ${new Date(st.verifiedAt).toLocaleDateString()}` : ""}.</div>
-          <label className="flex items-start gap-2 text-sm" style={{ color: C.text }}>
-            <input type="checkbox" checked={Boolean(st.writesEnabled)} disabled={busy} onChange={(e) => act(() => api.setPrivateWrites(e.target.checked))} className="mt-1" data-allow-changes />
-            <span>Allow changes to Sleeper<span style={{ color: C.textMuted }} className="block text-xs">Every push still shows exactly what it will send and asks you to confirm.</span></span>
-          </label>
+          {[
+            ["reads", "Read from Sleeper", "Trade offers, queued waiver claims and the League change log. Off = none of these are fetched or shown."],
+            ["roster", "Roster changes", "Push lineup changes and IR moves."],
+            ["claims", "Waiver claims", "Submit and cancel waiver claims."],
+            ["trades", "Trades", "Reject incoming offers and withdraw your own."],
+          ].map(([key, label, hint]) => (
+            <label key={key} className="flex items-start gap-2 text-sm" style={{ color: C.text }}>
+              <input type="checkbox" checked={Boolean(st.perms?.[key])} disabled={busy} onChange={(e) => act(() => api.setPrivatePerms({ [key]: e.target.checked }))} className="mt-1" data-perm={key} />
+              <span>{label}<span style={{ color: C.textMuted }} className="block text-xs">{hint}{key !== "reads" ? " Every push still shows exactly what it will send and asks you to confirm." : ""}</span></span>
+            </label>
+          ))}
           <button type="button" disabled={busy} onClick={() => act(() => api.clearPrivateToken(), "Token removed.")} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2.5 py-1 text-xs" data-remove-token>Remove token</button>
           {st.log?.length > 0 && (
             <div>
@@ -3004,7 +3155,7 @@ function SleeperAccessPanel() {
         <>
           <div style={{ color: C.textMuted }} className="text-xs">In Sleeper's website, open the browser's developer tools → Application → Local storage → sleeper.com → <code>token</code>, and paste its value here.</div>
           <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Sleeper token" autoComplete="off" style={inputStyle} className="w-full rounded px-2 py-1.5 text-sm outline-none" aria-label="Sleeper token" data-token-input />
-          <button type="button" disabled={busy || token.trim().length < 20} onClick={() => act(() => api.setPrivateToken(token), "Connected. Changes to Sleeper are still switched off.")} style={{ background: C.brand, color: C.text, opacity: busy || token.trim().length < 20 ? 0.5 : 1 }} className="rounded-md px-3 py-1.5 text-sm" data-save-token>Verify &amp; save</button>
+          <button type="button" disabled={busy || token.trim().length < 20} onClick={() => act(() => api.setPrivateToken(token), "Connected. Reading is on; every kind of change to Sleeper is still switched off.")} style={{ background: C.brand, color: C.text, opacity: busy || token.trim().length < 20 ? 0.5 : 1 }} className="rounded-md px-3 py-1.5 text-sm" data-save-token>Verify &amp; save</button>
         </>
       )}
       {msg && <div style={{ color: C.minor }} className="text-xs">{msg}</div>}

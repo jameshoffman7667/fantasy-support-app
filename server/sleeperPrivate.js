@@ -69,11 +69,28 @@ export function decrypt(blob) {
 function record(username) {
   return store.getState(tokenKey(username), null);
 }
+
+/**
+ * v3.1 — per-user permissions. `reads` is one master switch for every private
+ * read (trade offers, pending claims, League log); the three write groups are
+ * separate: `roster` (lineup + IR moves), `claims` (waiver submit + cancel),
+ * `trades` (reject + withdraw). A v3.0 record with the single "Allow changes"
+ * flag maps to all three write groups on.
+ */
+export const WRITE_GROUPS = ["roster", "claims", "trades"];
+export const PERM_KEYS = ["reads", ...WRITE_GROUPS];
+export function permsOf(r) {
+  if (!r) return { reads: false, roster: false, claims: false, trades: false };
+  if (r.perms) return { reads: r.perms.reads !== false, roster: Boolean(r.perms.roster), claims: Boolean(r.perms.claims), trades: Boolean(r.perms.trades) };
+  const w = Boolean(r.writes);
+  return { reads: true, roster: w, claims: w, trades: w };
+}
 /** Never includes the token. */
 export function status(username) {
   const r = record(username);
-  if (!r) return { configured: false, writesEnabled: false };
-  return { configured: true, writesEnabled: Boolean(r.writes), sleeperUsername: r.sleeperUsername || null, sleeperUserId: r.sleeperUserId || null, verifiedAt: r.verifiedAt || null };
+  if (!r) return { configured: false, writesEnabled: false, perms: permsOf(null) };
+  const perms = permsOf(r);
+  return { configured: true, perms, writesEnabled: WRITE_GROUPS.some((g) => perms[g]), sleeperUsername: r.sleeperUsername || null, sleeperUserId: r.sleeperUserId || null, verifiedAt: r.verifiedAt || null };
 }
 export const hasToken = (username) => Boolean(record(username)?.token);
 function tokenOf(username) {
@@ -131,18 +148,29 @@ export async function setToken(username, rawToken) {
   if (token.length < 20 || token.length > 4000) throw new PrivateApiError("That doesn't look like a Sleeper token.", { kind: "invalid" });
   const data = await gql(token, ME);
   if (!data.me?.user_id) throw new PrivateApiError("Sleeper didn't recognise that token.", { kind: "unauthorized" });
-  store.setState(tokenKey(username), { token: encrypt(token), writes: false, sleeperUsername: data.me.username || null, sleeperUserId: data.me.user_id, verifiedAt: Date.now() });
+  const prev = permsOf(record(username));
+  store.setState(tokenKey(username), { token: encrypt(token), writes: false, perms: { reads: prev.reads || true, roster: false, claims: false, trades: false }, sleeperUsername: data.me.username || null, sleeperUserId: data.me.user_id, verifiedAt: Date.now() });
   return status(username);
 }
 export function clearToken(username) {
   db.prepare("DELETE FROM app_state WHERE key = ?").run(tokenKey(username));
   return status(username);
 }
+/** Legacy single switch: sets every write group at once. */
 export function setWritesEnabled(username, on) {
+  return setPerms(username, { roster: Boolean(on), claims: Boolean(on), trades: Boolean(on) });
+}
+/** Sets any of reads / roster / claims / trades (booleans); other keys are ignored. */
+export function setPerms(username, patch) {
   const r = record(username);
   if (!r) throw new PrivateApiError("Set up your Sleeper token first.", { kind: "no_token" });
-  store.setState(tokenKey(username), { ...r, writes: Boolean(on) });
+  const next = permsOf(r);
+  for (const k of PERM_KEYS) if (patch && typeof patch[k] === "boolean") next[k] = patch[k];
+  store.setState(tokenKey(username), { ...r, perms: next, writes: WRITE_GROUPS.some((g) => next[g]) });
   return status(username);
+}
+function needRead(username) {
+  if (!permsOf(record(username)).reads) throw new PrivateApiError("Reading from Sleeper's private API is switched off (Account → Sleeper access).", { kind: "reads_off" });
 }
 
 /* ---------------- reads ---------------- */
@@ -150,6 +178,7 @@ const TX_FIELDS = "status type metadata created settings leg league_id draft_pic
 
 /** All live trade offers in a league for a leg (`status:"proposed"`, not "pending"). */
 export async function getProposedTrades(username, leagueId, leg) {
+  needRead(username);
   const d = await call(username, `query($l:Snowflake!,$g:Int!){ league_transactions_by_status(league_id:$l, leg:$g, status:"proposed"){ ${TX_FIELDS} } }`, { l: String(leagueId), g: Number(leg) });
   return (d.league_transactions_by_status || []).filter((t) => t && t.type === "trade");
 }
@@ -157,6 +186,7 @@ export async function getProposedTrades(username, leagueId, leg) {
 /** Waiver claims you have queued in Sleeper. UNVERIFIED: whether `status:"pending"` is the right word is a guess,
  *  so the distinct statuses seen are returned for diagnosis. */
 export async function getPendingClaims(username, leagueId, leg, rosterId) {
+  needRead(username);
   const d = await call(username, `query($l:Snowflake!,$g:Int!,$r:Int){ league_transactions(league_id:$l, leg:$g, type:"waiver", roster_id:$r, limit:100){ ${TX_FIELDS} } }`, { l: String(leagueId), g: Number(leg), r: Number(rosterId) });
   const all = (d.league_transactions || []).filter(Boolean);
   const claims = all.filter((t) => String(t.status).toLowerCase() === "pending");
@@ -165,6 +195,7 @@ export async function getPendingClaims(username, leagueId, leg, rosterId) {
 
 /** Settings change log (who changed what, old → new). */
 export async function getEventLogs(username, leagueId, limit = 30) {
+  needRead(username);
   const d = await call(username, `query($l:Snowflake!,$n:Int){ league_event_logs(league_id:$l, limit:$n){ data created event_type league_id log_id } }`, { l: String(leagueId), n: limit });
   return (d.league_event_logs || []).filter(Boolean);
 }
@@ -182,10 +213,12 @@ function audit(username, leagueId, action, request, ok, detail) {
 export function writeLog(username, limit = 30) {
   return db.prepare("SELECT at, league_id AS leagueId, action, ok, detail FROM private_write_log WHERE username = ? ORDER BY id DESC LIMIT ?").all(username, limit);
 }
-function guardWrite(username, confirm) {
+const GROUP_LABEL = { roster: "Roster changes", claims: "Waiver claims", trades: "Trades" };
+function guardWrite(username, confirm, group) {
   const s = status(username);
   if (!s.configured) throw new PrivateApiError("Set up your Sleeper token first (Account → Sleeper access).", { kind: "no_token" });
-  if (!s.writesEnabled) throw new PrivateApiError("Changes to Sleeper are switched off. Turn on \"Allow changes\" in Account → Sleeper access.", { kind: "writes_off" });
+  if (!group || !WRITE_GROUPS.includes(group)) throw new PrivateApiError("Internal error: write group missing.", { kind: "invalid" });
+  if (!s.perms[group]) throw new PrivateApiError(`${GROUP_LABEL[group]} to Sleeper are switched off. Turn on "${GROUP_LABEL[group]}" in Account → Sleeper access.`, { kind: "writes_off" });
   if (confirm !== true) throw new PrivateApiError("This needs an explicit confirmation.", { kind: "unconfirmed" });
 }
 async function doWrite(username, leagueId, action, request, fn) {
@@ -201,12 +234,42 @@ async function doWrite(username, leagueId, action, request, fn) {
 
 /** Reject an incoming trade offer. PROVEN mutation. Returns the status Sleeper reports back. */
 export async function rejectTrade(username, { leagueId, transactionId, leg, confirm }) {
-  guardWrite(username, confirm);
+  guardWrite(username, confirm, "trades");
   return doWrite(username, leagueId, "reject_trade", { transactionId, leg }, async () => {
     const d = await call(username, `mutation($l:Snowflake!,$t:Snowflake!,$g:Int!){ reject_trade(league_id:$l, transaction_id:$t, leg:$g){ transaction_id status } }`, { l: String(leagueId), t: String(transactionId), g: Number(leg) });
     const r = d.reject_trade;
     const ok = String(r?.status).toLowerCase() === "rejected";
     return { ok, status: r?.status ?? null, detail: ok ? "rejected" : `Sleeper reported status "${r?.status}"` };
+  });
+}
+
+/**
+ * Withdraw an offer YOU made (v3.1). UNVERIFIED: the reference notes list no
+ * dedicated withdraw/cancel mutation for a proposer (force_cancel_transaction is
+ * commissioner-only), so this tries reject_trade on your own offer — the most
+ * likely route — and then reads your open offers back. It only reports success
+ * if the offer is no longer open (or Sleeper says rejected/cancelled).
+ */
+export async function withdrawTrade(username, { leagueId, transactionId, leg, confirm }) {
+  guardWrite(username, confirm, "trades");
+  return doWrite(username, leagueId, "withdraw_trade", { transactionId, leg }, async () => {
+    let status = null;
+    try {
+      const d = await call(username, `mutation($l:Snowflake!,$t:Snowflake!,$g:Int!){ reject_trade(league_id:$l, transaction_id:$t, leg:$g){ transaction_id status } }`, { l: String(leagueId), t: String(transactionId), g: Number(leg) });
+      status = d.reject_trade?.status ?? null;
+    } catch (e) {
+      return { ok: false, detail: `Sleeper refused the withdraw: ${e.message}. Withdraw it in Sleeper instead.` };
+    }
+    let stillOpen = null;
+    try {
+      const rows = await getProposedTrades(username, leagueId, leg);
+      stillOpen = rows.some((t) => String(t.transaction_id) === String(transactionId));
+    } catch {
+      /* read-back unavailable */
+    }
+    const said = ["rejected", "cancelled", "canceled", "withdrawn"].includes(String(status).toLowerCase());
+    const ok = stillOpen === false || (stillOpen === null && said);
+    return { ok, status, verified: stillOpen === false, detail: ok ? "offer withdrawn" : `Sleeper answered "${status}" but the offer is still open when read back — withdraw it in Sleeper.` };
   });
 }
 
@@ -217,7 +280,7 @@ export async function rejectTrade(username, { leagueId, transactionId, leg, conf
  * array in slot order, "0" for an empty slot.
  */
 export async function updateStarters(username, { leagueId, rosterId, round, starters, confirm }) {
-  guardWrite(username, confirm);
+  guardWrite(username, confirm, "roster");
   const list = (Array.isArray(starters) ? starters : []).map((x) => (x == null || x === "" ? "0" : String(x)));
   const real = list.filter((x) => x !== "0");
   if (new Set(real).size !== real.length) throw new PrivateApiError("The lineup has the same player twice — nothing was sent.", { kind: "invalid" });
@@ -233,7 +296,7 @@ export async function updateStarters(username, { leagueId, rosterId, round, star
 
 /** Move players to injured reserve. UNVERIFIED mutation — verified only by the response. */
 export async function updateReserve(username, { leagueId, rosterId, reserve, confirm }) {
-  guardWrite(username, confirm);
+  guardWrite(username, confirm, "roster");
   const list = (Array.isArray(reserve) ? reserve : []).map(String);
   return doWrite(username, leagueId, "update_reserve", { rosterId, reserve: list }, async () => {
     const d = await call(username, `mutation($l:Snowflake!,$r:Int!,$s:[String]){ roster_update_reserve(league_id:$l, roster_id:$r, reserve:$s){ roster_id reserve } }`, { l: String(leagueId), r: Number(rosterId), s: list });
@@ -245,7 +308,7 @@ export async function updateReserve(username, { leagueId, rosterId, reserve, con
 
 /** Submit ONE waiver claim. UNVERIFIED mutation; verified by reading pending claims back. */
 export async function submitClaim(username, { leagueId, rosterId, leg, addId, dropId, bid, confirm }) {
-  guardWrite(username, confirm);
+  guardWrite(username, confirm, "claims");
   const bidN = Math.max(0, Math.round(Number(bid) || 0));
   const req = { addId, dropId: dropId || null, bid: bidN };
   return doWrite(username, leagueId, "submit_waiver_claim", req, async () => {
@@ -266,7 +329,7 @@ export async function submitClaim(username, { leagueId, rosterId, leg, addId, dr
 
 /** Cancel one of your pending claims. UNVERIFIED mutation. */
 export async function cancelClaim(username, { leagueId, transactionId, leg, confirm }) {
-  guardWrite(username, confirm);
+  guardWrite(username, confirm, "claims");
   return doWrite(username, leagueId, "cancel_waiver_claim", { transactionId, leg }, async () => {
     const d = await call(username, `mutation($l:Snowflake!,$t:Snowflake!,$g:Int!){ cancel_waiver_claim(league_id:$l, transaction_id:$t, leg:$g){ transaction_id status } }`, { l: String(leagueId), t: String(transactionId), g: Number(leg) });
     return { ok: Boolean(d.cancel_waiver_claim), status: d.cancel_waiver_claim?.status ?? null, detail: `status ${d.cancel_waiver_claim?.status}` };

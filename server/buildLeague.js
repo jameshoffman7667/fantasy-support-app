@@ -10,6 +10,7 @@ import * as store from "./projectionStore.js";
 import * as transactions from "./transactions.js"; // v2.9: recent drops
 import { deadlineInfo } from "./tradeDeadline.js"; // v2.9
 import * as ownership from "./crossOwnership.js"; // v2.9
+import * as injuryOpps from "./injuryOpps.js"; // v3.1
 import { getSnapShareForWeek, getUsageStatsForWeek, lookupUsage } from "./nflverseUsage.js";
 
 // Slot labels as they appear AFTER slotLabel() (SUPER_FLEX -> "SFLX"). Before
@@ -258,6 +259,31 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     return { kickoff: null, kickoffLabel: onBye ? "On bye" : "Kickoff time unavailable", onBye };
   };
 
+  // v3.1: waiver lock. A player whose own game has kicked off can't be claimed until the
+  // week's last game is done, so he is hidden from every waiver list until then. The week is
+  // over when every game is final (or started more than 4.5 h ago, in case ESPN's status lags).
+  // No schedule data → nobody is treated as locked (better to over-show than hide everyone).
+  const nowMs = Date.now();
+  const weekOver = !weekSchedule?.games?.length || weekSchedule.games.every((g) => g.state === "post" || (g.kickoffMillis != null && g.kickoffMillis + 4.5 * 3600 * 1000 < nowMs));
+  const waiverLocked = (teamAbbr) => {
+    if (weekOver) return false;
+    const { kickoff } = kickoffFor(teamAbbr);
+    return kickoff != null && kickoff <= nowMs;
+  };
+  const lockedHidden = new Set();
+
+  // v3.1: which injury statuses this league lets you put on IR. Read from the league settings
+  // (reserve_allow_out / _doubtful / _sus / _na / _dnr / _cov — names expected from Sleeper's league
+  // object but UNVERIFIED). IR and PUP are always allowed. If the league carries none of those
+  // flags, the default is Out + IR + PUP.
+  const IR_FLAG_STATUS = { reserve_allow_out: ["Out"], reserve_allow_doubtful: ["Doubtful"], reserve_allow_sus: ["Sus", "Suspended"], reserve_allow_na: ["NA"], reserve_allow_dnr: ["DNR"], reserve_allow_cov: ["COV"] };
+  const hasIrFlags = Object.keys(IR_FLAG_STATUS).some((k) => league.settings?.[k] !== undefined && league.settings?.[k] !== null);
+  const irAllowed = new Set(["IR", "PUP"]);
+  if (hasIrFlags) {
+    for (const [k, sts] of Object.entries(IR_FLAG_STATUS)) if (Number(league.settings?.[k]) === 1) sts.forEach((x) => irAllowed.add(x));
+  } else irAllowed.add("Out");
+  const irStatusOk = (status) => irAllowed.has(status);
+
   /**
    * proj + source (v2.5): "V" Vegas props (raw), else "T" Tank01 / "S" Sleeper /
    * "E" ESPN with that source's lean factor applied (projFactor). All scored
@@ -321,7 +347,11 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       // lineup any more, so he's out of every recommendation from then on.
       started: kickoff != null && kickoff <= Date.now(),
       ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null,
-      irEligible: meta?.injury_status === "IR" || meta?.injury_status === "PUP",
+      irEligible: irStatusOk(meta?.injury_status),
+      // v3.1: today's game state for this player's team ("pre" | "in" | "post" | null) and whether
+      // the game is today (US Eastern), used by the "non-eligible player in an IR slot" rule.
+      gameState: g?.state ?? null,
+      gameToday: g?.kickoffMillis != null && new Date(g.kickoffMillis).toLocaleDateString("en-CA", { timeZone: "America/New_York" }) === new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }),
       note: meta?.injury_status && meta?.injury_body_part ? `${meta.injury_status} — ${meta.injury_body_part}` : undefined,
       // Supplemental context from nflverse (last week's usage), not a
       // projection input — null fields mean no match/no data this week,
@@ -363,6 +393,10 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     if (!meta || !posWanted(meta.position)) return false;
     if (allRosteredIds.has(String(sid))) return false;
     if (meta.position !== "DEF" && (meta.active === false || !meta.team)) return false;
+    if (waiverLocked(meta.team)) {
+      lockedHidden.add(String(sid));
+      return false;
+    }
     return true;
   };
   const projTop = new Map(); // pos -> [{id, proj}]
@@ -716,12 +750,40 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   };
   const tradeDeadline = await deadlineInfo({ settings: league.settings || {}, currentWeek: week, season, getWeekSchedule: schedule.getWeekSchedule }).catch(() => null);
 
+  // --- v3.1: injury opportunities (pickups and plays caused by injuries at relevant depth-chart slots) ---
+  let injuryOpportunities = null;
+  try {
+    const global = await injuryOpps.compute({ season, week, sleeperPlayers, trending });
+    const myActive = new Set([...starterIds, ...benchIds].map(String));
+    const myStashed = new Set([...irIds, ...taxiIds].map(String));
+    const cardOf = (id) => {
+      const m = sleeperPlayers[id] || {};
+      const { kickoff, kickoffLabel } = kickoffFor(m.team);
+      return { id: String(id), name: playerName(m, id), pos: m.position || "?", team: m.team || "FA", status: mapPlayerStatus(m), kickoffLabel, kickoff };
+    };
+    injuryOpportunities = injuryOpps.forLeague(global, {
+      superflex,
+      sleeperPlayers,
+      allRosteredIds,
+      mine: { active: myActive, stashed: myStashed },
+      waiverLocked,
+      projOf: (id) => {
+        const r = projWeek ? hub.pick(projWeek, id) : null;
+        return r?.proj ?? null;
+      },
+      topFree: (pos) => (projTop.get(pos) || [])[0] || null,
+      cardOf,
+    });
+  } catch (err) {
+    console.warn(`[buildLeague] Injury opportunities failed for league ${leagueId}, continuing without them: ${err.message}`);
+  }
+
   let dropSummary = { windowDays: 3, items: [], error: null };
   try {
     const activity = await transactions.getLeagueActivity(leagueId, { week });
     const items = transactions.decorate(activity.drops, { sleeperPlayers, rosters, leagueUsers }).map((d) => {
       const r = hub.pick(projWeek, d.playerId);
-      return { ...d, available: !allRosteredIds.has(String(d.playerId)), proj: r.proj ?? null, projSource: r.projSource ?? null };
+      return { ...d, available: !allRosteredIds.has(String(d.playerId)) && !waiverLocked(sleeperPlayers[String(d.playerId)]?.team), locked: !allRosteredIds.has(String(d.playerId)) && waiverLocked(sleeperPlayers[String(d.playerId)]?.team), proj: r.proj ?? null, projSource: r.projSource ?? null };
     });
     dropSummary = { windowDays: 3, items, error: null };
   } catch (err) {
@@ -802,6 +864,10 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     lineupComparison,
     optimalLineup,
     freeAgents,
+    injuryOpportunities,
+    weekOver,
+    irAllowed: [...irAllowed],
+    waiverLock: { active: !weekOver, hidden: lockedHidden.size, lockedIds: [...lockedHidden] },
     tradeSuggestions,
     leagueTeams,
     tradeFinder: tradeFinder.slice(0, 10),

@@ -355,6 +355,15 @@ Everything here uses only public Sleeper data (plus the existing Tank01 / ESPN /
 - **Line movement (not built):** Pick'em already snapshots the spread/probability hourly (`pickem_snapshots`) and shows line movement per game, so Sleeper's `scores` feed was not added.
 - **Unverified:** Sleeper league link in the claims checklist (`https://sleeper.com/leagues/{id}`), IR push, claim push, claim read-back status word, the whole private API against live Sleeper, and visual layout (Tailwind couldn't render in the test harness).
 
+### 8.2j v3.1 — Account toggles, withdraw, waiver lock, rule edits, injury opportunities
+- **Account toggles:** four checkboxes under Account → Sleeper access: *Read from Sleeper*, *Roster changes* (lineup + IR moves), *Waiver claims* (submit + cancel), *Trades* (reject + withdraw). Reads default on, writes default off. A v3.0 "Allow changes" record maps to all three write groups on. Each write is guarded by its own group, then confirm, audit log and read-back. With reads off the server makes no private calls and the client hides trade offers, the League log and pending claims (badges show "No data").
+- **Trades:** all outgoing offers are shown; only stale ones (N02, red) are variances. Each outgoing offer has **Withdraw** (confirm-first). Mutation is UNVERIFIED: `reject_trade` on your own offer, then proposed trades are read back; success only if the offer is gone.
+- **Waiver lock:** a player is unavailable from his own game's kickoff until the week is over (no games left, all `post`, or each started >4.5 h ago). Locked players are hidden from Available, injury adds, proposed claims and the simulation; the drop summary says "Locked until week ends". No schedule data → nobody is locked.
+- **Push marks:** a successful push stores marks per user and league. Lineup push: V09/V10 (gaps ≥5) stay quiet while the gap ≤ pushed gap + 1; P05 keys quieted. Waiver push: V16, P03, P04 keys quieted (ignored after 7 days; a new qualifying player flags again).
+- **Rule edits:** V05 Questionable starter clears after kickoff and returns after the week's last game if still statused. New red rule: a player in an IR slot who is not IR-eligible, from his game day until his game ends. IR eligibility from league settings (reserve_allow_out/doubtful/sus/na/dnr/cov — names unverified); default Out/IR/PUP only.
+- **Injury opportunities:** relevant slots QB1 (QB1–2 superflex), RB1–2, WR1–3, TE1; K/DST injury flag only. Triggers Out/IR/PUP/Sus/Doubtful; Questionable only with a Gemini news downgrade/no practice, trending-down signal or a trending backup (yellow only). Next two backups per injured player; WR/TE injuries add the top available player at the other position (WR↔TE). Depth chart from ESPN (unverified shape; per-team fallback to Sleeper `depth_chart_order`). Injury page: notes only. Waivers: "Injury adds" with available (not locked) players — P02 yellow (clears once viewed), P03 red if on your active roster (clears when dealt with or on waiver push), P04 yellow Questionable. Roster: P05 yellow when you own a backup, plus a replacements note on your injured players.
+- **Unverified:** see CHANGELOG v3.1.
+
 ### 8.3 Waiver Management
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
@@ -534,3 +543,9 @@ Collected here since they cut across multiple sections:
 53. **Waiver push (v3.0):** a single test claim first, then the rest once one is read back; queued claims are hidden from proposals; manual push only (no scheduled auto-claim).
 54. **League page (v3.0):** settings log entries are minor variances, yellow until cleared per user.
 55. **Line movement (v3.0):** not rebuilt — Pick'em's hourly snapshots already track it.
+56. **Write toggles (v3.1):** reads plus three write groups (roster = lineup+IR, claims, trades); reads off hides private-only parts.
+57. **Outgoing offers (v3.1):** all shown, variance only if stale; Withdraw via `reject_trade` + read-back (unverified).
+58. **Waiver lock (v3.1):** unavailable from his kickoff until the week's last game ends; hidden everywhere.
+59. **Push marks (v3.1):** lineup push quiets V09/V10/P05 (gap +1 tolerance); waiver push quiets V16/P03/P04.
+60. **Injury opportunities (v3.1):** next two backups, WR↔TE opposite add, Questionable only with a signal and only yellow; Injury page notes only.
+61. **IR-slot rule (v3.1):** red for a non-IR-eligible player in an IR slot, game day until his game ends; eligibility per league, default Out/IR/PUP.

@@ -213,17 +213,23 @@ export function clearPrivateToken() {
 export function setPrivateWrites(enabled) {
   return jsonPost(`/api/private/writes`, { enabled });
 }
+export function setPrivatePerms(patch) {
+  return jsonPost(`/api/private/perms`, patch);
+}
+export function withdrawTrade(leagueId, transactionId, leg) {
+  return jsonPost(`/api/private/withdraw-trade`, { leagueId, transactionId, leg, confirm: true });
+}
 export function rejectTrade(leagueId, transactionId, leg) {
   return jsonPost(`/api/private/reject-trade`, { leagueId, transactionId, leg, confirm: true });
 }
-export function pushLineup(leagueId, starters) {
-  return jsonPost(`/api/private/lineup`, { leagueId, starters, confirm: true });
+export function pushLineup(leagueId, starters, marks = {}) {
+  return jsonPost(`/api/private/lineup`, { leagueId, starters, confirm: true, gap: marks.gap, keys: marks.keys });
 }
 export function pushReserve(leagueId, reserve) {
   return jsonPost(`/api/private/reserve`, { leagueId, reserve, confirm: true });
 }
-export function pushClaim(leagueId, claim) {
-  return jsonPost(`/api/private/claim`, { leagueId, addId: claim.addId, dropId: claim.dropId || null, bid: claim.bid, confirm: true });
+export function pushClaim(leagueId, claim, marks = {}) {
+  return jsonPost(`/api/private/claim`, { leagueId, addId: claim.addId, dropId: claim.dropId || null, bid: claim.bid, confirm: true, keys: marks.keys });
 }
 export function cancelClaim(leagueId, transactionId) {
   return jsonPost(`/api/private/claim/cancel`, { leagueId, transactionId, confirm: true });
