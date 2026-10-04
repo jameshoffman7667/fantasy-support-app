@@ -212,9 +212,11 @@ export function effectiveLineup(league, orderKeysOverride) {
       const needsMove = pick && (pick.group === "ir" || pick.group === "taxi");
       return {
         slot,
-        current: current ? { name: current.name, proj: current.proj, projSource: current.projSource } : null,
+        current: current ? { id: current.id, name: current.name, proj: current.proj, projSource: current.projSource } : null,
         optimal: pick
           ? {
+              id: pick.player.id,
+              group: pick.group,
               name: pick.player.name,
               proj: pick.player.proj ?? null,
               projSource: pick.player.projSource,

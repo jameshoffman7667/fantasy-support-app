@@ -456,9 +456,11 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     const changed = !locked && (current?.name ?? null) !== (optimal?.name ?? null);
     return {
       slot,
-      current: current ? { name: current.name, proj: current.proj, projSource: current.projSource, projFactor: current.projFactor ?? null } : null,
+      current: current ? { id: current.id, name: current.name, proj: current.proj, projSource: current.projSource, projFactor: current.projFactor ?? null } : null,
       optimal: optimal
         ? {
+            id: optimal.id,
+            origin: optimal.origin || null,
             name: optimal.name,
             proj: optimal.proj ?? null,
             projSource: optimal.projSource,
@@ -785,6 +787,10 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     tradeBasis,
     myRosterId: myRoster.roster_id,
     ownerId: userId,
+    // v3.0: raw roster arrays (slot order, '0' = empty) for pushing lineup / IR changes to Sleeper.
+    starterIds: (myRoster.starters || []).map(String),
+    reserveIds: (myRoster.reserve || []).map(String),
+    rosterIds: (myRoster.players || []).map(String),
     scoringProfile: store.profileOf(league.scoring_settings).key, // v2.8: which matchup-difficulty table to colour with
     superflex,
     lockLabel: weekSchedule ? `Week ${week} — live kickoff times from ESPN` : "Live from Sleeper",

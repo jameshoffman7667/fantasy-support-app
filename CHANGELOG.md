@@ -34,6 +34,39 @@ delivered zip.
 
 ---
 
+## v3.0 — Sleeper private access: roster push, trade inbox, League page
+
+**Commit (short):** `v3.0: feat: Sleeper private API, roster push`
+
+**Commit (extended):**
+v3.0 adds everything that needs Sleeper's private, undocumented
+GraphQL API, all opt-in. Under Account you paste your Sleeper token
+(stored encrypted, never sent to the browser) and separately switch on
+"Allow changes". Roster and Lineup are now one page: the roster, then
+Proposed changes (tick boxes) and Update roster (summary of ticked
+changes and a Push to Sleeper button). Lineups are written to your
+roster and the matchup leg, then read back.
+
+Trades show offers waiting on you (yellow, never auto-clearing) and your
+own stale offers (red), and you can reject an offer from the app. Waiver
+claims already queued in Sleeper are hidden from proposals and listed
+with Cancel; Push to Sleeper sends one test claim, then the rest. A new
+League page shows the settings change log, yellow until cleared.
+
+Every push asks for confirmation and is logged. Moving to IR and claim
+submit/cancel are unverified calls and are reported honestly if they
+don't take. Old Lineup acknowledgements migrate to the Roster page.
+
+**Details**
+- New: `server/sleeperPrivate.js` (client, encrypted token, reads, writes, `private_write_log`), `server/privateData.js` (offers, pending claims, change log, stale rules), `client/src/rosterChanges.js`; routes under `/api/private/*`; `privateInfo` on build and cached responses.
+- Proven by the reference project: reject trade, set lineup (needs the matchup-leg write as well). Unverified: IR move, claim submit/cancel, pending-claims read, change log with token. Nothing was run against live Sleeper (not reachable from the build sandbox); tested against a mock, 165 browser checks and server tests passing.
+- Spread line movement was NOT rebuilt: Pick'em already snapshots the line hourly and shows movement. Scheduled auto-claiming was not built (manual push only).
+- Behaviour changes: Lineup page and its badge are gone (five badges: Roster, Waivers, Trades, Injury, League); Roster page variances now include the lineup rules; weather variance (auto-clearing) now appears on the Roster page.
+- League page: the first view lists up to 30 existing log entries as yellow until cleared once.
+- Unverified: the Sleeper league link in the claims checklist; page layout (the test harness has no Tailwind).
+
+---
+
 ## v2.9 — Waiver pages, trade tools, faster loads (public API)
 
 **Commit (short):** `v2.9: feat: waiver pages, trade tools, speed`

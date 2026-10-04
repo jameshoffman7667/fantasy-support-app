@@ -32,6 +32,8 @@ import * as dvp from "./dvp.js";
 import * as weather from "./weather.js";
 import { getImage } from "./images.js";
 import * as varianceAcks from "./varianceAcks.js";
+import * as priv from "./sleeperPrivate.js";
+import * as privateData from "./privateData.js";
 import * as waiverPlan from "./waiverPlan.js";
 import * as gemini from "./gemini.js";
 import * as tank01 from "./tank01.js";
@@ -335,6 +337,7 @@ app.use("/api/weather", requireAuth);
 app.use("/api/img", requireAuth);
 app.use("/api/variances", requireAuth);
 app.use("/api/waiver-plan", requireAuth);
+app.use("/api/private", requireAuth);
 app.use("/api/trade", requireAuth);
 
 // Step 1: the logged-in user's Sleeper account -> their leagues for the
@@ -375,7 +378,10 @@ app.get("/api/leagues/cached", (req, res) => {
     const c = getBuiltLeague(username, id);
     if (c) leagues.push({ ...c.data, customRanking: getRankingOrder(username, id), fromCache: true, cachedAt: c.updatedAt });
   }
-  res.json({ leagues, week: leagues[0]?.week ?? st.week ?? null, leagueIds: st.leagueIds });
+  privateData.attach(username, leagues, { live: false }).then(
+    (withPrivate) => res.json({ leagues: withPrivate, week: leagues[0]?.week ?? st.week ?? null, leagueIds: st.leagueIds }),
+    () => res.json({ leagues, week: leagues[0]?.week ?? st.week ?? null, leagueIds: st.leagueIds })
+  );
 });
 
 // Step 2: build (or rebuild, on refresh, or on a week change) the
@@ -428,7 +434,12 @@ app.post("/api/leagues/build", async (req, res) => {
     // The user's drag-ordered Player Rankings override rides along with each
     // league (it's per user, so it's attached here, not stored in the shared build cache).
     const withRankings = built.map((l) => (l.error ? l : { ...l, customRanking: getRankingOrder(req.user.username, l.id) }));
-    res.json({ leagues: withRankings, week: session.week });
+    // v3.0: per-user private data (trade offers, pending claims, settings log) — only when a token is set up.
+    const withPrivate = await privateData.attach(req.user.username, withRankings, { live: true }).catch((e) => {
+      console.warn(`[private] attach failed: ${e.message}`);
+      return withRankings;
+    });
+    res.json({ leagues: withPrivate, week: session.week });
   } catch (err) {
     res.status(502).json({ error: err.message || "Couldn't build leagues." });
   }
@@ -444,6 +455,86 @@ app.post("/api/waiver-plan", (req, res) => {
   const leagueId = String(req.body?.leagueId || "");
   if (!leagueId) return res.status(400).json({ error: "leagueId is required." });
   res.json(waiverPlan.savePlan(req.user.username, leagueId, req.body?.plan));
+});
+
+
+/* ---------------- Sleeper private API (v3.0): token, trade reject, lineup / claim pushes ---------------- */
+const privError = (res, e) => {
+  const code = { no_token: 400, writes_off: 403, unconfirmed: 400, invalid: 400, unauthorized: 401, network: 502, bad_response: 502, http: 502, graphql: 502 }[e.kind] || 500;
+  // A Sleeper "unauthorized" means THEIR token expired — not our session — so it must not look like a logout (401 → 409).
+  res.status(e.kind === "unauthorized" ? 409 : code).json({ error: e.message || "Sleeper request failed.", kind: e.kind || "error" });
+};
+// The league must be one of the caller's own tracked leagues; the roster id always comes from OUR build, never the client.
+function ownBuilt(req, res, leagueId) {
+  const c = getBuiltLeague(req.user.username, String(leagueId || ""));
+  if (!c?.data?.myRosterId) {
+    res.status(400).json({ error: "That league isn't one of your tracked leagues (or hasn't been built yet)." });
+    return null;
+  }
+  return c.data;
+}
+app.get("/api/private/status", (req, res) => {
+  res.json({ ...priv.status(req.user.username), log: priv.writeLog(req.user.username, 20) });
+});
+app.post("/api/private/token", async (req, res) => {
+  try {
+    res.json(await priv.setToken(req.user.username, req.body?.token));
+  } catch (e) {
+    privError(res, e);
+  }
+});
+app.post("/api/private/token/clear", (req, res) => res.json(priv.clearToken(req.user.username)));
+app.post("/api/private/writes", (req, res) => {
+  try {
+    res.json(priv.setWritesEnabled(req.user.username, req.body?.enabled === true));
+  } catch (e) {
+    privError(res, e);
+  }
+});
+app.post("/api/private/reject-trade", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    res.json(await priv.rejectTrade(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: Number(req.body?.leg ?? lg.week), confirm: req.body?.confirm }));
+  } catch (e) {
+    privError(res, e);
+  }
+});
+app.post("/api/private/lineup", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    res.json(await priv.updateStarters(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, round: Number(lg.week), starters: req.body?.starters, confirm: req.body?.confirm }));
+  } catch (e) {
+    privError(res, e);
+  }
+});
+app.post("/api/private/reserve", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    res.json(await priv.updateReserve(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, reserve: req.body?.reserve, confirm: req.body?.confirm }));
+  } catch (e) {
+    privError(res, e);
+  }
+});
+app.post("/api/private/claim", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    res.json(await priv.submitClaim(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, leg: Number(lg.week), addId: req.body?.addId, dropId: req.body?.dropId, bid: req.body?.bid, confirm: req.body?.confirm }));
+  } catch (e) {
+    privError(res, e);
+  }
+});
+app.post("/api/private/claim/cancel", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    res.json(await priv.cancelClaim(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: Number(lg.week), confirm: req.body?.confirm }));
+  } catch (e) {
+    privError(res, e);
+  }
 });
 
 /* ---------------- Trade advice (v2.9): Gemini news check on Trade Finder swaps ---------------- */

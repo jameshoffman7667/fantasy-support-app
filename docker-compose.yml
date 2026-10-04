@@ -33,6 +33,10 @@ services:
       # app. Replaces the old shared APP_PASSWORD, which is no longer read.
       - OWNER_USERNAME=${OWNER_USERNAME}
       - OWNER_PASSWORD=${OWNER_PASSWORD}
+      # v3.0 (optional): key used to encrypt your stored Sleeper token. Set a long random
+      # string. If unset, a random key is generated and kept in the same database file as
+      # the token, which protects much less.
+      - SESSION_SECRET=${SESSION_SECRET:-}
       # Recovery only: set to "true" for one restart to reset the owner's
       # password back to OWNER_PASSWORD, then remove it again.
       - OWNER_FORCE_RESET=${OWNER_FORCE_RESET:-}

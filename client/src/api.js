@@ -199,3 +199,32 @@ export function saveWaiverPlan(leagueId, plan) {
 export function getTradeAdvice(sessionId, leagueId, force = false) {
   return jsonPost(`/api/trade/advice`, { sessionId, leagueId, force });
 }
+
+/* ---------------- Sleeper private access (v3.0) — the token itself never comes back to the browser ---------------- */
+export function getPrivateStatus() {
+  return request(`/api/private/status`);
+}
+export function setPrivateToken(token) {
+  return jsonPost(`/api/private/token`, { token });
+}
+export function clearPrivateToken() {
+  return jsonPost(`/api/private/token/clear`, {});
+}
+export function setPrivateWrites(enabled) {
+  return jsonPost(`/api/private/writes`, { enabled });
+}
+export function rejectTrade(leagueId, transactionId, leg) {
+  return jsonPost(`/api/private/reject-trade`, { leagueId, transactionId, leg, confirm: true });
+}
+export function pushLineup(leagueId, starters) {
+  return jsonPost(`/api/private/lineup`, { leagueId, starters, confirm: true });
+}
+export function pushReserve(leagueId, reserve) {
+  return jsonPost(`/api/private/reserve`, { leagueId, reserve, confirm: true });
+}
+export function pushClaim(leagueId, claim) {
+  return jsonPost(`/api/private/claim`, { leagueId, addId: claim.addId, dropId: claim.dropId || null, bid: claim.bid, confirm: true });
+}
+export function cancelClaim(leagueId, transactionId) {
+  return jsonPost(`/api/private/claim/cancel`, { leagueId, transactionId, confirm: true });
+}

@@ -184,6 +184,7 @@ Reached by tapping the league name. Shows:
 ## 8. Sub-Tabs
 
 ### 8.1 Roster Optimization
+*(v3.0: Roster and Lineup are one page — see 8.2i. 8.1 and 8.2 describe the two halves.)*
 
 **Purpose:** Verify the *currently set* starting lineup is structurally sound.
 
@@ -337,6 +338,22 @@ Everything here uses only public Sleeper data (plus the existing Tank01 / ESPN /
   - FAAB bid history for each player and a 3-day drop summary appear on the page.
 - **Trades:** Gemini news flag per partner player (cached 3 h); Trade Finder reworked (sell from strength, buy at weakness, never the same position, value gap <= 20, net gain over the replaced starter); trade deadline countdown; players on your roster that opponents own in their other leagues are highlighted. Trade values use ECR when >= 60% of rostered players match, else a projection-rank fallback scaled to position depths.
 - **Unverified assumptions:** ROS windows, the trade deadline source, other-league ownership, Game Day for/against orientation, and equal-bid waiver order.
+
+### 8.2i v3.0 — Sleeper private access, merged Roster page, League page
+**Release rule:** v3.0 = anything needing Sleeper's private GraphQL API (even read-only) plus write-back. Everything is opt-in; with no token the app is v2.9.
+
+- **Private access (Account → Sleeper access):** the user pastes their Sleeper token; it is verified with a read-only `me` call and stored encrypted (AES-256-GCM, key from `SESSION_SECRET` or a generated secret). The token is never returned to the browser. A separate **Allow changes** switch (default off) gates every write; each write also needs an explicit confirm from the UI, uses the roster id from the server's own build (never the client's), is logged (`private_write_log`), and is verified by reading back where possible.
+- **Honesty about the API:** undocumented, may change, Sleeper's terms arguably restrict it. Proven (by the reference project's author): `reject_trade`, `roster_update_starters`, `update_matchup_leg`. Unverified: `roster_update_reserve`, `submit_waiver_claim`, `cancel_waiver_claim`, the pending-claims read (assumes `status:"pending"`; the statuses seen are returned for diagnosis), `league_event_logs` with a token. Sleeper rejecting a token is reported as 409 (not 401) so it never looks like an app logout.
+- **Roster & Lineup page (merged):** the roster view on top; below it two tabs.
+  - *Proposed changes:* one tick-box row per recommended change: lineup swaps (from the lineup advice) and IR moves (IR-eligible bench players, only while IR slots are open). A swap that needs another swap (the better player currently starts elsewhere) ticks it too, and unticking undoes dependants. Changes that can't be pushed (free agent, or on IR/taxi) are listed with the reason and can't be ticked. Weather warnings show at the top; the full Lineup view and Player Rankings are under "Show lineup details".
+  - *Update roster:* summary of the ticked changes and the **Push to Sleeper** button (confirm step, then results per call). The lineup is sent as the full slot-order array ("0" = empty), written to the roster **and** the matchup leg (roster-only writes don't change what scores), then the leg is read back.
+- **Variance pages:** Roster and Lineup are one page `roster` (label "Roster & Lineup"), keys `leagueId|W<week>|roster|rule|subject`. Older acknowledgements stored under `lineup` are read as `roster` (migration on read, add and prune). Page badges are five: Roster, Waivers, Trades, Injury, League.
+- **Trade offers:** an incoming offer waiting on you is yellow variance N03 and does **not** auto-clear. An outgoing offer of yours that has gone stale is red N02: offseason (Sleeper season type off/pre) older than 7 days; in season, any player in the offer has a game today (US Eastern date) or one already kicked off this week. Reject (proven mutation) is confirm-first and the result must report `rejected`.
+- **Waivers:** claims already queued in Sleeper are removed from the proposed list (match = same added player and same dropped player or none), listed under "Already queued" with Cancel, and counted in the FAAB prediction. Push to Sleeper sends ONE test claim first; after a claim has been read back successfully (from the write log) the whole ordered list is sent, stopping at the first claim Sleeper doesn't confirm. The checklist fallback stays. Auto-claiming on a schedule was **not** built; manual push only.
+- **League page:** the settings change log (`league_event_logs`): who changed which setting, old → new. Each unseen entry is a minor variance `League|Settings change|log <id>`; the badge is yellow until cleared (per user, same acknowledgement store as variances; clear button on the page). The first view shows the whole fetched history (up to 30 entries) until cleared once.
+- **Server data flow:** per-user private data (trade offers, pending claims, change log) is attached to each build response and saved as a per-user snapshot; the instant cached view serves the snapshot with no Sleeper call. A failed private read is reported in `privateInfo` and never fails the build.
+- **Line movement (not built):** Pick'em already snapshots the spread/probability hourly (`pickem_snapshots`) and shows line movement per game, so Sleeper's `scores` feed was not added.
+- **Unverified:** Sleeper league link in the claims checklist (`https://sleeper.com/leagues/{id}`), IR push, claim push, claim read-back status word, the whole private API against live Sleeper, and visual layout (Tailwind couldn't render in the test harness).
 
 ### 8.3 Waiver Management
 
@@ -511,3 +528,9 @@ Collected here since they cut across multiple sections:
 47. **Variance semantics (v2.9):** "seen" = page viewed and then left; auto-clearing minors (weather, big-gap trades) show once; incoming trade offers (v3.0) never auto-clear; waiver flags use projection vs starters/bench; trending variance removed; N01 includes bench players.
 48. **Release split (v2.9/v3.0):** v2.9 = public Sleeper API only; v3.0 = anything needing the private token (even read-only) plus write-back.
 49. **Speed (v2.9):** cached-first dashboard, progressive 2-at-a-time league builds.
+50. **Private API is opt-in (v3.0):** token pasted by the user, encrypted at rest, never sent to the browser; reading and writing are separate switches; every push is confirm-first, logged and read back; honest "not confirmed" when Sleeper's answer doesn't verify.
+51. **Roster + Lineup merged (v3.0):** one page with Proposed changes (tick boxes) and Update roster (summary + push) tabs; badge count stays five with League added; old `lineup` acknowledgements migrate to `roster`.
+52. **Stale offers (v3.0):** red for your own offers only; offseason >7 days, in season a game today/already played for any involved player; incoming offers are yellow and never auto-clear.
+53. **Waiver push (v3.0):** a single test claim first, then the rest once one is read back; queued claims are hidden from proposals; manual push only (no scheduled auto-claim).
+54. **League page (v3.0):** settings log entries are minor variances, yellow until cleared per user.
+55. **Line movement (v3.0):** not rebuilt — Pick'em's hourly snapshots already track it.

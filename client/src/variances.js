@@ -21,15 +21,16 @@
 //
 // Pure — no React — so it can be unit-tested.
 
-export const PAGES = ["roster", "lineup", "waiver", "trade", "injury"];
-export const PAGE_LABEL = { roster: "Roster", lineup: "Lineup Advice", waiver: "Waivers", trade: "Trade Radar", injury: "Injury Watch" };
+// v3.0: Roster and Lineup are one page ("roster"); League (settings change log) is new.
+export const PAGES = ["roster", "waiver", "trade", "injury", "league"];
+export const PAGE_LABEL = { roster: "Roster & Lineup", waiver: "Waivers", trade: "Trade Radar", injury: "Injury Watch", league: "League" };
 const RANK = { ok: 0, minor: 1, major: 2 };
 export const worst = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
 
 // Week-specific pages carry the week in their keys; waivers, trades and
 // injuries don't (an injury you've cleared stays cleared into next week
 // unless its status changes).
-const WEEKLY = new Set(["roster", "lineup"]);
+const WEEKLY = new Set(["roster"]);
 export function varianceKey(leagueId, week, page, rule, subject) {
   return [leagueId, WEEKLY.has(page) ? `W${week ?? "?"}` : "W*", page, rule, subject].join("|");
 }
@@ -58,25 +59,25 @@ export function collectVariances(lg) {
   // Lineup.
   const L = lg.lineup;
   if (L) {
-    for (const p of L.zeroStarters || []) add("lineup", "Starter projected for 0 points", p.name, "major", `${p.name} is projected for 0 points`);
+    for (const p of L.zeroStarters || []) add("roster", "Starter projected for 0 points", p.name, "major", `${p.name} is projected for 0 points`);
     if (L.custom) {
       const changed = (L.rows || []).filter((r) => r.changed);
       if (changed.length) {
         const swing = changed.reduce((s, r) => s + Math.abs(r.delta), 0);
-        add("lineup", "Lineup differs from your ranking", "Starting lineup", swing < 5 ? "minor" : "major", `Your ranking changes ${changed.length} slot(s) (${swing.toFixed(1)} pts): ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}`);
+        add("roster", "Lineup differs from your ranking", "Starting lineup", swing < 5 ? "minor" : "major", `Your ranking changes ${changed.length} slot(s) (${swing.toFixed(1)} pts): ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}`);
       }
-      if ((L.betterDelta ?? 0) > 0.05) add("lineup", "Better lineup than your ranking", "Player Rankings", "minor", `A better projected lineup exists: +${L.betterDelta.toFixed(1)} pts over your ranking`);
+      if ((L.betterDelta ?? 0) > 0.05) add("roster", "Better lineup than your ranking", "Player Rankings", "minor", `A better projected lineup exists: +${L.betterDelta.toFixed(1)} pts over your ranking`);
     } else if ((L.delta ?? 0) > 0) {
       const changed = (L.rows || []).filter((r) => r.changed);
-      add("lineup", "Optimal lineup is better", "Starting lineup", L.delta < 5 ? "minor" : "major", `Optimal lineup gains +${L.delta.toFixed(1)} pts${changed.length ? `: ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}` : ""}`);
+      add("roster", "Optimal lineup is better", "Starting lineup", L.delta < 5 ? "minor" : "major", `Optimal lineup gains +${L.delta.toFixed(1)} pts${changed.length ? `: ${changed.map((r) => `${r.slot} ${r.current?.name ?? "(empty)"} → ${r.optimal?.name ?? "(none)"}`).join(", ")}` : ""}`);
     }
-    for (const p of L.weatherStarters || []) add("lineup", "Weather", p.name, "minor", `${p.name} (${p.team}): ${(p.weather?.reasons || []).join("; ")}`, true);
+    for (const p of L.weatherStarters || []) add("roster", "Weather", p.name, "minor", `${p.name} (${p.team}): ${(p.weather?.reasons || []).join("; ")}`, true);
   }
   // v2.9: a starter or bench player with no projection from any source (kept
   // for troubleshooting; IR / taxi players can't be started so aren't checked).
   const noProj = [...(lg.starters || []).map((s) => (s.player ? { p: s.player, slot: s.slot } : null)), ...(lg.bench || []).map((p) => (p ? { p, slot: "BN" } : null))];
   for (const x of noProj) {
-    if (x && x.p.proj == null && !x.p.played) add("lineup", "No projection for player", `${x.slot} ${x.p.name}`, "minor", `${x.p.name} (${x.slot}) has no projection from any source`);
+    if (x && x.p.proj == null && !x.p.played) add("roster", "No projection for player", `${x.slot} ${x.p.name}`, "minor", `${x.p.name} (${x.slot}) has no projection from any source`);
   }
 
   // Waivers (v2.9): by projection, not ECR or trending. `fa.rule` / `fa.note`
@@ -89,12 +90,23 @@ export function collectVariances(lg) {
   // smaller ones are shown on the page but are not variances.
   for (const t of lg.trade?.rows || []) add("trade", "Trade opportunity (big gap)", `${t.theirTeam}: give ${t.give}, get ${t.get}`, t.severity, `${t.theirTeam}: give ${t.give}, get ${t.get}`, t.auto);
 
+  // v3.0 (needs the Sleeper token): offers waiting on you are yellow and do NOT auto-clear (N03);
+  // an offer YOU made that has gone stale is red (N02). Resolved offers disappear on their own.
+  const T = lg.privateInfo?.trades;
+  for (const o of T?.incoming || []) add("trade", "Incoming trade offer", `offer ${o.id}`, "minor", `Offer from ${o.partner || "another team"}: you get ${offerSide(o.get, o.getPicks)}, you give ${offerSide(o.give, o.givePicks)}`);
+  for (const o of T?.outgoing || []) if (o.stale) add("trade", "Stale trade offer", `offer ${o.id}`, "major", `Your offer to ${o.partner || "another team"} (you give ${offerSide(o.give, o.givePicks)}, you get ${offerSide(o.get, o.getPicks)}): ${o.stale}`);
+
+  // v3.0: League page — every settings change in the log is a minor variance until cleared.
+  for (const it of lg.privateInfo?.log?.items || []) add("league", "Settings change", `log ${it.id}`, "minor", it.text);
+
   // Injuries.
   for (const e of lg.injury?.rows || []) {
     add("injury", e.seen ? "Injury status (seen before)" : "New injury status", `${e.player} (${e.status})`, e.seen ? "minor" : "major", `${e.player}: ${e.status}${e.note ? ` — ${e.note}` : ""}`);
   }
   return out;
 }
+
+const offerSide = (players, picks) => [...(players || []).map((p) => p.name || p.id), ...(picks || [])].join(", ") || "nothing";
 
 export const isCleared = (v, acks) => v.severity === "minor" && acks.has(v.key);
 
@@ -115,10 +127,10 @@ export function applyAcks(lg, acks) {
     const open = issues.filter((i) => !i.cleared);
     return { ...r, issues, severity: worst(open.map((i) => i.severity)), reason: open.map((i) => i.text).join(" ") || null, clearedNote: issues.some((i) => i.cleared) || undefined };
   });
-  const lineupCleared = new Set(variances.filter((v) => v.page === "lineup" && v.cleared).map((v) => v.rule + "|" + v.subject));
+  const lineupCleared = new Set(variances.filter((v) => v.page === "roster" && v.cleared).map((v) => v.rule + "|" + v.subject));
   const lineup = {
     ...lg.lineup,
-    status: status("lineup"),
+    status: status("roster"),
     weatherStarters: (lg.lineup.weatherStarters || []).filter((p) => !lineupCleared.has(`Weather|${p.name}`)),
     betterCleared: lineupCleared.has("Better lineup than your ranking|Player Rankings"),
   };
@@ -134,9 +146,17 @@ export function applyAcks(lg, acks) {
     const v = variances.find((x) => x.page === "injury" && x.subject === `${e.player} (${e.status})`);
     return v?.cleared ? { ...e, cleared: true } : e;
   });
+  const offerCleared = (rule, o) => acks.has(varianceKey(lg.id, lg.week, "trade", rule, `offer ${o.id}`));
+  const T = lg.privateInfo?.trades;
+  const tradeOffers = T ? { ...T, incoming: (T.incoming || []).map((o) => ({ ...o, cleared: offerCleared("Incoming trade offer", o) })), outgoing: (T.outgoing || []).map((o) => ({ ...o, cleared: false })) } : null;
+  const logItems = (lg.privateInfo?.log?.items || []).map((it) => ({ ...it, cleared: acks.has(varianceKey(lg.id, lg.week, "league", "Settings change", `log ${it.id}`)) }));
+  const leaguePage = { configured: Boolean(lg.privateInfo?.configured), error: lg.privateInfo?.log?.error || null, items: logItems, status: lg.privateInfo?.configured ? status("league") : "na" };
   return {
     ...lg,
     variances,
+    tradeOffers,
+    leaguePage,
+    league: leaguePage, // the League page's badge reads lg.league.status like the other pages
     roster: { ...lg.roster, rows: rosterRows, status: status("roster") },
     lineup,
     waiver: { ...lg.waiver, rows: waiverRows, status: status("waiver") },

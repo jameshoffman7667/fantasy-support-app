@@ -37,7 +37,8 @@ import {
 import * as api from "./api.js";
 import { claimKey, generateClaims, effectiveClaims, groupClaims, flatten, simulate, toDollars, fromDollars, setBid, syncDrops, describeClaim, resetClaims } from "./waiverPlan.js";
 import { effectiveLineup, isZeroProjection, GROUP_LABEL, hasStarted } from "./lineup.js";
-import { applyAcks, collectVariances, groupTree, minorKeys, autoClearKeys, PAGE_LABEL } from "./variances.js";
+import { applyAcks, collectVariances, groupTree, minorKeys, autoClearKeys, PAGE_LABEL, varianceKey } from "./variances.js";
+import { proposeChanges, toggle as toggleChange, buildPush } from "./rosterChanges.js";
 
 /* ------------------------------------------------------------------ */
 /*  DESIGN TOKENS                                                     */
@@ -784,11 +785,11 @@ function TopBar({ crumbs, onRefresh, refreshing, syncedLabel, week, onWeekChange
 }
 
 const TAB_META = {
-  roster: { label: "Roster", short: "Roster", Icon: ListChecks },
-  lineup: { label: "Lineup Advice", short: "Lineup", Icon: TrendingUp },
+  roster: { label: "Roster & Lineup", short: "Roster", Icon: ListChecks },
   waiver: { label: "Waivers", short: "Waivers", Icon: Users },
   trade: { label: "Trade Radar", short: "Trades", Icon: ArrowLeftRight },
   injury: { label: "Injury Watch", short: "Injury", Icon: Stethoscope },
+  league: { label: "League", short: "League", Icon: Settings2 },
   odds: { label: "Season Outlook", short: "Outlook", Icon: Trophy },
 };
 // Season Outlook is fetched on demand (like FAAB), not derived from the
@@ -955,21 +956,30 @@ function ErrorScreen({ message }) {
 function LeagueOverview({ league, onOpenTab, onOpenVariances }) {
   if (league.error) return <ErrorScreen message={league.error} />;
   const summaries = {
-    roster: league.roster.rows.some((r) => r.severity !== "ok")
-      ? `${league.roster.rows.filter((r) => r.severity === "major").length} major, ${league.roster.rows.filter((r) => r.severity === "minor").length} minor issue(s)`
-      : "Lineup is clean",
-    lineup: (() => {
+    roster: (() => {
       const L = league.lineup;
-      if (L.zeroStarters.length) return `${L.zeroStarters.length} starter(s) projected for 0 pts`;
-      if (L.custom) {
+      const rosterPart = league.roster.rows.some((r) => r.severity !== "ok")
+        ? `${league.roster.rows.filter((r) => r.severity === "major").length} major, ${league.roster.rows.filter((r) => r.severity === "minor").length} minor issue(s)`
+        : "Lineup is clean";
+      let lineupPart;
+      if (L.zeroStarters.length) lineupPart = `${L.zeroStarters.length} starter(s) projected for 0 pts`;
+      else if (L.custom) {
         const changed = L.rows.filter((r) => r.changed).length;
-        const base = changed === 0 ? "Matches your player ranking" : `Your ranking changes ${changed} slot(s)`;
-        return L.betterDelta > 0.05 ? `${base} · better lineup exists (+${L.betterDelta.toFixed(1)})` : base;
-      }
-      return L.delta === 0 ? "Current lineup is already optimal" : `Optimal lineup gains +${L.delta.toFixed(1)} pts`;
+        lineupPart = changed === 0 ? "matches your ranking" : `your ranking changes ${changed} slot(s)`;
+      } else lineupPart = L.delta === 0 ? "already optimal" : `optimal lineup gains +${L.delta.toFixed(1)} pts`;
+      return `${rosterPart} · ${lineupPart}`;
     })(),
+    league: !league.privateInfo?.configured
+      ? "Settings change log — needs your Sleeper token"
+      : (league.leaguePage?.items || []).filter((i) => !i.cleared).length
+      ? `${(league.leaguePage.items || []).filter((i) => !i.cleared).length} settings change(s) to review`
+      : "No new settings changes",
     waiver: `${league.waiver.rows.filter((r) => r.severity !== "ok").length} worth a look this week`,
-    trade: league.trade.rows.length ? league.trade.rows[0].note : "No standout trade opportunities",
+    trade: (league.tradeOffers?.incoming || []).filter((o) => !o.cleared).length
+      ? `${(league.tradeOffers.incoming || []).filter((o) => !o.cleared).length} offer(s) waiting on you`
+      : league.trade.rows.length
+      ? league.trade.rows[0].note
+      : "No standout trade opportunities",
     injury: league.injury.rows.filter((r) => !r.seen).length
       ? `${league.injury.rows.filter((r) => !r.seen).length} new injury flag(s)`
       : league.injury.rows.length
@@ -1431,7 +1441,7 @@ function RowChips({ player, profile }) {
   );
 }
 
-function LineupTab({ league, onSaveRanking }) {
+function LineupTab({ league, onSaveRanking, hideWeather = false }) {
   const [showRankings, setShowRankings] = useState(false);
   if (showRankings) {
     return <PlayerRankings league={league} onSaveRanking={onSaveRanking} onBack={() => setShowRankings(false)} />;
@@ -1470,7 +1480,7 @@ function LineupTab({ league, onSaveRanking }) {
           Projected for 0 points: {L.zeroStarters.map((p) => p.name).join(", ")}
         </div>
       )}
-      {L.weatherStarters?.length > 0 && (
+      {!hideWeather && L.weatherStarters?.length > 0 && (
         <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2 mb-2 space-y-0.5">
           {L.weatherStarters.map((p) => (
             <div key={p.id || p.name}>
@@ -1927,7 +1937,7 @@ function ClaimRow({ c, result, mode, budget, isFaab, bench, handle, dragging, on
   );
 }
 
-function ClaimsPage({ league, plan, setPlan }) {
+function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
   const budget = league.waiverInfo?.budget || 0;
   const used = league.waiverInfo?.used || 0;
   const isFaab = Boolean(league.waiverInfo?.faab);
@@ -1943,9 +1953,21 @@ function ClaimsPage({ league, plan, setPlan }) {
   }, [syncedDrops, plan.drops, bench, setPlan]);
 
   const eff = useMemo(() => effectiveClaims({ ...plan, drops: syncedDrops }, { openSpots }), [plan, syncedDrops, openSpots]);
-  const groups = useMemo(() => groupClaims(eff.claims, plan.order), [eff.claims, plan.order]);
+  // v3.0: claims already queued in Sleeper aren't proposed again. A queued claim matches a
+  // proposed one when it adds the same player and drops the same player (or nobody).
+  const pending = league.privateInfo?.claims?.pending || [];
+  const existing = useMemo(
+    () => pending.map((x) => ({ key: `sl:${x.id}`, addId: String(x.adds[0] ?? ""), dropId: x.drops[0] != null ? String(x.drops[0]) : null, bid: Number(x.bid) || 0, source: "sleeper", dropPriority: -2, txId: x.id })),
+    [pending]
+  );
+  const existingKeys = useMemo(() => new Set(existing.map((x) => claimKey(x.addId, x.dropId))), [existing]);
+  const visibleClaims = useMemo(() => eff.claims.filter((c) => !existingKeys.has(claimKey(c.addId, c.dropId))), [eff.claims, existingKeys]);
+  const hiddenCount = eff.claims.length - visibleClaims.length;
+  const groups = useMemo(() => groupClaims(visibleClaims, plan.order), [visibleClaims, plan.order]);
   const ordered = useMemo(() => flatten(groups), [groups]);
-  const sim = useMemo(() => simulate(ordered, { budget, used, openSpots }), [ordered, budget, used, openSpots]);
+  // The budget prediction counts what is already queued in Sleeper too.
+  const simOrder = useMemo(() => flatten(groupClaims([...visibleClaims, ...existing], plan.order)), [visibleClaims, existing, plan.order]);
+  const sim = useMemo(() => simulate(simOrder, { budget, used, openSpots }), [simOrder, budget, used, openSpots]);
   const resultByKey = new Map(sim.results.map((r) => [r.key, r]));
 
   const [adding, setAdding] = useState(false);
@@ -2043,7 +2065,7 @@ function ClaimsPage({ league, plan, setPlan }) {
       )}
 
       <div className="flex items-center justify-between gap-2">
-        <SectionLabel>Proposed claims — {eff.claims.length}</SectionLabel>
+        <SectionLabel>Proposed claims — {visibleClaims.length}</SectionLabel>
         <div className="flex items-center gap-2 pt-3">
           <button type="button" onClick={() => setAdding((v) => !v)} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="text-xs rounded-md px-2 py-1" data-add-custom>
             + Custom claim
@@ -2080,9 +2102,10 @@ function ClaimsPage({ league, plan, setPlan }) {
       {eff.warnings.map((w, i) => (
         <div key={i} style={{ color: C.minor }} className="text-[11px] px-1 pb-1">{w}</div>
       ))}
-      {eff.claims.length === 0 ? (
+      {hiddenCount > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-1" data-hidden-existing>{hiddenCount} proposed claim{hiddenCount === 1 ? " is" : "s are"} already in Sleeper and hidden here.</div>}
+      {visibleClaims.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">
-          No claims yet. Enter a bid on the Available page{plan.bids.length ? ", then tick the bench players you're willing to drop above" : ""}.
+          {hiddenCount > 0 ? "Everything proposed is already queued in Sleeper." : <>No claims yet. Enter a bid on the Available page{plan.bids.length ? ", then tick the bench players you're willing to drop above" : ""}.</>}
         </div>
       ) : (
         <div className="space-y-3">
@@ -2108,6 +2131,8 @@ function ClaimsPage({ league, plan, setPlan }) {
         </div>
       )}
 
+      <ClaimsPush league={league} ordered={ordered} existing={existing} isFaab={isFaab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />
+
       {ordered.length > 0 && (
         <>
           <SectionLabel>Enter these in Sleeper, in this order</SectionLabel>
@@ -2129,7 +2154,82 @@ function ClaimsPage({ league, plan, setPlan }) {
   );
 }
 
-function WaiverTab({ league, sessionId }) {
+
+// v3.0: push the proposed claims to Sleeper (private API, opt-in, confirm, read-back).
+// The submit/cancel claim calls have never been confirmed to work, so the FIRST push
+// is a single claim; once one has been read back successfully, the rest go in one go.
+function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccount }) {
+  const [st, setSt] = useState(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null);
+  const loadStatus = useCallback(() => api.getPrivateStatus().then(setSt).catch(() => setSt(null)), []);
+  useEffect(() => {
+    if (league.privateInfo?.configured) loadStatus();
+  }, [league.privateInfo?.configured, loadStatus]);
+  const proven = Boolean(st?.log?.some((l) => l.action === "submit_waiver_claim" && l.ok));
+  const batch = proven ? ordered : ordered.slice(0, 1);
+  const label = (c) => (isFaab ? describeClaim(c) : `Claim ${c.addName}${c.dropName ? ` and drop ${c.dropName}` : " (no drop)"}`);
+  const send = async () => {
+    setBusy(true);
+    const out = [];
+    for (const c of batch) {
+      try {
+        const r = await api.pushClaim(league.id, { addId: c.addId, dropId: c.dropId, bid: c.bid });
+        out.push({ label: label(c), ok: r.ok, verified: r.verified, detail: r.detail });
+        if (!r.ok) break; // stop at the first claim Sleeper doesn't confirm
+      } catch (e) {
+        out.push({ label: label(c), ok: false, detail: e.message });
+        break;
+      }
+    }
+    setResults(out);
+    setBusy(false);
+    setConfirming(false);
+    loadStatus();
+    if (out.some((o) => o.ok)) onRefresh?.();
+  };
+  const cancel = async (x) => {
+    try {
+      const r = await api.cancelClaim(league.id, x.txId);
+      setResults([{ label: `Cancel queued claim for ${x.addId}`, ok: r.ok, detail: r.detail }]);
+      if (r.ok) onRefresh?.();
+    } catch (e) {
+      setResults([{ label: "Cancel queued claim", ok: false, detail: e.message }]);
+    }
+  };
+  return (
+    <div className="mt-3 space-y-2" data-claims-push>
+      <SectionLabel>Push to Sleeper</SectionLabel>
+      <PrivateGate league={league} write onOpenAccount={onOpenAccount}>
+        {league.privateInfo?.claims?.error && <div style={{ color: C.minor }} className="text-[11px] px-1">Couldn't read your queued claims from Sleeper ({league.privateInfo.claims.error}) — proposed claims may duplicate ones already there.</div>}
+        {existing.length > 0 && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y" data-existing-claims>
+            <div style={{ color: C.textFaint }} className="px-3 py-1.5 text-[11px]">Already queued in Sleeper</div>
+            {existing.map((x) => (
+              <div key={x.key} style={{ color: C.text, borderColor: C.border }} className="px-3 py-2 text-xs flex items-center justify-between gap-2">
+                <span>Add {x.addId}{x.dropId ? `, drop ${x.dropId}` : ""} · bid {fmtMoney(x.bid)}</span>
+                <button type="button" onClick={() => cancel(x)} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded px-2 py-0.5 text-[11px]">Cancel</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {ordered.length === 0 ? (
+          <div style={{ color: C.textMuted }} className="text-xs px-1">Nothing to push.</div>
+        ) : !confirming ? (
+          <button type="button" onClick={() => setConfirming(true)} style={{ background: C.brand, color: C.text }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium" data-push-claims>
+            {proven ? `Push ${ordered.length} claim${ordered.length === 1 ? "" : "s"} to Sleeper` : "Push first claim to Sleeper (test)"}
+          </button>
+        ) : (
+          <ConfirmPush title={proven ? "Send these claims to Sleeper?" : "Send ONE test claim to Sleeper?"} lines={batch.map(label)} buttonLabel={proven ? "Yes, submit them" : "Yes, submit this claim"} busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note={proven ? "Each claim is read back from Sleeper to confirm it registered; the push stops at the first one that doesn't." : "Entering waiver claims through Sleeper's private API has never been confirmed to work. This sends only the first claim and reads it back. If it registers, the next push sends the rest. Either way, the checklist below still works."} />
+        )}
+        <PushResults results={results} />
+      </PrivateGate>
+    </div>
+  );
+}
+
+function WaiverTab({ league, sessionId, onRefresh, onOpenAccount }) {
   const [sub, setSub] = useState("available");
   const [plan, setPlanState] = useState(null);
   const [planError, setPlanError] = useState(null);
@@ -2201,7 +2301,7 @@ function WaiverTab({ league, sessionId }) {
       ) : sub === "available" ? (
         <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRunFaab={runFaab} />
       ) : (
-        <ClaimsPage league={league} plan={plan} setPlan={setPlan} />
+        <ClaimsPage league={league} plan={plan} setPlan={setPlan} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />
       )}
     </div>
   );
@@ -2300,7 +2400,7 @@ function OwnershipSection({ ownership }) {
   );
 }
 
-function TradeTab({ league, sessionId }) {
+function TradeTab({ league, sessionId, onRefresh, onOpenAccount }) {
   const teams = league.leagueTeams || [];
   const me = teams.find((t) => t.isMe);
   const others = teams.filter((t) => !t.isMe);
@@ -2332,6 +2432,7 @@ function TradeTab({ league, sessionId }) {
   return (
     <div className="px-4 py-3">
       <DeadlineBanner info={league.tradeDeadline} />
+      <TradeOffers league={league} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
         {league.tradeBasis === "projection"
           ? "FantasyPros rankings weren't available for enough of your league, so trade value here is each player's rank by projected points among rostered players at his position — a single-week signal, not a dedicated trade-value model."
@@ -2531,7 +2632,387 @@ function SeasonOutlookTab({ league, sessionId }) {
   );
 }
 
-const TAB_COMPONENTS = { roster: RosterTab, lineup: LineupTab, waiver: WaiverTab, trade: TradeTab, injury: InjuryTab, odds: SeasonOutlookTab };
+/* ------------------------------------------------------------------ */
+/*  v3.0 — Sleeper private access: gate, confirm box, results          */
+/* ------------------------------------------------------------------ */
+function PrivateGate({ league, write = false, onOpenAccount, children }) {
+  const pi = league.privateInfo;
+  const box = (text) => (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-3 text-xs space-y-2" data-private-gate>
+      <div>{text}</div>
+      {onOpenAccount && (
+        <button type="button" onClick={onOpenAccount} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="rounded-md px-2.5 py-1 text-xs">
+          Open Account → Sleeper access
+        </button>
+      )}
+    </div>
+  );
+  if (!pi?.configured) return box("This needs your Sleeper login token (Account → Sleeper access). It stays on your server and is optional — everything else works without it.");
+  if (write && !pi.writesEnabled) return box("Pushing changes to Sleeper is switched off. Turn on \"Allow changes\" under Account → Sleeper access to use this.");
+  return children;
+}
+
+// Shows exactly what will be sent and asks for a second click.
+function ConfirmPush({ title, lines, buttonLabel, busy, onConfirm, onCancel, note }) {
+  return (
+    <div style={{ background: C.surfaceRaised, border: `1px solid ${C.brand}66` }} className="rounded-md px-3 py-3 space-y-2" data-confirm-push>
+      <div style={{ color: C.text, fontFamily: "Oswald, sans-serif" }} className="text-sm">{title}</div>
+      <ul className="text-xs space-y-1" style={{ color: C.text }}>
+        {lines.map((l, i) => <li key={i}>• {l}</li>)}
+      </ul>
+      {note && <div style={{ color: C.textMuted }} className="text-[11px]">{note}</div>}
+      <div className="flex items-center gap-2">
+        <button type="button" disabled={busy} onClick={onConfirm} style={{ background: C.brand, color: C.text, opacity: busy ? 0.6 : 1 }} className="rounded-md px-3 py-1.5 text-sm" data-confirm-send>
+          {busy ? "Sending…" : buttonLabel}
+        </button>
+        <button type="button" disabled={busy} onClick={onCancel} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-sm">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function PushResults({ results }) {
+  if (!results?.length) return null;
+  return (
+    <div className="space-y-1" data-push-results>
+      {results.map((r, i) => (
+        <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${r.ok ? C.ok : C.major}`, color: C.text }} className="rounded-md px-3 py-2 text-xs">
+          <div>{r.label}</div>
+          <div style={{ color: r.ok ? C.ok : C.major }}>{r.ok ? (r.verified ? "Done — read back from Sleeper and confirmed" : "Sent") : "Not confirmed"}{r.detail ? ` — ${r.detail}` : ""}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  v3.0 — merged Roster page: roster, then Proposed changes / Update   */
+/* ------------------------------------------------------------------ */
+function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount }) {
+  const [sub, setSub] = useState("proposed");
+  const changes = useMemo(() => proposeChanges(league), [league]);
+  const [checked, setChecked] = useState(() => new Set());
+  useEffect(() => {
+    setChecked((prev) => {
+      const valid = new Set(changes.filter((c) => !c.blocked).map((c) => c.key));
+      const next = new Set([...prev].filter((k) => valid.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [changes]);
+  const onToggle = (key, on) => setChecked((prev) => toggleChange(changes, prev, key, on));
+  const tab = (key, label) => (
+    <button key={key} onClick={() => setSub(key)} aria-current={sub === key ? "page" : undefined} data-roster-tab={key} style={{ color: sub === key ? C.text : C.textMuted, borderBottom: `2px solid ${sub === key ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium">
+      {label}
+    </button>
+  );
+  const usable = changes.filter((c) => !c.blocked).length;
+  return (
+    <div>
+      {league.lineup?.weatherStarters?.length > 0 && (
+        <div className="px-4 pt-3 -mb-1" data-roster-weather>
+          <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.minor }} className="text-xs rounded-md px-3 py-2 space-y-0.5">
+            {league.lineup.weatherStarters.map((p) => (
+              <div key={p.id || p.name}>Weather: {p.name} ({p.team}) — {p.weather.reasons.join("; ")}</div>
+            ))}
+          </div>
+        </div>
+      )}
+      <RosterTab league={league} />
+      <div className="px-4 pb-3">
+        <div className="flex mb-3" style={{ borderBottom: `1px solid ${C.border}` }}>
+          {tab("proposed", `Proposed changes${usable ? ` (${usable})` : ""}`)}
+          {tab("update", `Update roster${checked.size ? ` (${checked.size})` : ""}`)}
+        </div>
+        {sub === "proposed" ? (
+          <ProposedChanges league={league} changes={changes} checked={checked} onToggle={onToggle} onSaveRanking={onSaveRanking} onGoUpdate={() => setSub("update")} />
+        ) : (
+          <UpdateRoster league={league} changes={changes} checked={checked} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={() => setChecked(new Set())} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProposedChanges({ league, changes, checked, onToggle, onSaveRanking, onGoUpdate }) {
+  const [details, setDetails] = useState(false);
+  return (
+    <div data-proposed-changes>
+      {changes.length === 0 ? (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-3 text-sm">
+          No changes recommended — your lineup already matches the best projected lineup, and nothing needs moving to IR.
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {changes.map((c) => (
+            <label key={c.key} style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: c.blocked ? 0.7 : 1 }} className="rounded-md px-3 py-2.5 flex items-start gap-3" data-change={c.key}>
+              <input type="checkbox" disabled={Boolean(c.blocked)} checked={checked.has(c.key)} onChange={(e) => onToggle(c.key, e.target.checked)} className="mt-1" aria-label={c.type === "lineup" ? `Start ${c.toName} at ${c.slot}` : `Move ${c.name} to IR`} />
+              <div className="min-w-0 flex-1">
+                {c.type === "lineup" ? (
+                  <>
+                    <div style={{ color: C.text }} className="text-sm"><span style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs mr-1.5">{c.slot}</span>{c.fromName ?? "(empty)"} → <b>{c.toName}</b></div>
+                    {c.delta > 0 && <div style={{ color: C.ok }} className="text-xs">+{c.delta.toFixed(1)} projected points</div>}
+                  </>
+                ) : (
+                  <div style={{ color: C.text }} className="text-sm">Move <b>{c.name}</b> to injured reserve</div>
+                )}
+                {c.blocked && <div style={{ color: C.minor }} className="text-xs mt-0.5">{c.blocked}</div>}
+              </div>
+            </label>
+          ))}
+        </div>
+      )}
+      {changes.some((c) => !c.blocked) && (
+        <div className="flex items-center justify-between pt-2">
+          <span style={{ color: C.textMuted }} className="text-xs">{checked.size} approved</span>
+          <button type="button" onClick={onGoUpdate} disabled={checked.size === 0} style={{ background: C.brand, color: C.text, opacity: checked.size ? 1 : 0.5 }} className="rounded-md px-3 py-1.5 text-sm" data-go-update>
+            Review in Update roster →
+          </button>
+        </div>
+      )}
+      <button type="button" onClick={() => setDetails((v) => !v)} style={{ color: C.brand }} className="text-xs underline mt-3" data-lineup-details-toggle>
+        {details ? "Hide" : "Show"} lineup details (rankings, per-slot view)
+      </button>
+      {details && <div className="-mx-4"><LineupTab league={league} onSaveRanking={onSaveRanking} hideWeather /></div>}
+    </div>
+  );
+}
+
+function UpdateRoster({ league, changes, checked, onRefresh, onOpenAccount, onDone }) {
+  const push = useMemo(() => buildPush(league, changes, checked), [league, changes, checked]);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null);
+  const send = async () => {
+    setBusy(true);
+    const out = [];
+    try {
+      if (push.starters) {
+        try {
+          const r = await api.pushLineup(league.id, push.starters);
+          out.push({ label: "Starting lineup", ok: r.ok, verified: r.verified, detail: r.detail });
+        } catch (e) {
+          out.push({ label: "Starting lineup", ok: false, detail: e.message });
+        }
+      }
+      if (push.reserve) {
+        try {
+          const r = await api.pushReserve(league.id, push.reserve);
+          out.push({ label: "Injured reserve", ok: r.ok, verified: r.verified, detail: r.detail });
+        } catch (e) {
+          out.push({ label: "Injured reserve", ok: false, detail: e.message });
+        }
+      }
+    } finally {
+      setResults(out);
+      setBusy(false);
+      setConfirming(false);
+      if (out.some((o) => o.ok)) {
+        onDone();
+        onRefresh?.();
+      }
+    }
+  };
+  return (
+    <div data-update-roster>
+      <PrivateGate league={league} write onOpenAccount={onOpenAccount}>
+        {checked.size === 0 && !results ? (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-3 text-sm">
+            Nothing approved yet. Tick changes on the Proposed changes tab.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {checked.size > 0 && (
+              <>
+                <div style={{ color: C.textMuted }} className="text-xs px-1">Approved changes</div>
+                <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y" data-approved-summary>
+                  {push.summary.map((l, i) => (
+                    <div key={i} style={{ color: C.text, borderColor: C.border }} className="px-3 py-2 text-sm">{l}</div>
+                  ))}
+                </div>
+                {push.errors.map((e, i) => <div key={i} style={{ color: C.major }} className="text-xs px-1">{e}</div>)}
+                {!confirming && (
+                  <button type="button" disabled={push.errors.length > 0} onClick={() => setConfirming(true)} style={{ background: C.brand, color: C.text, opacity: push.errors.length ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium" data-push-sleeper>
+                    Push to Sleeper
+                  </button>
+                )}
+                {confirming && (
+                  <ConfirmPush title="Send these changes to Sleeper?" lines={push.summary} buttonLabel="Yes, update my roster" busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note="Sleeper is then asked for the roster back to check it. The lineup is written to both your roster and this week's matchup. Moving a player to IR is an untested Sleeper call — it is reported honestly if it doesn't take." />
+                )}
+              </>
+            )}
+            <PushResults results={results} />
+          </div>
+        )}
+      </PrivateGate>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  v3.0 — League page: settings change log                            */
+/* ------------------------------------------------------------------ */
+function LeaguePage({ league, onClearVariances, onOpenAccount }) {
+  const lp = league.leaguePage;
+  const items = lp?.items || [];
+  const open = items.filter((i) => !i.cleared);
+  return (
+    <div className="px-4 py-3 space-y-2" data-league-page>
+      <div style={{ color: C.textMuted }} className="text-xs px-1">Settings change log — who changed which league setting, with old and new values. Highlighted yellow on the league until you clear it.</div>
+      <PrivateGate league={league} onOpenAccount={onOpenAccount}>
+        {lp?.error && <div style={{ color: C.major }} className="text-xs px-1">Couldn't read the log from Sleeper: {lp.error}</div>}
+        {items.length === 0 && !lp?.error ? (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-3 text-sm">No settings changes recorded.</div>
+        ) : (
+          <>
+            {open.length > 0 && (
+              <div className="flex justify-end">
+                <button type="button" onClick={() => onClearVariances(open.map((i) => leagueLogKey(league, i)))} style={{ color: C.minor, border: `1px solid ${C.minor}66` }} className="rounded-md px-2.5 py-1 text-xs" data-clear-league-log>
+                  Clear {open.length} change{open.length === 1 ? "" : "s"}
+                </button>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              {items.map((it) => (
+                <div key={it.id} data-log-item={it.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${it.cleared ? C.border : C.minor}` }} className="rounded-md px-3 py-2">
+                  <div style={{ color: it.cleared ? C.textMuted : C.text }} className="text-sm">{it.text}</div>
+                  {it.at && <div style={{ color: C.textFaint }} className="text-[11px]">{new Date(it.at).toLocaleString()}</div>}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </PrivateGate>
+    </div>
+  );
+}
+const leagueLogKey = (league, it) => varianceKey(league.id, league.week, "league", "Settings change", `log ${it.id}`);
+
+/* ------------------------------------------------------------------ */
+/*  v3.0 — Trade offers (inbox + your own outstanding offers)           */
+/* ------------------------------------------------------------------ */
+function OfferCard({ o, kind, league, onRefresh, onOpenAccount }) {
+  const [state, setState] = useState({ confirming: false, busy: false, result: null });
+  const side = (players, picks) => [...(players || []).map((p) => `${p.name || p.id}${p.pos ? ` (${p.pos})` : ""}`), ...(picks || [])].join(", ") || "nothing";
+  const reject = async () => {
+    setState((s) => ({ ...s, busy: true }));
+    try {
+      const r = await api.rejectTrade(league.id, o.id, o.leg ?? league.week);
+      setState({ confirming: false, busy: false, result: { ok: r.ok, verified: r.ok, detail: r.detail } });
+      if (r.ok) onRefresh?.();
+    } catch (e) {
+      setState({ confirming: false, busy: false, result: { ok: false, detail: e.message } });
+    }
+  };
+  const color = kind === "outgoing" && o.stale ? C.major : kind === "incoming" && !o.cleared ? C.minor : C.border;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${color}` }} className="rounded-md px-3 py-2.5 space-y-1.5" data-offer={o.id} data-offer-kind={kind}>
+      <div style={{ color: C.textFaint }} className="text-[11px]">{kind === "incoming" ? "From" : "To"} {o.partner || "another team"}{o.ageDays != null ? ` · ${o.ageDays} day${o.ageDays === 1 ? "" : "s"} ago` : ""}</div>
+      <div style={{ color: C.text }} className="text-sm">You get: <b>{side(o.get, o.getPicks)}</b></div>
+      <div style={{ color: C.text }} className="text-sm">You give: <b>{side(o.give, o.givePicks)}</b></div>
+      {kind === "outgoing" && o.stale && <div style={{ color: C.major }} className="text-xs">Stale — {o.stale}</div>}
+      {kind === "incoming" && (
+        <PrivateGate league={league} write onOpenAccount={onOpenAccount}>
+          {!state.confirming && !state.result?.ok && (
+            <button type="button" onClick={() => setState((s) => ({ ...s, confirming: true }))} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2.5 py-1 text-xs" data-reject-trade>
+              Reject this offer
+            </button>
+          )}
+          {state.confirming && <ConfirmPush title="Reject this trade offer in Sleeper?" lines={[`Reject ${o.partner || "the"} offer: you get ${side(o.get, o.getPicks)}; you give ${side(o.give, o.givePicks)}`]} buttonLabel="Yes, reject it" busy={state.busy} onConfirm={reject} onCancel={() => setState((s) => ({ ...s, confirming: false }))} note="This can't be undone from here." />}
+          {state.result && <PushResults results={[{ label: "Reject offer", ...state.result }]} />}
+        </PrivateGate>
+      )}
+    </div>
+  );
+}
+
+function TradeOffers({ league, onRefresh, onOpenAccount }) {
+  const pi = league.privateInfo;
+  if (!pi?.configured) {
+    return (
+      <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2" data-offers-hint>
+        Trade offers waiting on you (and your own stale offers) appear here once you add your Sleeper token under Account → Sleeper access.
+        {onOpenAccount && <> <button type="button" onClick={onOpenAccount} style={{ color: C.brand }} className="underline">Set up</button></>}
+      </div>
+    );
+  }
+  const T = league.tradeOffers || league.privateInfo?.trades || { incoming: [], outgoing: [] };
+  if (T.error) return <div style={{ color: C.minor }} className="text-xs px-1 pb-2">Couldn't read trade offers from Sleeper: {T.error}</div>;
+  if (pi.empty) return null;
+  const inc = T.incoming || [];
+  const out = T.outgoing || [];
+  return (
+    <div className="pb-2" data-offers>
+      <SectionLabel>Offers waiting on you — {inc.length}</SectionLabel>
+      {inc.length === 0 ? <div style={{ color: C.textMuted }} className="text-sm px-1">No incoming offers.</div> : <div className="space-y-1.5">{inc.map((o) => <OfferCard key={o.id} o={o} kind="incoming" league={league} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />)}</div>}
+      <SectionLabel>Your outstanding offers — {out.length}</SectionLabel>
+      {out.length === 0 ? <div style={{ color: C.textMuted }} className="text-sm px-1">None outstanding.</div> : <div className="space-y-1.5">{out.map((o) => <OfferCard key={o.id} o={o} kind="outgoing" league={league} />)}</div>}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  v3.0 — Account: Sleeper access (token, allow changes)               */
+/* ------------------------------------------------------------------ */
+function SleeperAccessPanel() {
+  const [st, setSt] = useState(null);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const load = useCallback(() => api.getPrivateStatus().then(setSt).catch((e) => setMsg(e.message)), []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  const act = async (fn, okMsg) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await fn();
+      if (okMsg) setMsg(okMsg);
+      setToken("");
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-2.5" data-sleeper-access>
+      <div style={{ color: C.textMuted }} className="text-xs">
+        Optional. Lets the app read your trade offers and league settings log, and — only if you switch it on — push lineup changes, reject trades and enter waiver claims. It uses Sleeper's private, undocumented API with your login token. That API can change without notice and Sleeper's terms arguably restrict automation, so it's off until you turn it on. The token is stored encrypted on your server and never sent back to the browser.
+      </div>
+      {!st ? (
+        <div style={{ color: C.textMuted }} className="text-xs">Loading…</div>
+      ) : st.configured ? (
+        <>
+          <div style={{ color: C.ok }} className="text-xs">Connected{st.sleeperUsername ? ` as ${st.sleeperUsername}` : ""}{st.verifiedAt ? ` · verified ${new Date(st.verifiedAt).toLocaleDateString()}` : ""}.</div>
+          <label className="flex items-start gap-2 text-sm" style={{ color: C.text }}>
+            <input type="checkbox" checked={Boolean(st.writesEnabled)} disabled={busy} onChange={(e) => act(() => api.setPrivateWrites(e.target.checked))} className="mt-1" data-allow-changes />
+            <span>Allow changes to Sleeper<span style={{ color: C.textMuted }} className="block text-xs">Every push still shows exactly what it will send and asks you to confirm.</span></span>
+          </label>
+          <button type="button" disabled={busy} onClick={() => act(() => api.clearPrivateToken(), "Token removed.")} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2.5 py-1 text-xs" data-remove-token>Remove token</button>
+          {st.log?.length > 0 && (
+            <div>
+              <div style={{ color: C.textFaint }} className="text-[11px] pb-1">Recent changes sent to Sleeper</div>
+              {st.log.slice(0, 8).map((l, i) => (
+                <div key={i} style={{ color: l.ok ? C.textMuted : C.major }} className="text-[11px]">{new Date(l.at).toLocaleString()} · {l.action.replace(/_/g, " ")} · {l.ok ? "ok" : "failed"}{l.detail ? ` — ${l.detail}` : ""}</div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div style={{ color: C.textMuted }} className="text-xs">In Sleeper's website, open the browser's developer tools → Application → Local storage → sleeper.com → <code>token</code>, and paste its value here.</div>
+          <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Sleeper token" autoComplete="off" style={inputStyle} className="w-full rounded px-2 py-1.5 text-sm outline-none" aria-label="Sleeper token" data-token-input />
+          <button type="button" disabled={busy || token.trim().length < 20} onClick={() => act(() => api.setPrivateToken(token), "Connected. Changes to Sleeper are still switched off.")} style={{ background: C.brand, color: C.text, opacity: busy || token.trim().length < 20 ? 0.5 : 1 }} className="rounded-md px-3 py-1.5 text-sm" data-save-token>Verify &amp; save</button>
+        </>
+      )}
+      {msg && <div style={{ color: C.minor }} className="text-xs">{msg}</div>}
+    </div>
+  );
+}
+
+const TAB_COMPONENTS = { roster: RosterPage, waiver: WaiverTab, trade: TradeTab, injury: InjuryTab, league: LeaguePage, odds: SeasonOutlookTab };
 
 const inputStyle = { background: C.surface, border: `1px solid ${C.border}`, color: C.text };
 
@@ -2658,6 +3139,10 @@ function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
       <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3">
         <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm">{authUser?.username}</div>
         <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{authUser?.role === "owner" ? "Owner" : "Guest"}</div>
+      </div>
+      <div>
+        <SectionLabel>Sleeper access (optional)</SectionLabel>
+        <div className="pt-1.5"><SleeperAccessPanel /></div>
       </div>
       <div>
         <SectionLabel>Change password</SectionLabel>
@@ -4553,7 +5038,7 @@ export default function App() {
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
     if (view.screen === "dashboard") return [{ label: root.label }];
     if (view.screen === "league" && activeLeague) return [root, { label: activeLeague.name }];
-    if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, onClick: () => navigate({ screen: "league", leagueId: activeLeague.id }) }, { label: TAB_META[view.tab].label }];
+    if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, onClick: () => navigate({ screen: "league", leagueId: activeLeague.id }) }, { label: (TAB_META[view.tab] || TAB_META.roster).label }];
     return [root];
   }, [view, sleeperUser, liveLeagues.length, activeLeague, navigate]);
 
@@ -4623,16 +5108,17 @@ export default function App() {
       )}
       {view.screen === "tab" && activeLeague && (() => {
         if (activeLeague.error) return <ErrorScreen message={activeLeague.error} />;
-        const Comp = TAB_COMPONENTS[view.tab];
-        const pageVariances = (activeLeague.variances || []).filter((v) => v.page === view.tab);
+        const tabKey = view.tab === "lineup" ? "roster" : view.tab; // v3.0: Lineup merged into Roster
+        const Comp = TAB_COMPONENTS[tabKey];
+        const pageVariances = (activeLeague.variances || []).filter((v) => v.page === tabKey);
         return (
           <>
-            {STATUS_BADGE_TABS.includes(view.tab) && (
+            {STATUS_BADGE_TABS.includes(tabKey) && (
               <div className="flex justify-end px-4 pt-3 -mb-1">
-                <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: view.tab })} label="Variance report — this page" />
+                <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: tabKey })} label="Variance report — this page" />
               </div>
             )}
-            <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} />
+            <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={handleRefresh} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
           </>
         );
       })()}

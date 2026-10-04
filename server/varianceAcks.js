@@ -25,11 +25,19 @@ const MAX_KEYS = 5000;
 export const GRACE_MS = 12 * 3600 * 1000;
 const k = (username) => `variance_acks:${username}`;
 
+// v3.0: the Roster and Lineup pages merged into one "roster" page, so keys saved
+// as "...|lineup|rule|subject" are read as "...|roster|rule|subject".
+export function migrateKey(key) {
+  const parts = String(key).split("|");
+  if (parts.length >= 4 && parts[2] === "lineup") parts[2] = "roster";
+  return parts.join("|");
+}
+
 function read(username) {
   const v = store.getState(k(username), []);
   const now = Date.now();
   return (Array.isArray(v) ? v : [])
-    .map((x) => (typeof x === "string" ? { k: x, at: now, seen: now } : x && typeof x.k === "string" ? { k: x.k, at: x.at ?? now, seen: x.seen ?? x.at ?? now } : null))
+    .map((x) => (typeof x === "string" ? { k: migrateKey(x), at: now, seen: now } : x && typeof x.k === "string" ? { k: migrateKey(x.k), at: x.at ?? now, seen: x.seen ?? x.at ?? now } : null))
     .filter(Boolean);
 }
 function write(username, recs) {
@@ -46,13 +54,13 @@ export function getAcks(username) {
 
 export function addAcks(username, keys) {
   const now = Date.now();
-  const add = (Array.isArray(keys) ? keys.filter(valid) : []).map((key) => ({ k: key, at: now, seen: now }));
+  const add = (Array.isArray(keys) ? keys.filter(valid) : []).map((key) => ({ k: migrateKey(key), at: now, seen: now }));
   return write(username, [...read(username), ...add]).map((r) => r.k);
 }
 
 export function prune(username, { leagueIds, week, present, now = Date.now() }) {
   const leagues = new Set((Array.isArray(leagueIds) ? leagueIds : []).map(String));
-  const keep = new Set((Array.isArray(present) ? present : []).filter(valid));
+  const keep = new Set((Array.isArray(present) ? present : []).filter(valid).map(migrateKey));
   const wk = `W${week}`;
   const next = [];
   for (const rec of read(username)) {

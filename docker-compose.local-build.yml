@@ -20,6 +20,10 @@ services:
       # Per-user login (v2.1) — see docker-compose.yml for the full explanation.
       - OWNER_USERNAME=${OWNER_USERNAME}
       - OWNER_PASSWORD=${OWNER_PASSWORD}
+      # v3.0 (optional): key used to encrypt your stored Sleeper token. Set a long random
+      # string. If unset, a random key is generated and kept in the same database file as
+      # the token, which protects much less.
+      - SESSION_SECRET=${SESSION_SECRET:-}
       - OWNER_FORCE_RESET=${OWNER_FORCE_RESET:-}
       - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
       # Tank01 (v2.4) — optional; see docker-compose.yml.

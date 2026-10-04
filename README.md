@@ -473,6 +473,24 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### Sleeper private access, roster push, trade offers, League page (v3.0)
+
+Everything in this section is **optional and off until you turn it on**. Without a token the app behaves exactly as v2.9.
+
+**What it is.** v3.0 can talk to Sleeper's *private, undocumented* GraphQL API (`https://sleeper.app/graphql`) using your Sleeper login token. It can change or disappear without notice, and Sleeper's terms (automated means, reverse engineering) arguably cover it. No ban reports were found, but there is no guarantee. The query and mutation shapes come from a community reference (Filip-Kin/sleeper-graphql). Proven by that project's author: reject trade, set lineup. **Not proven:** move to IR, submit/cancel waiver claim, the pending-claims read, and the settings log read with a token. This sandbox could not reach sleeper.app, so all of it is tested against a mock only. Nothing is reported as successful unless Sleeper's answer or a read-back confirms it.
+
+**Setup (Account → Sleeper access).** Paste the `token` value from Sleeper's website (browser developer tools → Application → Local storage → sleeper.com). It is verified with a read-only call, stored **encrypted** (AES-256-GCM, key from the `SESSION_SECRET` environment variable — set it to a long random string; if it isn't set a key is generated and kept in the same database file as the token, which protects much less) and never sent back to the browser. A second switch, **Allow changes**, is off by default; reading works without it, any push needs it. Every push shows exactly what it will send and needs a second click, and is logged (Account shows the recent log).
+
+**What uses it**
+- Roster & Lineup page (Roster and Lineup merged): roster at the top, then **Proposed changes** (tick boxes) and **Update roster** (summary of ticked changes + *Push to Sleeper*). The lineup is written to your roster *and* this week's matchup leg, then the leg is read back. Moving a player to IR is an untested call.
+- Trades: offers waiting on you (yellow, never auto-clear), your own stale offers (red), and *Reject this offer*.
+- Waivers → Claims: claims already queued in Sleeper are hidden from the proposals and listed with Cancel; *Push to Sleeper* sends a single test claim first, then the rest once one has been read back. The checklist stays as a fallback.
+- League page: settings change log; yellow until you clear it.
+
+**Stale offers.** Offseason: older than 7 days. In season: any player in the offer has a game today (US Eastern date) or one that already kicked off this week.
+
+**Line movement.** Not rebuilt: Pick'em already snapshots the spread hourly and shows "line moved" per game.
+
 ### Variance report and clearing minor variances (v2.8.1)
 
 A **Variance report** button opens a pop-up listing every yellow (minor)
