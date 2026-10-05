@@ -234,3 +234,26 @@ export function pushClaim(leagueId, claim, marks = {}) {
 export function cancelClaim(leagueId, transactionId) {
   return jsonPost(`/api/private/claim/cancel`, { leagueId, transactionId, confirm: true });
 }
+
+// v3.2: own picks + CBS pick'em push.
+export function savePickemChoice(payload) {
+  return jsonPost(`/api/pickem/choice`, payload);
+}
+export function getCbsStatus() {
+  return request(`/api/cbs/status`);
+}
+export function saveCbsAccount(email, password) {
+  return jsonPost(`/api/cbs/account`, { email, password });
+}
+export function clearCbsAccount() {
+  return jsonPost(`/api/cbs/account/clear`, {});
+}
+export function saveCbsSettings(patch) {
+  return jsonPost(`/api/cbs/settings`, patch);
+}
+export function testCbsLogin() {
+  return jsonPost(`/api/cbs/login-test`, {});
+}
+export function pushCbs({ dryRun = false, poolIds = null } = {}) {
+  return jsonPost(`/api/cbs/push`, { dryRun, confirm: !dryRun, poolIds });
+}

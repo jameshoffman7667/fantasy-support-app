@@ -473,6 +473,9 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v3.2 additions
+Pick'em picks can be chosen in the app and pushed to your CBS pools about an hour before each kickoff slot. Set it up under Account → CBS pick'em push; read CBS-CAPTURE.md first. Off by default; untested against real CBS.
+
 ### v3.1 additions
 Account → Sleeper access now has four switches: Read from Sleeper, Roster changes, Waiver claims, Trades. Outgoing trade offers all show, with a Withdraw button (unverified; it uses reject_trade and reads back). Players are unavailable on waivers from their kickoff until the week's last game ends. Injury opportunities (depth chart, next two backups) appear on Waivers, Roster and Injury. See CHANGELOG v3.1 for the unverified items.
 

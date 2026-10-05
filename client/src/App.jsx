@@ -3284,6 +3284,137 @@ function ForcePasswordScreen({ authUser, onDone, onLogout }) {
   );
 }
 
+
+/* ------------------------------------------------------------------ */
+/*  v3.2 — CBS pick'em: account panel (login, pools, recipe, switches)  */
+/* ------------------------------------------------------------------ */
+const RECIPE_EXAMPLE = `{
+  "login":  { "url": "", "method": "POST", "contentType": "form", "body": "email={{email}}&password={{password}}", "successIncludes": "" },
+  "submit": { "url": "", "method": "POST", "contentType": "form", "body": "", "successIncludes": "" },
+  "games":    { "url": "", "idRegex": "" },
+  "readback": { "url": "", "pickRegex": "" },
+  "teamMap": {}
+}`;
+function CbsPanel() {
+  const [st, setSt] = useState(null);
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [recipeText, setRecipeText] = useState("");
+  const [poolsText, setPoolsText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const load = useCallback(
+    () =>
+      api.getCbsStatus().then((d) => {
+        setSt(d);
+        setRecipeText((t) => t || (d.recipe && Object.keys(d.recipe).some((k) => k !== "teamMap") ? JSON.stringify(d.recipe, null, 2) : ""));
+        setPoolsText((t) => t || (d.pools || []).map((p) => `${p.id} ${p.name === p.id ? "" : p.name}`.trim()).join("\n"));
+      }).catch((e) => setMsg(e.message)),
+    []
+  );
+  useEffect(() => {
+    load();
+  }, [load]);
+  const act = async (fn, okMsg) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fn();
+      if (okMsg) setMsg(typeof okMsg === "function" ? okMsg(r) : okMsg);
+      await load();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const parsePools = () =>
+    poolsText.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+      const [id, ...rest] = l.split(/\s+/);
+      const old = (st?.pools || []).find((p) => p.id === id);
+      return { id, name: rest.join(" ") || id, enabled: old ? old.enabled : true };
+    });
+  const saveRecipe = () => {
+    let r;
+    try {
+      r = JSON.parse(recipeText || "{}");
+    } catch {
+      return setMsg("The recipe isn't valid JSON.");
+    }
+    return act(() => api.saveCbsSettings({ recipe: r, pools: parsePools() }), "Recipe and pools saved.");
+  };
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-2.5" data-cbs-panel>
+      <div style={{ color: C.textMuted }} className="text-xs">
+        Optional. Sends your Pick'em picks to your CBS pick'em pools automatically, about an hour before each kickoff slot. CBS has no public API, so this signs in with your CBS email and password (stored encrypted on your server, never sent back to the browser) and replays the requests you captured from your browser — see CBS-CAPTURE.md. CBS's terms may not allow automation, the requests can stop working whenever CBS changes its site, and nothing here has been tried against the real CBS. It is off until you switch it on, and every push is logged.
+      </div>
+      {!st ? (
+        <div style={{ color: C.textMuted }} className="text-xs">Loading…</div>
+      ) : (
+        <>
+          {st.configured ? (
+            <div style={{ color: C.ok }} className="text-xs">Login saved for {st.email}.</div>
+          ) : (
+            <div className="space-y-1.5">
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="CBS email" autoComplete="off" style={inputStyle} className="w-full rounded-md px-2.5 py-1.5 text-xs" data-cbs-email />
+              <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="CBS password" autoComplete="new-password" style={inputStyle} className="w-full rounded-md px-2.5 py-1.5 text-xs" data-cbs-password />
+              <button type="button" disabled={busy || !email || !pw} onClick={() => act(async () => { await api.saveCbsAccount(email, pw); setPw(""); }, "Login saved (encrypted).")} style={{ background: C.brand, color: "#fff" }} className="rounded-md px-3 py-1.5 text-xs font-medium" data-cbs-save-account>Save login</button>
+            </div>
+          )}
+          {st.configured && (
+            <>
+              <label className="flex flex-col gap-0.5 text-xs" style={{ color: C.textMuted }}>
+                Pools (one per line: pool id, then an optional name)
+                <textarea value={poolsText} onChange={(e) => setPoolsText(e.target.value)} rows={3} style={inputStyle} className="rounded-md px-2.5 py-1.5 text-xs font-mono" data-cbs-pools />
+              </label>
+              <label className="flex flex-col gap-0.5 text-xs" style={{ color: C.textMuted }}>
+                Request recipe (JSON from your captured requests)
+                <textarea value={recipeText} onChange={(e) => setRecipeText(e.target.value)} rows={9} placeholder={RECIPE_EXAMPLE} style={inputStyle} className="rounded-md px-2.5 py-1.5 text-[11px] font-mono" data-cbs-recipe />
+              </label>
+              <div className="flex gap-2 flex-wrap">
+                <button type="button" disabled={busy} onClick={saveRecipe} style={{ background: C.brand, color: "#fff" }} className="rounded-md px-3 py-1.5 text-xs font-medium" data-cbs-save-recipe>Save recipe &amp; pools</button>
+                <button type="button" disabled={busy || !st.recipeReady} onClick={() => act(() => api.testCbsLogin(), (r) => (r.ok ? "CBS accepted the login." : `Login failed: ${r.detail}`))} style={{ color: C.text, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-xs" data-cbs-login-test>Test login</button>
+              </div>
+              <label className="flex items-start gap-2 text-sm" style={{ color: C.text }}>
+                <input type="checkbox" checked={st.enabled} disabled={busy || !st.recipeReady || !(st.pools || []).length} onChange={(e) => act(() => api.saveCbsSettings({ enabled: e.target.checked }))} className="mt-1" data-cbs-enabled />
+                <span>Auto-push picks<span style={{ color: C.textMuted }} className="block text-xs">About 60 minutes before each kickoff slot; never for a game that has started. Needs a saved recipe and at least one pool.</span></span>
+              </label>
+              <label className="flex items-center gap-2 text-sm" style={{ color: C.text }}>
+                <input type="checkbox" checked={st.paused} disabled={busy} onChange={(e) => act(() => api.saveCbsSettings({ paused: e.target.checked }))} data-cbs-paused />
+                Pause (keeps your settings, sends nothing)
+              </label>
+              <label className="flex items-center gap-2 text-sm" style={{ color: C.text }}>
+                <input type="checkbox" checked={st.notify} disabled={busy} onChange={(e) => act(() => api.saveCbsSettings({ notify: e.target.checked }))} data-cbs-notify />
+                Notify me after every push (success or failure)
+              </label>
+              {!st.verifiedOnce && (st.pools || []).length > 0 && (
+                <div style={{ color: C.minor }} className="text-xs" data-cbs-testonly>
+                  First run: only the first pool ({(st.pools.find((p) => p.id === st.testPoolId) || st.pools[0]).name}) is used until a push is read back from CBS{st.hasReadback ? "" : " (no read-back is set up, so check that pool on CBS yourself)"}.{" "}
+                  <button type="button" disabled={busy} onClick={() => act(() => api.saveCbsSettings({ verifiedOnce: true }), "All pools will be used from now on.")} style={{ color: C.brand }} className="underline" data-cbs-trust>I checked it — use all pools</button>
+                </div>
+              )}
+              <button type="button" disabled={busy} onClick={() => act(() => api.clearCbsAccount(), "CBS login removed and auto-push switched off.")} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2.5 py-1 text-xs" data-cbs-remove>Remove CBS login</button>
+              {(st.log || []).length > 0 && (
+                <div data-cbs-log>
+                  <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide mb-1">Recent pushes</div>
+                  <div className="space-y-1">
+                    {st.log.slice(0, 12).map((r) => (
+                      <div key={r.id} style={{ color: r.ok ? C.textMuted : C.major }} className="text-[11px]">
+                        {new Date(r.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })} · {r.mode}{r.poolId ? ` · pool ${r.poolId}` : ""} · {r.ok ? "ok" : "FAILED"} — {r.detail}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+      {msg && <div style={{ color: C.textMuted }} className="text-xs" data-cbs-msg>{msg}</div>}
+    </div>
+  );
+}
+
 function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
   return (
     <div className="px-4 py-3 space-y-4">
@@ -3294,6 +3425,10 @@ function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
       <div>
         <SectionLabel>Sleeper access (optional)</SectionLabel>
         <div className="pt-1.5"><SleeperAccessPanel /></div>
+      </div>
+      <div>
+        <SectionLabel>CBS pick'em push (optional)</SectionLabel>
+        <div className="pt-1.5"><CbsPanel /></div>
       </div>
       <div>
         <SectionLabel>Change password</SectionLabel>
@@ -4433,7 +4568,7 @@ function RedDot({ title }) {
   return <span title={title} aria-label={title} className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: C.major }} />;
 }
 
-function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct }) {
+function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct, onChoose }) {
   const colors = barColors(g.away, g.home);
   const awayP = g.homeProb == null ? 0.5 : 1 - g.homeProb;
   const textOn = (hex) => (luminance(hex) > 0.6 ? "#10171A" : "#FFFFFF");
@@ -4477,6 +4612,22 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct }) {
         )}
         {g.changed && g.prevPick && <span style={{ color: C.major }} className="text-[11px]">changed from {g.prevPick} — tap to dismiss</span>}
       </div>
+      {onChoose && g.state === "pre" && !g.started && (
+        <div className="flex items-center gap-1.5 text-[11px]" data-pick-choose={g.key}>
+          <span style={{ color: C.textFaint }}>Your pick:</span>
+          {[g.away, g.home].map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onChoose(g.key, g.chosen === t ? null : t); }}
+              style={{ background: (g.final || g.pick) === t ? C.brand : "transparent", color: (g.final || g.pick) === t ? "#fff" : C.text, border: `1px solid ${C.border}` }}
+              className="rounded px-2 py-0.5 font-semibold"
+              data-pick-btn={t}
+            >{t}</button>
+          ))}
+          {g.chosen && <span style={{ color: C.minor }}>your choice (tap again to use the recommendation)</span>}
+        </div>
+      )}
       {g.reason && g.leverage && <div style={{ color: C.textMuted }} className="text-[11px]">{g.reason}</div>}
       {g.weather && !g.weather.indoor && g.weather.temp != null && (
         <div className="flex items-center gap-1.5 flex-wrap" data-pick-weather={g.weather.flag ? "bad" : "ok"}>
@@ -4523,6 +4674,49 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct }) {
   );
 }
 
+
+function CbsPushBar({ week }) {
+  const [st, setSt] = useState(null);
+  const [out, setOut] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    api.getCbsStatus().then(setSt).catch(() => {});
+  }, [out]);
+  if (!st || !st.configured || !st.recipeReady) return null;
+  const run = async (dryRun) => {
+    setBusy(true);
+    try {
+      setOut(await api.pushCbs({ dryRun }));
+    } catch (e) {
+      setOut({ ok: false, error: e.message });
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
+  const pools = (st.pools || []).filter((p) => p.enabled);
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2 space-y-1.5 text-xs" data-cbs-bar>
+      <div style={{ color: C.text }} className="font-medium">CBS pick'em · {st.enabled && !st.paused ? "auto-push on" : st.paused ? "paused" : "auto-push off"}</div>
+      <div style={{ color: C.textMuted }}>Sends your picks (yours, or the recommendation where you haven't chosen) for games that haven't started to {st.verifiedOnce ? `${pools.length} pool${pools.length === 1 ? "" : "s"}` : "the test pool"}.</div>
+      {!confirming ? (
+        <div className="flex gap-2">
+          <button type="button" disabled={busy} onClick={() => run(true)} style={{ color: C.text, border: `1px solid ${C.border}` }} className="rounded px-2.5 py-1" data-cbs-dry>Preview (sends nothing)</button>
+          <button type="button" disabled={busy} onClick={() => setConfirming(true)} style={{ background: C.brand, color: "#fff" }} className="rounded px-2.5 py-1 font-medium" data-cbs-push>Push now…</button>
+        </div>
+      ) : (
+        <ConfirmPush title="Push picks to CBS?" lines={[`Week ${week}: every unstarted game with a pick`, `${st.verifiedOnce ? pools.map((p) => p.name).join(", ") : (pools.find((p) => p.id === st.testPoolId) || pools[0])?.name + " (test pool)"}`]} buttonLabel="Send to CBS" busy={busy} onConfirm={() => run(false)} onCancel={() => setConfirming(false)} />
+      )}
+      {out && (
+        <div style={{ color: out.ok ? C.ok : C.major }} data-cbs-result>
+          {out.error ? out.error : out.dryRun ? `Preview: ${out.games.length} game(s) would be sent to ${out.requests.length} pool(s); nothing was sent.` : out.nothing ? out.detail : (out.results || []).map((r) => `${r.pool}: ${r.ok ? "ok" : "FAILED"} — ${r.detail}`).join(" | ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PickemScreen({ onChangedCount }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -4545,6 +4739,14 @@ function PickemScreen({ onChangedCount }) {
   };
   const seen = async (gameKey) => {
     await api.markPickemSeen(data.season, data.week, gameKey);
+    load();
+  };
+  const choose = async (gameKey, pick) => {
+    await api.savePickemChoice({ season: data.season, week: data.week, gameKey, pick });
+    load();
+  };
+  const setTiebreaker = async (v) => {
+    await api.savePickemChoice({ season: data.season, week: data.week, tiebreaker: v });
     load();
   };
   if (error && !data) return <div className="px-4 py-6"><ErrorScreen message={error} /></div>;
@@ -4607,12 +4809,18 @@ function PickemScreen({ onChangedCount }) {
           )}
         </div>
       </div>
+      <div className="flex items-center gap-2 text-[11px]" style={{ color: C.textMuted }}>
+        <label className="flex items-center gap-1.5">Your tiebreaker total
+          <input type="number" min="0" max="200" defaultValue={data.choices?.tiebreaker ?? ""} placeholder={data.tiebreaker ? String(data.tiebreaker.total) : ""} onBlur={(e) => setTiebreaker(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="rounded px-2 py-0.5 w-16" data-pick-tiebreaker />
+        </label>
+      </div>
+      <CbsPushBar week={data.week} />
       <div style={{ color: C.textFaint }} className="text-[10px] px-1">
         {data.gemini.configured ? (data.gemini.at ? `Article scan (Gemini) ${new Date(data.gemini.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "Article scan pending") : "Article scan off — set GEMINI_API_KEY to add upset mentions and game notes"}
       </div>
       <div className="space-y-2.5">
         {data.games.map((g) => (
-          <PickCard key={g.key} g={g} onSeen={seen} leverageOn={s.leverage} publicPct={s.publicPct?.[g.key]} onPublicPct={(k, v) => saveSettings({ publicPct: { [k]: v } })} />
+          <PickCard key={g.key} g={g} onSeen={seen} onChoose={choose} leverageOn={s.leverage} publicPct={s.publicPct?.[g.key]} onPublicPct={(k, v) => saveSettings({ publicPct: { [k]: v } })} />
         ))}
       </div>
     </div>

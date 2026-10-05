@@ -268,6 +268,26 @@ export async function trackRecs(username, board, settings, { notify = true } = {
   return { recs, rows: new Map(rows.map((r) => [r.game_key, r])) };
 }
 
+/** v3.2: the user's own pick per game (overrides the recommendation) and tiebreaker, per week. */
+const choiceKey = (u, season, week) => `pickem_choices:${u}:${season}:${week}`;
+export function getChoices(username, season, week) {
+  return store.getState(choiceKey(username, season, week), null) || { games: {}, tiebreaker: null };
+}
+export function saveChoice(username, season, week, { gameKey, pick, tiebreaker }) {
+  const cur = getChoices(username, season, week);
+  cur.games = { ...(cur.games || {}) };
+  if (gameKey) {
+    const m = /^([A-Z]{2,4})@([A-Z]{2,4})$/.exec(String(gameKey));
+    if (!m) throw new Error("Unknown game.");
+    if (pick == null || pick === "") delete cur.games[gameKey];
+    else if (pick === m[1] || pick === m[2]) cur.games[gameKey] = pick;
+    else throw new Error("That team isn't playing in this game.");
+  }
+  if (tiebreaker !== undefined) cur.tiebreaker = tiebreaker === "" || tiebreaker == null ? null : Math.max(0, Math.min(200, Math.round(Number(tiebreaker)) || 0));
+  store.setState(choiceKey(username, season, week), cur);
+  return cur;
+}
+
 export function markSeen(username, season, week, gameKey) {
   if (gameKey) db.prepare("UPDATE pickem_recs SET seen=1 WHERE username=? AND season=? AND week=? AND game_key=?").run(username, season, week, gameKey);
   else db.prepare("UPDATE pickem_recs SET seen=1 WHERE username=? AND season=? AND week=?").run(username, season, week);
@@ -309,12 +329,15 @@ export async function getPickem(username) {
   const settings = getSettings(username);
   const { recs, rows } = await trackRecs(username, board, settings);
   const now = Date.now();
+  const choices = getChoices(username, board.season, board.week);
   const games = board.games.map((g) => {
     const r = recs.get(g.key);
     const row = rows.get(g.key);
     return {
       ...g,
       pick: r?.pick ?? null,
+      chosen: choices.games?.[g.key] ?? null,
+      final: choices.games?.[g.key] ?? r?.pick ?? null,
       reason: r?.reason ?? null,
       leverage: r?.leverage ?? false,
       changed: Boolean(row && row.seen === 0 && row.changed_at && (g.kickoff == null || g.kickoff > now)),
@@ -322,7 +345,7 @@ export async function getPickem(username) {
       changedAt: row?.changed_at ?? null,
     };
   });
-  return { ...board, games, settings, record: record(username, board), changedCount: games.filter((g) => g.changed).length };
+  return { ...board, games, settings, choices: { tiebreaker: choices.tiebreaker ?? null }, record: record(username, board), changedCount: games.filter((g) => g.changed).length };
 }
 
 /** Scheduler hook: recompute every active user's recommendations (flags + pushes changes). */

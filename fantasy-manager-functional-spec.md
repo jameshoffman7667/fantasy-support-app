@@ -364,6 +364,15 @@ Everything here uses only public Sleeper data (plus the existing Tank01 / ESPN /
 - **Injury opportunities:** relevant slots QB1 (QB1–2 superflex), RB1–2, WR1–3, TE1; K/DST injury flag only. Triggers Out/IR/PUP/Sus/Doubtful; Questionable only with a Gemini news downgrade/no practice, trending-down signal or a trending backup (yellow only). Next two backups per injured player; WR/TE injuries add the top available player at the other position (WR↔TE). Depth chart from ESPN (unverified shape; per-team fallback to Sleeper `depth_chart_order`). Injury page: notes only. Waivers: "Injury adds" with available (not locked) players — P02 yellow (clears once viewed), P03 red if on your active roster (clears when dealt with or on waiver push), P04 yellow Questionable. Roster: P05 yellow when you own a backup, plus a replacements note on your injured players.
 - **Unverified:** see CHANGELOG v3.1.
 
+### 8.2k v3.2 — CBS pick'em push
+- **Own picks:** on each unstarted game on the Pick'em screen the user can tap a team (tap again to return to the recommendation). Stored per user per week (`pickem_choices:{user}:{season}:{week}`) with an optional tiebreaker total. Final pick = own choice else recommendation.
+- **CBS account (Account → CBS pick'em push):** email + password encrypted with the same AES-256-GCM key as the Sleeper token; never returned to the browser. Pools are entered as ids (one per line). Switches: Auto-push (off by default), Pause, Notify after every push.
+- **Recipe:** CBS's URLs/fields are unknown, so a per-user JSON recipe (login, submit, optional games lookup and read-back, team map) holds them; placeholders `{{email}}`, `{{password}}`, `{{csrf}}`, `{{poolId}}`, `{{season}}`, `{{week}}`, `{{gameId}}`, `{{pick}}`, `{{tiebreaker}}` etc. Only https hosts under cbssports.com (env `CBS_ALLOWED_HOSTS`). Cookie session kept in memory 20 minutes; one re-login on 401/403. See CBS-CAPTURE.md.
+- **Timing:** scheduler tick every 5 minutes; for each kickoff slot starting within 60 minutes (and more than 2 minutes away) the slot's games are sent to every enabled pool; up to 3 attempts, 10 minutes apart. Games that have started are never sent. Same picks go to all pools.
+- **Safeguards:** opt-in; pause; preview (dry run) sends nothing and masks the password; manual push needs confirm; `cbs_push_log` records every attempt (mode, pool, games, sent, verified, detail); read-back compares the saved picks when configured, otherwise the log says "sent, not verified"; first real run uses only the test pool (first enabled, or `testPoolId`) until a push is read back as matching or the user confirms "I checked it".
+- **Notifications:** a push notification after every auto or manual push (success or failure) when the user's alerts are on.
+- **Unverified:** every CBS-specific detail; assumed lock = kickoff.
+
 ### 8.3 Waiver Management
 
 **Purpose:** Surface top available (non-rostered-by-anyone-in-the-league) players, ranked by FantasyPros ECR and Sleeper trending-add status.
@@ -549,3 +558,4 @@ Collected here since they cut across multiple sections:
 59. **Push marks (v3.1):** lineup push quiets V09/V10/P05 (gap +1 tolerance); waiver push quiets V16/P03/P04.
 60. **Injury opportunities (v3.1):** next two backups, WR↔TE opposite add, Questionable only with a signal and only yellow; Injury page notes only.
 61. **IR-slot rule (v3.1):** red for a non-IR-eligible player in an IR slot, game day until his game ends; eligibility per league, default Out/IR/PUP.
+62. **CBS push (v3.2):** email + password stored encrypted; direct HTTP via a user-supplied recipe; same picks to all pools; per-game lock; auto-push 60 minutes before each slot; notify on every push; opt-in, pause, log, read-back, one test pool on first run, never after kickoff.

@@ -34,6 +34,34 @@ delivered zip.
 
 ---
 
+## v3.2 — CBS pick'em push
+
+**Commit (short):** `v3.2: feat: CBS pick'em auto-push`
+
+**Commit (extended):**
+v3.2 lets you make your own Pick'em picks in the app (tap a team on a
+game; the recommendation is used where you haven't chosen) and push them
+to your CBS pick'em pools automatically. Account has a new CBS panel:
+email and password (stored encrypted, never sent back), pool ids, and a
+request recipe built from your browser's network tab (CBS-CAPTURE.md
+explains how). CBS's real endpoints are unknown to the app and untested.
+
+Auto-push runs about 60 minutes before each kickoff slot, never sends a
+game that has started, retries up to 3 times, and notifies you after
+every push, success or failure. Safeguards: off by default, pause
+switch, preview that sends nothing, confirm-first manual push, a log,
+read-back verification when the recipe has one, and the first run uses
+only one test pool until verified or confirmed by you.
+
+**Details**
+- New: `server/cbs.js` (encrypted login, cookie session, templating, per-slot scheduler, log table `cbs_push_log`), routes `/api/cbs/*` and `POST /api/pickem/choice`, scheduler hook every 5 minutes, `CBS-CAPTURE.md`.
+- Your picks and tiebreaker are saved per week; "final pick" = your choice, else the recommendation.
+- Requests are limited to https hosts under cbssports.com (`CBS_ALLOWED_HOSTS` to change).
+- Tests: mock-CBS server tests (login, templating, first-run test pool, read-back, failure logging, re-login on 403, auto timing, retry cap) and 183 browser checks pass.
+- Unverified: everything about real CBS (endpoints, login flow, anti-bot/CSRF, lock times, terms of use). Never run live.
+
+---
+
 ## v3.1 — Account toggles, withdraw offers, waiver lock, injury opportunities
 
 **Commit (short):** `v3.1: feat: toggles, withdraw, injury adds`

@@ -28,6 +28,7 @@ import { computeAccuracy } from "./accuracy.js";
 import * as backfill from "./backfill.js";
 import * as gameday from "./gameday.js";
 import * as pickem from "./pickem.js";
+import * as cbs from "./cbs.js";
 import * as dvp from "./dvp.js";
 import * as weather from "./weather.js";
 import { getImage } from "./images.js";
@@ -697,6 +698,47 @@ app.get("/api/pickem", async (req, res) => {
   } catch (err) {
     console.error("[pickem] failed:", err);
     res.status(502).json({ error: err.message || "Couldn't load Pick'em." });
+  }
+});
+app.post("/api/pickem/choice", async (req, res) => {
+  try {
+    const st = await sleeper.getState();
+    const season = Number(req.body?.season || st.season);
+    const week = Number(req.body?.week || st.week);
+    res.json(pickem.saveChoice(req.user.username, season, week, req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/* ---------------- CBS pick'em push (v3.2) ---------------- */
+app.use("/api/cbs", requireAuth);
+const cbsError = (res, e) => res.status(e instanceof cbs.CbsError ? 400 : 502).json({ error: e.message });
+app.get("/api/cbs/status", (req, res) => res.json({ ...cbs.status(req.user.username), log: cbs.getLog(req.user.username) }));
+app.post("/api/cbs/account", (req, res) => {
+  try {
+    res.json(cbs.setAccount(req.user.username, req.body || {}));
+  } catch (e) {
+    cbsError(res, e);
+  }
+});
+app.post("/api/cbs/account/clear", (req, res) => res.json(cbs.clearAccount(req.user.username)));
+app.post("/api/cbs/settings", (req, res) => {
+  try {
+    res.json(cbs.saveSettings(req.user.username, req.body || {}));
+  } catch (e) {
+    cbsError(res, e);
+  }
+});
+app.post("/api/cbs/login-test", async (req, res) => res.json(await cbs.testLogin(req.user.username)));
+app.post("/api/cbs/push", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const dryRun = b.dryRun === true;
+    if (!dryRun && b.confirm !== true) return res.status(400).json({ error: "Pushing needs an explicit confirm." });
+    res.json(await cbs.pushForUser(req.user.username, { mode: "manual", dryRun, poolIds: Array.isArray(b.poolIds) ? b.poolIds : null }));
+  } catch (e) {
+    cbsError(res, e);
   }
 });
 app.post("/api/pickem/settings", (req, res) => res.json(pickem.saveSettings(req.user.username, req.body || {})));
