@@ -268,7 +268,7 @@ Each roster card has a drag handle (pointer events, edge auto-scroll while dragg
 
 ### 8.2e Pick'em (v2.7)
 
-Straight-up pick'em tab. Win probability: Tank01 no-vig moneylines (avg of books) → ESPN moneylines → spread (Normal, σ 13.5) → ESPN FPI; FPI shown as a second opinion. Card: team-coloured win bar, pick, upset-potential bar (dog win chance ≤30 + line move toward dog since first weekly snapshot ≤30 + Gemini upset mentions ≤40), Gemini note. Default pick = favourite; optional weekly leverage (N underdogs ≥ min win chance, ranked by dog win chance − estimated/entered pool share on the dog + upset potential/400). Recommendation changes before kickoff → red dot (card + tab) until tapped, plus push notification if enabled. Tiebreaker = Vegas total of the last game. Record vs always-favourite baseline. Snapshots hourly; Gemini daily; no extra Tank01 calls. Spread mode not built (no line-based pools yet).
+Straight-up pick'em tab. Win probability: Tank01 no-vig moneylines (avg of books) → ESPN moneylines → spread (Normal, σ 13.5) → ESPN FPI; FPI shown as a second opinion. Card: team-coloured win bar, pick, upset-potential bar (dog win chance ≤30 + line move toward dog since first weekly snapshot ≤30 + Gemini upset mentions ≤40), Gemini note. Default pick = favourite; v2.7's optional weekly leverage was replaced in v3.4 by upset picks (section 8.2m). Recommendation changes before kickoff → red dot (card + tab) until tapped, plus push notification if enabled. Tiebreaker = Vegas total of the last game. Record vs always-favourite baseline. Snapshots hourly; Gemini daily; no extra Tank01 calls. Spread mode not built (no line-based pools yet).
 
 ---
 
@@ -450,6 +450,18 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2m v3.4 — Pick'em upset picks and performance, locked players, Roster title
+
+**Upset picks.** The app's picks are favourites except upset picks: the game with the highest upset potential is always an underdog pick (minimum 1); further games are underdog picks only when their upset potential is at or above the threshold (Settings, default 45); at most 4 in all. Games that have started keep the pick stored before kickoff and count toward the 4. An "Upset picks" switch turns this off (all favourites). The pick that counts (yours if chosen, else the app's) gets a coloured box on its side of the win bar and on the label: green = favourite, yellow = underdog.
+
+**Performance (Pick'em → Performance).** Per week and season: Vegas (favourite on the last stored line before kickoff; ESPN's listed odds for weeks with no stored line), the app (stored pre-kickoff pick; otherwise reconstructed from ESPN odds with the same rule, marked "~", excluded by a tick box), you (picks entered in the app; a per-game drop-down loads earlier picks by hand), app upset picks, and on the games you picked: you vs app vs Vegas. Ties excluded. Results are stored per game once final.
+
+**Locked players.** A player whose game has kicked off, while the week isn't over, gets no variance, note or suggested move that only a move could fix (see CHANGELOG v3.4 for the list). Everything reopens after the week's last game.
+
+**Page title.** The merged Roster & Lineup page is titled "Roster".
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -568,3 +580,6 @@ Collected here since they cut across multiple sections:
 60. **Injury opportunities (v3.1):** next two backups, WR↔TE opposite add, Questionable only with a signal and only yellow; Injury page notes only.
 61. **IR-slot rule (v3.1):** red for a non-IR-eligible player in an IR slot, game day until his game ends; eligibility per league, default Out/IR/PUP.
 62. **CBS push (v3.2):** email + password stored encrypted; direct HTTP via a user-supplied recipe; same picks to all pools; per-game lock; auto-push 60 minutes before each slot; notify on every push; opt-in, pause, log, read-back, one test pool on first run, never after kickoff.
+63. **Upset picks (v3.4):** app picks = favourites except 1–4 underdog picks by upset potential (always the top one, others at ≥ threshold 45); started games keep stored picks; replaces weekly leverage.
+64. **Pick'em performance (v3.4):** you vs app vs Vegas vs results; earlier weeks reconstructed from ESPN odds where no data was stored (marked); your earlier picks loadable by hand.
+65. **Locked players (v3.4):** locked = game kicked off and week not over; no variances, notes or suggested moves that need a move to fix; reopens after the last game.

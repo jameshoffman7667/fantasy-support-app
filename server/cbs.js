@@ -303,7 +303,7 @@ export function teamToken(recipe, team) {
 }
 /** The user's final pick per game: their own choice if they made one, otherwise the app's recommendation. */
 export function finalPicks(username, board) {
-  const recs = pickem.recommend(board, pickem.getSettings(username));
+  const recs = pickem.recommend(board, pickem.getSettings(username), pickem.storedPicks(username, board.season, board.week));
   const ch = pickem.getChoices(username, board.season, board.week);
   const out = new Map();
   for (const g of board.games) {

@@ -17,9 +17,12 @@ import { sendPushToUser, isPushConfigured } from "./push.js";
  *   2. ESPN scoreboard moneylines, no-vig
  *   3. Spread → probability, margin ~ Normal(−spread, 13.5)
  *   4. ESPN FPI predictor (also always shown as a second opinion)
- * Default pick = the favourite. Optional "weekly leverage": up to N
- * underdogs (default 2) in near-coin-flip games (dog ≥ 40%) where the pool
- * is likely heavy on the favourite — estimated from the market, or typed in.
+ * v3.4: the app's picks differ from Vegas on purpose. Every game is the
+ * favourite EXCEPT the very-high-upset-potential games, picked as underdogs:
+ * always the single highest (at least 1), plus up to 3 more whose upset
+ * potential is at or above a threshold (default 45), at most 4 in all.
+ * Games already started keep the pick stored before kickoff and count toward
+ * the cap. (The v2.7 "weekly leverage" mode is replaced by this.)
  *
  * Upset potential (0–100) = underdog win chance (up to 30) + line movement
  * toward the underdog since the week's first snapshot (up to 30) + Gemini's
@@ -44,7 +47,9 @@ db.exec(`
   );
 `);
 
-export const DEFAULT_SETTINGS = { leverage: false, leverageCount: 2, minDogProb: 0.4, notify: true, publicPct: {} };
+export const UPSET_MIN = 1;
+export const UPSET_MAX = 4;
+export const DEFAULT_SETTINGS = { upsets: true, upsetThreshold: 45, notify: true, publicPct: {} };
 const SNAPSHOT_EVERY_MS = 60 * 60 * 1000;
 const SIGMA = 13.5;
 
@@ -56,9 +61,8 @@ export function saveSettings(username, input) {
   const cur = getSettings(username);
   const n = (v, d, lo, hi) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : d);
   const next = {
-    leverage: Boolean(input.leverage ?? cur.leverage),
-    leverageCount: Math.round(n(input.leverageCount ?? cur.leverageCount, 2, 0, 8)),
-    minDogProb: n(input.minDogProb ?? cur.minDogProb, 0.4, 0.2, 0.5),
+    upsets: input.upsets == null ? cur.upsets !== false : Boolean(input.upsets),
+    upsetThreshold: Math.round(n(input.upsetThreshold ?? cur.upsetThreshold, 45, 20, 90)),
     notify: input.notify == null ? cur.notify : Boolean(input.notify),
     publicPct: { ...cur.publicPct },
   };
@@ -215,33 +219,56 @@ export async function getBoard({ season, week } = {}) {
 }
 
 /* ---------------- per-user recommendations ---------------- */
-export function recommend(board, settings) {
+/**
+ * v3.4: favourites everywhere, except the very-high-upset games (see the header).
+ * `stored` = Map(gameKey -> pick stored before kickoff) so started games keep
+ * their pick and count toward the cap of 4.
+ */
+export function recommend(board, settings, stored = new Map()) {
   const picks = new Map();
+  let lockedUpsets = 0;
   for (const g of board.games) {
     if (!g.favorite) continue;
-    picks.set(g.key, { pick: g.favorite, reason: "favourite", leverage: false });
+    if (g.started && stored.has(g.key)) {
+      const p = stored.get(g.key);
+      const up = p === g.underdog;
+      if (up) lockedUpsets++;
+      picks.set(g.key, { pick: p, favorite: g.favorite, upset: up, reason: up ? "underdog pick made before kickoff" : "favourite" });
+      continue;
+    }
+    picks.set(g.key, { pick: g.favorite, favorite: g.favorite, upset: false, reason: "favourite" });
   }
-  if (settings.leverage && settings.leverageCount > 0) {
+  if (settings.upsets !== false) {
     const cands = board.games
-      .filter((g) => !g.started && g.dogProb != null && g.dogProb >= settings.minDogProb)
-      .map((g) => {
-        const pubHome = settings.publicPct?.[g.key];
-        const publicFav = pubHome != null ? (g.favorite === g.home ? pubHome / 100 : 1 - pubHome / 100) : estPublicFav(1 - g.dogProb);
-        const leverage = g.dogProb - (1 - publicFav) + g.upsetPotential / 400;
-        return { g, leverage, publicFav };
-      })
-      .sort((a, b) => b.leverage - a.leverage)
-      .slice(0, settings.leverageCount);
-    for (const c of cands) {
-      picks.set(c.g.key, { pick: c.g.underdog, reason: `weekly leverage: ${Math.round(c.g.dogProb * 100)}% to win, ~${Math.round((1 - c.publicFav) * 100)}% of the pool likely on them`, leverage: true });
+      .filter((g) => !g.started && g.favorite && g.underdog && g.dogProb != null)
+      .sort((a, b) => (b.upsetPotential ?? 0) - (a.upsetPotential ?? 0) || b.dogProb - a.dogProb);
+    const thr = settings.upsetThreshold ?? DEFAULT_SETTINGS.upsetThreshold;
+    const room = Math.max(0, UPSET_MAX - lockedUpsets);
+    const chosen = [];
+    for (const g of cands) {
+      if (chosen.length >= room) break;
+      const needed = lockedUpsets + chosen.length < UPSET_MIN; // always at least one
+      if (needed || (g.upsetPotential ?? 0) >= thr) chosen.push(g);
+    }
+    for (const g of chosen) {
+      picks.set(g.key, {
+        pick: g.underdog, favorite: g.favorite, upset: true,
+        reason: `upset pick: ${g.underdog} ${Math.round(g.dogProb * 100)}% to win, upset potential ${g.upsetPotential}/100`,
+      });
     }
   }
   return picks;
 }
 
+/** Picks stored before kickoff for a week (Map gameKey -> pick); started games keep these. */
+export function storedPicks(username, season, week) {
+  const rows = db.prepare("SELECT game_key, pick FROM pickem_recs WHERE username=? AND season=? AND week=?").all(username, season, week);
+  return new Map(rows.map((r) => [r.game_key, r.pick]));
+}
+
 /** Stores recommendations, flags changes before kickoff, pushes alerts. Returns the per-game rec rows. */
 export async function trackRecs(username, board, settings, { notify = true } = {}) {
-  const recs = recommend(board, settings);
+  const recs = recommend(board, settings, storedPicks(username, board.season, board.week));
   const get = db.prepare("SELECT * FROM pickem_recs WHERE username=? AND season=? AND week=? AND game_key=?");
   const ins = db.prepare("INSERT INTO pickem_recs (username, season, week, game_key, pick, kickoff, seen, updated_at) VALUES (?,?,?,?,?,?,1,?)");
   const upd = db.prepare("UPDATE pickem_recs SET prev_pick=pick, pick=?, changed_at=?, seen=0, kickoff=?, updated_at=? WHERE username=? AND season=? AND week=? AND game_key=?");
@@ -293,22 +320,91 @@ export function markSeen(username, season, week, gameKey) {
   else db.prepare("UPDATE pickem_recs SET seen=1 WHERE username=? AND season=? AND week=?").run(username, season, week);
 }
 
-/** Season record of the stored (final, pre-kickoff) picks vs always taking the favourite, from finished games this week and earlier weeks' boards. */
-function record(username, board) {
-  const rows = db.prepare("SELECT * FROM pickem_recs WHERE username=? AND season=?").all(username, board.season);
-  const res = store.getState(`pickem_results:${board.season}`, {}) || {};
-  // Remember results for finished games on this board.
-  let changedRes = false;
+/* ---------------- results + performance (v3.4) ---------------- */
+const resultsKey = (season) => `pickem_results:${season}`;
+const doneKey = (season) => `pickem_weeks_done:${season}`;
+
+/** Vegas pick = the favourite on the last line stored before kickoff; falls back to the favourite given. */
+function vegasPickFor(season, week, key, kickoff, fallbackFav) {
+  const row = kickoff
+    ? db.prepare("SELECT home_prob FROM pickem_snapshots WHERE season=? AND week=? AND game_key=? AND home_prob IS NOT NULL AND at<? ORDER BY at DESC LIMIT 1").get(season, week, key, kickoff)
+    : db.prepare("SELECT home_prob FROM pickem_snapshots WHERE season=? AND week=? AND game_key=? AND home_prob IS NOT NULL ORDER BY at DESC LIMIT 1").get(season, week, key);
+  if (!row) return { pick: fallbackFav || null, from: fallbackFav ? "line at final" : null };
+  const [away, home] = key.split("@");
+  return { pick: row.home_prob >= 0.5 ? home : away, from: "stored line" };
+}
+
+/** Favourite from whatever odds ESPN still lists on a finished game (spread first, then moneylines). */
+function espnFavourite(g) {
+  const o = g.espnOdds;
+  if (!o) return null;
+  if (o.homeML != null && o.awayML != null) {
+    const p = devig(o.homeML, o.awayML);
+    if (p != null) return { fav: p >= 0.5 ? g.home : g.away, dogProb: Math.min(p, 1 - p) };
+  }
+  if (o.homeSpread != null && o.homeSpread !== 0) {
+    const p = probFromSpread(o.homeSpread);
+    return { fav: o.homeSpread < 0 ? g.home : g.away, dogProb: Math.min(p, 1 - p) };
+  }
+  return null;
+}
+
+/** Remember finished games on a board (winner, Vegas favourite, upset chance). Returns the updated results object. */
+function recordResults(board) {
+  const res = store.getState(resultsKey(board.season), {}) || {};
+  let changed = false;
   for (const g of board.games) {
     if (g.state === "post" && g.homeScore != null && g.awayScore != null) {
       const k = `${board.week}|${g.key}`;
-      if (!res[k]) {
-        res[k] = { winner: g.homeScore > g.awayScore ? g.home : g.awayScore > g.homeScore ? g.away : "TIE", favorite: g.favorite };
-        changedRes = true;
+      const winner = g.homeScore > g.awayScore ? g.home : g.awayScore > g.homeScore ? g.away : "TIE";
+      if (!res[k] || !res[k].vegas) {
+        const v = vegasPickFor(board.season, board.week, g.key, g.kickoff, g.favorite);
+        res[k] = { ...(res[k] || {}), winner, favorite: g.favorite, vegas: v.pick, vegasFrom: v.from, dogProb: g.dogProb ?? null, home: g.home, away: g.away, kickoff: g.kickoff };
+        changed = true;
       }
     }
   }
-  if (changedRes) store.setState(`pickem_results:${board.season}`, res);
+  if (changed) store.setState(resultsKey(board.season), res);
+  return res;
+}
+
+/** Fill a finished past week from ESPN's scoreboard (winner + whatever odds ESPN still lists). Once, then stored. */
+async function backfillWeek(season, week) {
+  const done = store.getState(doneKey(season), []) || [];
+  if (done.includes(week)) return;
+  const sched = await schedule.getWeekSchedule(season, week);
+  const games = sched?.games || [];
+  if (!games.length) return;
+  const res = store.getState(resultsKey(season), {}) || {};
+  let allPost = true;
+  for (const g of games) {
+    if (g.state !== "post") {
+      allPost = false;
+      continue;
+    }
+    const home = tank01.normTeam(g.home);
+    const away = tank01.normTeam(g.away);
+    const key = `${away}@${home}`;
+    const k = `${week}|${key}`;
+    if (res[k]?.vegas) continue;
+    if (g.homeScore == null || g.awayScore == null) continue;
+    const winner = g.homeScore > g.awayScore ? home : g.awayScore > g.homeScore ? away : "TIE";
+    const v = vegasPickFor(season, week, key, g.kickoffMillis, null);
+    const ef = v.pick ? null : espnFavourite({ ...g, home, away });
+    res[k] = {
+      winner, favorite: v.pick || ef?.fav || null, vegas: v.pick || ef?.fav || null,
+      vegasFrom: v.pick ? v.from : ef ? "ESPN odds (back-calculated)" : null,
+      dogProb: ef?.dogProb ?? null, home, away, kickoff: g.kickoffMillis,
+    };
+  }
+  store.setState(resultsKey(season), res);
+  if (allPost) store.setState(doneKey(season), [...done, week]);
+}
+
+/** Season record of the stored (final, pre-kickoff) picks vs always taking the favourite. */
+function record(username, board) {
+  const rows = db.prepare("SELECT * FROM pickem_recs WHERE username=? AND season=?").all(username, board.season);
+  const res = recordResults(board);
   let mine = 0, fav = 0, n = 0, weekMine = 0, weekN = 0;
   for (const r of rows) {
     const out = res[`${r.week}|${r.game_key}`];
@@ -322,6 +418,97 @@ function record(username, board) {
     }
   }
   return { games: n, correct: mine, favoritesCorrect: fav, weekGames: weekN, weekCorrect: weekMine };
+}
+
+const tally = () => ({ n: 0, correct: 0 });
+const add = (t, pick, winner) => {
+  if (!pick) return;
+  t.n++;
+  if (pick === winner) t.correct++;
+};
+
+/**
+ * You vs the app vs Vegas vs the actual result, per week and for the season.
+ * - Vegas: favourite on the last stored line before kickoff (else ESPN's listed odds for back-calculated weeks).
+ * - App: the pick stored before kickoff; where none was stored (weeks before v2.7 tracking), RECONSTRUCTED
+ *   by applying the current upset rule to ESPN odds only (no line movement or article data, so at most one upset pick).
+ * - You: picks entered in the app (or loaded by hand per game below).
+ */
+export async function getPerformance(username) {
+  const st = await sleeper.getState();
+  const season = Number(st.season);
+  const curWeek = Number(st.week);
+  const settings = getSettings(username);
+  // current week from the live board, earlier weeks from ESPN once
+  try {
+    recordResults(await getBoard({ season, week: curWeek }));
+  } catch (e) {
+    console.warn(`[pickem] performance: current board failed: ${e.message}`);
+  }
+  for (let w = 1; w < curWeek; w++) {
+    try {
+      await backfillWeek(season, w);
+    } catch (e) {
+      console.warn(`[pickem] performance: week ${w} backfill failed: ${e.message}`);
+    }
+  }
+  const res = store.getState(resultsKey(season), {}) || {};
+  const recRows = db.prepare("SELECT week, game_key, pick FROM pickem_recs WHERE username=? AND season=?").all(username, season);
+  const recBy = new Map(recRows.map((r) => [`${r.week}|${r.game_key}`, r.pick]));
+  const weeks = [];
+  const season_ = { vegas: tally(), app: tally(), mine: tally(), appUpsets: tally(), mineUpsets: tally(), same: { n: 0, mine: 0, app: 0, vegas: 0 } };
+  for (let w = 1; w <= curWeek; w++) {
+    const keys = Object.keys(res).filter((k) => k.startsWith(`${w}|`));
+    if (!keys.length) continue;
+    const entries = keys.map((k) => ({ key: k.split("|")[1], ...res[k] }));
+    // reconstruct the app rule for games with no stored pick
+    const recon = recommend(
+      {
+        games: entries.map((e) => {
+          const dog = e.favorite ? (e.favorite === e.home ? e.away : e.home) : null;
+          const up = e.dogProb != null ? upsetPotential({ dogProb: e.dogProb, dogShift: 0, mentions: 0 }).score : 0;
+          return { key: e.key, home: e.home, away: e.away, favorite: e.favorite, underdog: dog, dogProb: e.dogProb, upsetPotential: up, started: false };
+        }),
+      },
+      settings
+    );
+    const choices = getChoices(username, season, w).games || {};
+    const wk = { week: w, vegas: tally(), app: tally(), mine: tally(), appUpsets: tally(), mineUpsets: tally(), same: { n: 0, mine: 0, app: 0, vegas: 0 }, games: [], appFrom: { stored: 0, reconstructed: 0 } };
+    for (const e of entries.sort((a, b) => (a.kickoff ?? 0) - (b.kickoff ?? 0))) {
+      const stored = recBy.get(`${w}|${e.key}`) || null;
+      const rc = e.favorite ? recon.get(e.key) : null;
+      const app = stored || (rc?.pick ?? null);
+      const appFrom = stored ? "stored" : app ? "reconstructed" : null;
+      if (appFrom) wk.appFrom[appFrom]++;
+      const mine = choices[e.key] || null;
+      const tie = e.winner === "TIE";
+      if (!tie) {
+        add(wk.vegas, e.vegas, e.winner);
+        add(wk.app, app, e.winner);
+        add(wk.mine, mine, e.winner);
+        if (app && e.vegas && app !== e.vegas) add(wk.appUpsets, app, e.winner);
+        if (mine && e.vegas && mine !== e.vegas) add(wk.mineUpsets, mine, e.winner);
+        if (mine && e.vegas && app) {
+          wk.same.n++;
+          if (mine === e.winner) wk.same.mine++;
+          if (app === e.winner) wk.same.app++;
+          if (e.vegas === e.winner) wk.same.vegas++;
+        }
+      }
+      wk.games.push({
+        key: e.key, away: e.away, home: e.home, winner: e.winner, vegas: e.vegas || null, vegasFrom: e.vegasFrom || null,
+        app, appFrom, appUpset: Boolean(app && e.vegas && app !== e.vegas), mine,
+      });
+    }
+    wk.appSource = wk.appFrom.stored && wk.appFrom.reconstructed ? "mixed" : wk.appFrom.reconstructed ? "reconstructed" : wk.appFrom.stored ? "stored" : "none";
+    weeks.push(wk);
+    for (const k of ["vegas", "app", "mine", "appUpsets", "mineUpsets"]) {
+      season_[k].n += wk[k].n;
+      season_[k].correct += wk[k].correct;
+    }
+    for (const k of ["n", "mine", "app", "vegas"]) season_.same[k] += wk.same[k];
+  }
+  return { season, week: curWeek, weeks, season_total: season_, note: "App picks marked reconstructed use ESPN odds only (no line movement or article data), so they can differ from what the app would really have shown." };
 }
 
 export async function getPickem(username) {
@@ -339,7 +526,8 @@ export async function getPickem(username) {
       chosen: choices.games?.[g.key] ?? null,
       final: choices.games?.[g.key] ?? r?.pick ?? null,
       reason: r?.reason ?? null,
-      leverage: r?.leverage ?? false,
+      upset: r?.upset ?? false,
+      pickKind: r?.pick == null ? null : r.pick === g.underdog ? "underdog" : "favourite",
       changed: Boolean(row && row.seen === 0 && row.changed_at && (g.kickoff == null || g.kickoff > now)),
       prevPick: row?.prev_pick ?? null,
       changedAt: row?.changed_at ?? null,

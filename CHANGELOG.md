@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,29 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.4 — Pick'em upset picks and performance, locked players, Roster title
+
+**Commit (short):** `v3.4: feat: upset picks, performance, lock audit`
+
+**Commit (extended):**
+v3.4 changes the Pick'em recommendations to differ from Vegas on purpose. Every game is the favourite except the very-high-upset games: always the single highest upset potential, plus up to three more at or above a threshold (default 45), never more than four. Games already started keep their pre-kickoff pick and count toward the cap. The old weekly-leverage mode is replaced. The pick is boxed on the card, green for a favourite and yellow for an underdog, with an updated label.
+
+A new Performance view compares your picks, the app's picks and Vegas against actual results, weekly and for the season. Earlier weeks are back-calculated from ESPN odds where possible (marked as reconstructed), and you can load your own earlier picks game by game.
+
+The merged page is now titled "Roster". Locked players (game kicked off, week not over) no longer get variances, notes or suggested moves that only a move could fix: starter-out, flex order, IR-eligible bench, IR-slot red, zero projection, waiver comparisons, drop candidates, IR proposals, injury play-opportunity notes.
+
+**Details**
+- Pick'em (`server/pickem.js`): `recommend(board, settings, stored)` = favourites, except upset picks: the single highest upset potential always (minimum 1), then more only at or above `upsetThreshold` (default 45, Settings), maximum 4 including started games' stored underdog picks. Settings: "Upset picks" switch + threshold; `leverage`, `leverageCount`, `minDogProb` and the pool-% boxes are gone. `storedPicks()` added; the CBS push (`cbs.js finalPicks`) passes it so a push never counts the cap wrongly.
+- Card: green box = favourite, yellow box = underdog, around the picked team's side of the win bar and on the label ("App pick" / "Your pick": TEAM (favourite | underdog — upset pick)); your own pick buttons use the same colours.
+- Performance: new Pick'em view "Performance" and `GET /api/pickem/performance`. Per week and season: Vegas, app, you, app upset picks, and "on the games you picked: you / app / Vegas". Vegas = favourite on the last line stored before kickoff (hourly snapshots since v2.7); for weeks with none, ESPN's listed odds on the finished game. App = the pick stored before kickoff; for weeks with none, RECONSTRUCTED by applying the upset rule to ESPN odds only (no line movement or articles, so at most one upset pick) and shown with "~". A tick box leaves reconstructed weeks out of the totals. Your picks = picks entered in the app; a drop-down on every finished game loads an earlier pick by hand (uses the existing `/api/pickem/choice`). Results are stored per game (winner, Vegas pick, source) in `pickem_results:{season}`; earlier weeks are fetched from ESPN once.
+- Page title: "Roster & Lineup" is now "Roster" (tab, variance report).
+- Locked players (new helper `isLocked`/`lockedNames` in `lineup.js`: game kicked off and the week not over; everything reopens after the last game): hidden now: Starter out/doubtful/IR, Flex lock order (either player locked), IR-eligible on bench, Non-IR-eligible player in IR slot (red now only until kickoff), Starter projected for 0, waiver red/yellow comparisons (locked starters and locked bench players are not compared), drop-ranking candidates on Claims, IR move proposals, injury own-player red (P03), play-opportunity (P05) variance and the Roster-page notes for locked players. Not changed: No projection (a data fault, not a move), trades, injury-page notes, My performance records.
+- Older "next version" items in the log (dashboard card layout, one-row badges, IR flag with no open slot, Clear-minor bug, Game Day, Pick'em weather and notes, Matchup rankings, Accuracy, trade advice, ROS, expanded report, reconnect speed) were checked against the code and were already delivered in v2.9; nothing to build.
+- Tests (mock fetch, sqlite shim for node:sqlite): upset-rule cases (cap, minimum, threshold, off, started games), performance and board with ESPN/Sleeper mocks (14 checks), lock rules in variances/roster changes/lineup (10 checks), client bundle compile. Not run here: the Playwright browser harness (not in the zip), vite build (npm blocked), anything live.
+- Unverified: whether ESPN keeps odds on finished games (back-calculated Vegas picks depend on it); the threshold default 45 and "very high" meaning are my picks; the visual layout of the boxes (Tailwind never rendered here).
 
 ---
 

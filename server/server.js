@@ -702,6 +702,14 @@ app.get("/api/pickem", async (req, res) => {
     res.status(502).json({ error: err.message || "Couldn't load Pick'em." });
   }
 });
+app.get("/api/pickem/performance", async (req, res) => {
+  try {
+    res.json(await pickem.getPerformance(req.user.username));
+  } catch (err) {
+    console.error("[pickem] performance failed:", err);
+    res.status(502).json({ error: err.message || "Couldn't load Pick'em performance." });
+  }
+});
 app.post("/api/pickem/choice", async (req, res) => {
   try {
     const st = await sleeper.getState();

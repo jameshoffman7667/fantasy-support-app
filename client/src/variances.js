@@ -21,9 +21,11 @@
 //
 // Pure — no React — so it can be unit-tested.
 
+import { lockedNames } from "./lineup.js";
+
 // v3.0: Roster and Lineup are one page ("roster"); League (settings change log) is new.
 export const PAGES = ["roster", "waiver", "trade", "injury", "league"];
-export const PAGE_LABEL = { roster: "Roster & Lineup", waiver: "Waivers", trade: "Trade Radar", injury: "Injury Watch", league: "League" };
+export const PAGE_LABEL = { roster: "Roster", waiver: "Waivers", trade: "Trade Radar", injury: "Injury Watch", league: "League" };
 const RANK = { ok: 0, minor: 1, major: 2 };
 export const worst = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
 
@@ -102,18 +104,19 @@ export function collectVariances(lg) {
   // yellow on Waivers (auto-clears once viewed), RED when the injured player is on your active roster;
   // a Questionable player only counts after the news check / trending signal and is only ever yellow.
   // You owning a backup is a yellow play-opportunity on Roster. The Injury page gets notes only.
+  const lockedNow = lockedNames(lg); // v3.4: a locked player can't be moved, so no variance on him
   for (const e of lg.injuryOpportunities?.events || []) {
     const subj = `${e.injured.name} (${e.injured.status})`;
     const adds = (e.freeAdds || []).map((a) => `${a.name} (${a.pos})`).join(", ");
     if (e.questionable) {
       if (adds) add("waiver", RULE.INJ_QUESTIONABLE, subj, "minor", `${subj}: ${(e.signals || []).join("; ")}. Possible adds: ${adds}`);
-    } else if (adds && e.mine === "active") {
+    } else if (adds && e.mine === "active" && !lockedNow.has(e.injured.name)) {
       add("waiver", RULE.INJ_ADD_OWN, subj, "major", `Your ${e.injured.slot} ${subj}. Available now: ${adds}`);
     } else if (adds && !e.mine) {
       add("waiver", RULE.INJ_ADD, subj, "minor", `${subj} (${e.injured.team} ${e.injured.slot}). Available: ${adds}`, true);
     }
     for (const b of e.backups || []) {
-      if (b.owner === "mine") add("roster", RULE.PLAY_OPP, `${b.name} for ${e.injured.name}`, "minor", `${b.name} (${b.pos}${b.rank}) moves up with ${e.injured.name} (${e.injured.slot}) ${e.injured.status}. You already own him.`);
+      if (b.owner === "mine" && !lockedNow.has(b.name)) add("roster", RULE.PLAY_OPP, `${b.name} for ${e.injured.name}`, "minor", `${b.name} (${b.pos}${b.rank}) moves up with ${e.injured.name} (${e.injured.slot}) ${e.injured.status}. You already own him.`);
     }
   }
 

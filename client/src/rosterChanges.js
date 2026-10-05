@@ -8,6 +8,8 @@
 // IR/taxi and needs a roster move first) are listed as `blocked` with the reason
 // and can't be ticked.
 
+import { isLocked } from "./lineup.js";
+
 export function proposeChanges(league) {
   const out = [];
   const rows = league?.lineup?.rows || [];
@@ -38,7 +40,7 @@ export function proposeChanges(league) {
   if (open > 0) {
     let n = 0;
     for (const p of league.bench || []) {
-      if (p && p.irEligible && n < open) {
+      if (p && p.irEligible && n < open && !isLocked(p, league)) { // v3.4: a locked player can't be moved
         n += 1;
         out.push({ key: `R:${p.id}`, type: "ir", id: String(p.id), name: p.name, blocked: null });
       }

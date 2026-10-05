@@ -619,10 +619,11 @@ points, weekly + season prizes, 40–50 entrants). Tab: **Pick'em**.
   **upset potential** bar (0–100 = underdog's win chance up to 30 + line
   movement toward the underdog since the week's first snapshot up to 30 +
   Gemini article mentions up to 40), and Gemini's short game note.
-- **Picks:** the favourite in every game by default (season prize).
-  Optional **weekly leverage** (Settings): up to N near-coin-flip
-  underdogs (default 1–2, dog ≥ 40%) the pool is likely to fade, using an
-  estimate of the pool's pick % from the market or a % you type in.
+- **Picks (v3.4):** the favourite in every game except 1–4 **upset
+  picks** (underdogs with the highest upset potential: always the top
+  one, more only at or above the Settings threshold). A green box marks a
+  favourite pick, a yellow box an underdog pick. The **Performance** view
+  compares you, the app and Vegas against actual results.
 - **Changes:** if a recommendation changes before that game's kickoff, a
   red dot shows on the card and on the Pick'em tab until tapped, and — if
   push alerts are enabled — a notification is sent.

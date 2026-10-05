@@ -36,7 +36,7 @@ import {
 } from "lucide-react";
 import * as api from "./api.js";
 import { claimKey, generateClaims, effectiveClaims, groupClaims, flatten, simulate, toDollars, fromDollars, setBid, syncDrops, describeClaim, resetClaims } from "./waiverPlan.js";
-import { effectiveLineup, isZeroProjection, GROUP_LABEL, hasStarted } from "./lineup.js";
+import { effectiveLineup, isZeroProjection, GROUP_LABEL, hasStarted, isLocked, lockedNames } from "./lineup.js";
 import { applyAcks, collectVariances, groupTree, minorKeys, autoClearKeys, PAGE_LABEL, varianceKey, pushKeys, lineupGap, RULE } from "./variances.js";
 import { proposeChanges, toggle as toggleChange, buildPush } from "./rosterChanges.js";
 
@@ -82,7 +82,8 @@ function computeRoster(league) {
   const starterRows = league.starters.map(({ slot, player }) => {
     if (!player) return { slot, label: "(empty)", issues: [iss("Empty starting slot", "major", "Empty starting roster slot")] };
     if (player.status === "Bye") return { slot, label: player.name, issues: [iss("Starter on bye", "major", "On bye — guaranteed zero")] };
-    if (OUT_LIKE.includes(player.status)) return { slot, label: player.name, issues: [iss("Starter out / doubtful / IR", "major", player.note || `${player.status} — hasn't been swapped`)] };
+    // v3.4: once his game has kicked off he is locked in his slot — no move can fix anything, so no flag.
+    if (OUT_LIKE.includes(player.status)) return { slot, label: player.name, issues: isLocked(player, league) ? [] : [iss("Starter out / doubtful / IR", "major", player.note || `${player.status} — hasn't been swapped`)] };
     // v3.1: a Questionable starter stops being flagged once his game has kicked off, and is flagged
     // again after the week's last game if he still carries the status.
     if (player.status === "Questionable") {
@@ -94,11 +95,13 @@ function computeRoster(league) {
 
   league.starters.forEach(({ slot, player: flexPlayer }, idx) => {
     if (!FLEX_ELIGIBLE[slot] || !flexPlayer || flexPlayer.kickoff == null) return;
+    if (isLocked(flexPlayer, league)) return; // v3.4: already locked — the swap can't be made
     const posIdx = league.starters.findIndex(
       (s) => s.slot === flexPlayer.pos && s.player && s.player.kickoff != null && s.player.kickoff > flexPlayer.kickoff
     );
     if (posIdx < 0) return;
     const positional = league.starters[posIdx];
+    if (isLocked(positional.player, league)) return;
     starterRows[idx].issues.push(
       iss("Flex lock order", "major", `Locks ${flexPlayer.kickoffLabel} — before ${positional.slot} slot's ${positional.player.name} (${positional.player.kickoffLabel}). Swap these two.`)
     );
@@ -115,6 +118,7 @@ function computeRoster(league) {
   const benchRows = benchList.map((p) => {
     if (!p) return { slot: "BN", label: "(empty)", issues: [iss("Open bench slot", "minor", "Open bench slot — consider a waiver add")] };
     if (p.irEligible) {
+      if (isLocked(p, league)) return { slot: "BN", label: p.name, issues: [], usage: p.usage }; // v3.4: locked — can't be moved to IR now
       if (openIr == null || openIr > 0) return { slot: "BN", label: p.name, issues: [iss("IR-eligible on bench", "minor", "IR-eligible — move to an empty IR slot")], usage: p.usage };
       return { slot: "BN", label: p.name, issues: [], note: "IR-eligible, but there is no open IR slot", usage: p.usage };
     }
@@ -123,7 +127,7 @@ function computeRoster(league) {
   // v3.1: a player who isn't IR-eligible in this league sitting in an IR slot is red from his game
   // day until his game ends (he can't be played from there and should be moved).
   const irRows = (league.ir || []).map((p) => {
-    const bad = !p.irEligible && p.gameToday && p.gameState !== "post";
+    const bad = !p.irEligible && p.gameToday && p.gameState !== "post" && !isLocked(p, league); // v3.4: red only until kickoff (then he's locked)
     const issues = bad ? [iss("Non-IR-eligible player in IR slot", "major", `${p.name} is ${p.status || "healthy"} — not IR-eligible here, and his game is ${p.gameState === "in" ? "in progress" : "today"}. Move him out of the IR slot.`)] : [];
     return { slot: "IR", label: p.name, issues, severity: worst(issues.map((i) => i.severity)), reasons: issues.map((i) => i.text), reason: issues.map((i) => i.text).join(" ") || null, kickoffLabel: p.kickoffLabel };
   });
@@ -163,14 +167,15 @@ function computeWaiver(league, allLeagues) {
     let note = null;
     let severity = "ok";
     if (fa.proj != null) {
-      const slots = (league.starters || []).filter((s) => eligible(s.slot, fa.pos));
+      // v3.4: a locked starter can't be replaced this week, so he's not a comparison
+      const slots = (league.starters || []).filter((s) => eligible(s.slot, fa.pos) && !isLocked(s.player, league));
       const weakest = slots.length ? slots.reduce((m, s) => (projOf(s.player) < projOf(m.player) ? s : m)) : null;
       if (weakest && fa.proj > projOf(weakest.player)) {
         rule = "Free agent outprojects a starter";
         severity = "major";
         note = `projected ${fa.proj.toFixed(1)} vs ${weakest.player ? weakest.player.name : "(empty)"} ${projOf(weakest.player).toFixed(1)} at ${weakest.slot}`;
       } else {
-        const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos);
+        const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos && !isLocked(p, league)); // v3.4: nor can a locked bench player be dropped
         const weakBench = bench.length ? bench.reduce((m, p) => (projOf(p) < projOf(m) ? p : m)) : null;
         if (weakBench && fa.proj > projOf(weakBench)) {
           rule = "Free agent outprojects a bench player";
@@ -797,7 +802,7 @@ function TopBar({ crumbs, onRefresh, refreshing, syncedLabel, week, onWeekChange
 }
 
 const TAB_META = {
-  roster: { label: "Roster & Lineup", short: "Roster", Icon: ListChecks },
+  roster: { label: "Roster", short: "Roster", Icon: ListChecks },
   waiver: { label: "Waivers", short: "Waivers", Icon: Users },
   trade: { label: "Trade Radar", short: "Trades", Icon: ArrowLeftRight },
   injury: { label: "Injury Watch", short: "Injury", Icon: Stethoscope },
@@ -1075,9 +1080,10 @@ function RosterTab({ league }) {
   const ioEvents = league.injuryOpportunities?.events || [];
   const playNotes = new Map();
   const replNotes = new Map();
+  const lockedNow = lockedNames(league); // v3.4: no move can help a locked player, so no note for him
   for (const e of ioEvents) {
-    for (const b of e.backups || []) if (b.owner === "mine") playNotes.set(b.name, `Opportunity: ${e.injured.name} (${e.injured.slot}, ${e.injured.status}) is hurt and ${b.name} moves up.`);
-    if (e.mine) replNotes.set(e.injured.name, `Replacements: ${(e.backups || []).map(backupLine).join("; ") || "none on the depth chart"}${e.opposite ? `; also ${backupLine({ ...e.opposite, rank: null })}` : ""}`);
+    for (const b of e.backups || []) if (b.owner === "mine" && !lockedNow.has(b.name)) playNotes.set(b.name, `Opportunity: ${e.injured.name} (${e.injured.slot}, ${e.injured.status}) is hurt and ${b.name} moves up.`);
+    if (e.mine && !lockedNow.has(e.injured.name)) replNotes.set(e.injured.name, `Replacements: ${(e.backups || []).map(backupLine).join("; ") || "none on the depth chart"}${e.opposite ? `; also ${backupLine({ ...e.opposite, rank: null })}` : ""}`);
   }
   const starterRows = league.roster.rows.filter((r) => r.slot !== "BN");
   const benchRows = league.roster.rows.filter((r) => r.slot === "BN");
@@ -2011,8 +2017,9 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
   const used = league.waiverInfo?.used || 0;
   const isFaab = Boolean(league.waiverInfo?.faab);
   const mode = plan.entryMode;
-  const bench = league.bench || [];
-  const openSpots = Math.max(0, (league.benchSlots ?? bench.length) - bench.length);
+  const allBench = league.bench || [];
+  const bench = allBench.filter((p) => !p || !isLocked(p, league)); // v3.4: a locked player can't be dropped
+  const openSpots = Math.max(0, (league.benchSlots ?? allBench.length) - allBench.length);
 
   // Keep the drop ranking in step with the bench (new bench players go to the bottom, unticked).
   const syncedDrops = useMemo(() => syncDrops(plan.drops, bench), [plan.drops, bench]);
@@ -4779,11 +4786,17 @@ function RedDot({ title }) {
   return <span title={title} aria-label={title} className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: C.major }} />;
 }
 
-function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct, onChoose }) {
+function PickCard({ g, onSeen, onChoose }) {
   const colors = barColors(g.away, g.home);
   const awayP = g.homeProb == null ? 0.5 : 1 - g.homeProb;
   const textOn = (hex) => (luminance(hex) > 0.6 ? "#10171A" : "#FFFFFF");
   const final = g.state === "post";
+  // v3.4: the pick that counts (yours if you chose, else the app's) is boxed — green = favourite, yellow = underdog.
+  const shown = g.final || g.pick || null;
+  const kind = !shown ? null : shown === g.underdog ? "underdog" : "favourite";
+  const boxColor = kind === "underdog" ? C.minor : C.ok;
+  const boxBg = kind === "underdog" ? C.minorBg : C.okBg;
+  const boxFor = (team) => (shown === team ? { outline: `2px solid ${boxColor}`, outlineOffset: "-2px" } : {});
   return (
     <div
       onClick={() => g.changed && onSeen(g.key)}
@@ -4804,8 +4817,8 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct, onChoose }) {
 
       <div>
         <div className="flex h-6 rounded overflow-hidden text-[11px] font-semibold" role="img" aria-label={`Win chance: ${g.away} ${pct(awayP)}, ${g.home} ${pct(g.homeProb)}`}>
-          <div style={{ width: `${awayP * 100}%`, background: colors.away, color: textOn(colors.away) }} className="flex items-center pl-2 min-w-[2.5rem]">{g.away} {pct(awayP)}</div>
-          <div style={{ width: `${(1 - awayP) * 100}%`, background: colors.home, color: textOn(colors.home) }} className="flex items-center justify-end pr-2 min-w-[2.5rem]">{pct(g.homeProb)} {g.home}</div>
+          <div style={{ width: `${awayP * 100}%`, background: colors.away, color: textOn(colors.away), ...boxFor(g.away) }} className="flex items-center pl-2 min-w-[2.5rem]" data-pick-box={shown === g.away ? kind : undefined}>{g.away} {pct(awayP)}</div>
+          <div style={{ width: `${(1 - awayP) * 100}%`, background: colors.home, color: textOn(colors.home), ...boxFor(g.home) }} className="flex items-center justify-end pr-2 min-w-[2.5rem]" data-pick-box={shown === g.home ? kind : undefined}>{pct(g.homeProb)} {g.home}</div>
         </div>
         <div style={{ color: C.textFaint }} className="text-[10px] mt-0.5 flex justify-between">
           <span>{g.source || "no line yet"}{g.homeSpread != null ? ` · ${g.home} ${g.homeSpread > 0 ? "+" : ""}${Math.round(g.homeSpread * 2) / 2}` : ""}</span>
@@ -4814,9 +4827,9 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct, onChoose }) {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        {g.pick ? (
-          <span style={{ background: g.leverage ? C.minorBg : C.okBg, color: g.leverage ? C.minor : C.ok }} className="text-xs font-semibold rounded px-2 py-0.5">
-            Pick: {g.pick}{g.leverage ? " (leverage)" : ""}
+        {shown ? (
+          <span style={{ background: boxBg, color: boxColor, border: `1px solid ${boxColor}` }} className="text-xs font-semibold rounded px-2 py-0.5" data-pick-label={kind}>
+            {g.chosen ? "Your pick" : "App pick"}: {shown} ({kind === "underdog" ? "underdog — upset pick" : "favourite"})
           </span>
         ) : (
           <span style={{ color: C.textFaint }} className="text-xs">No pick yet</span>
@@ -4831,7 +4844,7 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct, onChoose }) {
               key={t}
               type="button"
               onClick={(e) => { e.stopPropagation(); onChoose(g.key, g.chosen === t ? null : t); }}
-              style={{ background: (g.final || g.pick) === t ? C.brand : "transparent", color: (g.final || g.pick) === t ? "#fff" : C.text, border: `1px solid ${C.border}` }}
+              style={{ background: (g.final || g.pick) === t ? (t === g.underdog ? C.minor : C.ok) : "transparent", color: (g.final || g.pick) === t ? "#10171A" : C.text, border: `1px solid ${C.border}` }}
               className="rounded px-2 py-0.5 font-semibold"
               data-pick-btn={t}
             >{t}</button>
@@ -4839,7 +4852,7 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct, onChoose }) {
           {g.chosen && <span style={{ color: C.minor }}>your choice (tap again to use the recommendation)</span>}
         </div>
       )}
-      {g.reason && g.leverage && <div style={{ color: C.textMuted }} className="text-[11px]">{g.reason}</div>}
+      {g.reason && g.upset && <div style={{ color: C.textMuted }} className="text-[11px]">{g.reason}</div>}
       {g.weather && !g.weather.indoor && g.weather.temp != null && (
         <div className="flex items-center gap-1.5 flex-wrap" data-pick-weather={g.weather.flag ? "bad" : "ok"}>
           <WeatherChip player={{ weather: g.weather }} />
@@ -4869,17 +4882,6 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct, onChoose }) {
           {g.gemini.note}
           {g.gemini.sources?.length > 0 && <span style={{ color: C.textFaint }}> — {g.gemini.sources.join(", ")}</span>}
         </div>
-      )}
-      {leverageOn && !g.started && (
-        <label className="flex items-center gap-2 text-[10px]" style={{ color: C.textFaint }} onClick={(e) => e.stopPropagation()}>
-          Pool % on {g.home} (optional)
-          <input
-            type="number" min="0" max="100" defaultValue={publicPct ?? ""}
-            onBlur={(e) => onPublicPct(g.key, e.target.value)}
-            style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }}
-            className="w-16 rounded px-1.5 py-0.5 text-xs"
-          />
-        </label>
       )}
     </div>
   );
@@ -4948,11 +4950,108 @@ function CbsPushBar({ week, st, reload }) {
   );
 }
 
+
+/* v3.4: You vs the app vs Vegas vs actual results, by week and for the season. */
+const fmtRecN = (t) => (t && t.n ? `${t.correct}/${t.n}` : "—");
+const fmtRecPct = (t) => (t && t.n ? `${Math.round((t.correct / t.n) * 100)}%` : "");
+function PickemPerformance({ onClose }) {
+  const [perf, setPerf] = useState(null);
+  const [error, setError] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [inclRecon, setInclRecon] = useState(true);
+  const load = useCallback(() => {
+    api.getPickemPerformance().then((d) => { setPerf(d); setError(null); }).catch((e) => setError(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const setMine = async (week, gameKey, pick) => {
+    await api.savePickemChoice({ season: perf.season, week, gameKey, pick });
+    load();
+  };
+  if (error && !perf) return <ErrorScreen message={error} />;
+  if (!perf) return <div style={{ color: C.textMuted }} className="text-xs py-6 text-center">Loading results…</div>;
+  // optionally leave out weeks whose app picks were only reconstructed
+  const weeks = perf.weeks;
+  const t = { vegas: { n: 0, correct: 0 }, app: { n: 0, correct: 0 }, mine: { n: 0, correct: 0 }, appUpsets: { n: 0, correct: 0 }, same: { n: 0, mine: 0, app: 0, vegas: 0 } };
+  for (const w of weeks) {
+    if (!inclRecon && w.appSource === "reconstructed") continue;
+    for (const k of ["vegas", "app", "mine", "appUpsets"]) { t[k].n += w[k].n; t[k].correct += w[k].correct; }
+    for (const k of ["n", "mine", "app", "vegas"]) t.same[k] += w.same[k];
+  }
+  const Cell = ({ label, rec }) => (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2">
+      <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">{label}</div>
+      <div style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-sm font-semibold">{fmtRecN(rec)} <span style={{ color: C.textFaint }} className="text-[11px] font-normal">{fmtRecPct(rec)}</span></div>
+    </div>
+  );
+  return (
+    <div className="space-y-3" data-pick-performance>
+      <div className="grid grid-cols-2 gap-2">
+        <Cell label="Vegas (favourites)" rec={t.vegas} />
+        <Cell label="App picks" rec={t.app} />
+        <Cell label="Your picks" rec={t.mine} />
+        <Cell label="App upset picks" rec={t.appUpsets} />
+      </div>
+      {t.same.n > 0 && (
+        <div style={{ color: C.textMuted }} className="text-[11px]">
+          On the {t.same.n} finished games you picked: you {t.same.mine}, app {t.same.app}, Vegas {t.same.vegas} correct.
+        </div>
+      )}
+      <label className="flex items-center gap-1.5 text-[11px]" style={{ color: C.textMuted }}>
+        <input type="checkbox" checked={inclRecon} onChange={(e) => setInclRecon(e.target.checked)} data-pick-recon-toggle />
+        Include weeks where the app's picks were reconstructed from ESPN odds
+      </label>
+      {weeks.length === 0 && <div style={{ color: C.textFaint }} className="text-xs">No finished games recorded yet.</div>}
+      <div className="space-y-1.5">
+        {weeks.map((w) => (
+          <div key={w.week} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md" data-pick-week={w.week}>
+            <button type="button" onClick={() => setOpen(open === w.week ? null : w.week)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs">
+              <span style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }}>Week {w.week}</span>
+              <span style={{ color: C.textMuted, fontVariantNumeric: "tabular-nums" }} className="flex gap-3">
+                <span>Vegas {fmtRecN(w.vegas)}</span>
+                <span>App {fmtRecN(w.app)}{w.appSource === "reconstructed" ? "~" : ""}</span>
+                <span>You {fmtRecN(w.mine)}</span>
+              </span>
+            </button>
+            {open === w.week && (
+              <div className="px-3 pb-2 space-y-1">
+                {w.appSource !== "stored" && <div style={{ color: C.textFaint }} className="text-[10px]">~ = app picks reconstructed from ESPN odds only; the real board would also use line movement and articles.</div>}
+                {w.games.map((g) => (
+                  <div key={g.key} className="flex items-center justify-between gap-2 text-[11px]" style={{ color: C.textMuted }} data-pick-perf-game={g.key}>
+                    <span style={{ color: C.text }} className="w-20 shrink-0">{g.away} @ {g.home}</span>
+                    <span className="w-14 shrink-0">won {g.winner}</span>
+                    <span style={{ color: g.vegas === g.winner ? C.ok : C.textMuted }} className="w-14 shrink-0">V {g.vegas || "—"}</span>
+                    <span style={{ color: g.app === g.winner ? C.ok : g.appUpset ? C.minor : C.textMuted }} className="w-16 shrink-0">A {g.app || "—"}{g.appUpset ? "↑" : ""}</span>
+                    <select
+                      value={g.mine || ""}
+                      onChange={(e) => setMine(w.week, g.key, e.target.value || null)}
+                      style={{ background: C.bg, border: `1px solid ${C.border}`, color: g.mine === g.winner ? C.ok : C.text }}
+                      className="rounded px-1 py-0.5 text-[11px]"
+                      aria-label={`Your pick ${g.key} week ${w.week}`}
+                    >
+                      <option value="">You —</option>
+                      <option value={g.away}>You {g.away}</option>
+                      <option value={g.home}>You {g.home}</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div style={{ color: C.textFaint }} className="text-[10px]">
+        V = favourite on the last stored line before kickoff (ESPN's listed odds where no line was stored). A = the app's pick, ↑ = underdog/upset pick. "You" = picks entered in the app; use the drop-down on a finished game to load an earlier pick by hand. Ties are left out.
+      </div>
+    </div>
+  );
+}
+
 function PickemScreen({ onChangedCount }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [cbsSt, setCbsSt] = useState(null);
+  const [view, setView] = useState("games"); // v3.4: "games" | "performance"
   const [pendingChoice, setPendingChoice] = useState(null); // v3.3: a manual pick made while CBS auto mode is on
   const loadCbs = useCallback(() => api.getCbsStatus().then(setCbsSt).catch(() => {}), []);
   useEffect(() => {
@@ -5017,18 +5116,21 @@ function PickemScreen({ onChangedCount }) {
           <Settings2 size={13} /> {showSettings ? "Hide settings" : "Settings"}
         </button>
       </div>
-      {showSettings && (
+      <div className="flex gap-1.5 text-xs" data-pick-views>
+        {[["games", "This week"], ["performance", "Performance"]].map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setView(k)} style={{ background: view === k ? C.brand : "transparent", color: view === k ? "#fff" : C.textMuted, border: `1px solid ${C.border}` }} className="rounded-full px-3 py-1 font-medium" data-pick-view={k}>{label}</button>
+        ))}
+      </div>
+      {view === "performance" && <PickemPerformance />}
+      {view === "games" && showSettings && (
         <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-2 text-xs" >
           <label className="flex items-center gap-2" style={{ color: C.text }}>
-            <input type="checkbox" checked={s.leverage} onChange={(e) => saveSettings({ leverage: e.target.checked })} />
-            Weekly leverage picks (for the weekly prize)
+            <input type="checkbox" checked={s.upsets !== false} onChange={(e) => saveSettings({ upsets: e.target.checked })} data-pick-upsets-toggle />
+            Upset picks (app picks differ from Vegas)
           </label>
           <div className="grid grid-cols-2 gap-2" style={{ color: C.textMuted }}>
-            <label className="flex flex-col gap-0.5">How many upsets
-              <input type="number" min="0" max="8" defaultValue={s.leverageCount} onBlur={(e) => saveSettings({ leverageCount: e.target.value })} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="rounded px-2 py-1" />
-            </label>
-            <label className="flex flex-col gap-0.5">Min underdog win chance (%)
-              <input type="number" min="20" max="50" defaultValue={Math.round(s.minDogProb * 100)} onBlur={(e) => saveSettings({ minDogProb: Number(e.target.value) / 100 })} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="rounded px-2 py-1" />
+            <label className="flex flex-col gap-0.5">Extra upsets need upset potential of at least
+              <input type="number" min="20" max="90" defaultValue={s.upsetThreshold ?? 45} onBlur={(e) => saveSettings({ upsetThreshold: e.target.value })} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="rounded px-2 py-1" />
             </label>
           </div>
           <label className="flex items-center gap-2" style={{ color: C.text }}>
@@ -5036,10 +5138,12 @@ function PickemScreen({ onChangedCount }) {
             Push alert when a recommendation changes before kickoff
           </label>
           <div style={{ color: C.textFaint }} className="text-[11px]">
-            Default picks are the betting favourite in every game (best for the season prize). Leverage swaps in up to {s.leverageCount} near-coin-flip underdogs the pool is likely to fade, to give you a shot at the weekly prize — at some cost to the season standings.
+            The app picks the favourite in every game except the upset picks: always the single game with the highest upset potential, plus up to 3 more at or above the threshold (4 at most). Started games keep the pick made before kickoff. Boxes: green = favourite, yellow = underdog.
           </div>
         </div>
       )}
+      {view === "games" && (
+      <>
       <div className="grid grid-cols-2 gap-2">
         <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2">
           <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Season record</div>
@@ -5078,9 +5182,11 @@ function PickemScreen({ onChangedCount }) {
       </div>
       <div className="space-y-2.5">
         {data.games.map((g) => (
-          <PickCard key={g.key} g={g} onSeen={seen} onChoose={choose} leverageOn={s.leverage} publicPct={s.publicPct?.[g.key]} onPublicPct={(k, v) => saveSettings({ publicPct: { [k]: v } })} />
+          <PickCard key={g.key} g={g} onSeen={seen} onChoose={choose} />
         ))}
       </div>
+      </>
+      )}
     </div>
   );
 }

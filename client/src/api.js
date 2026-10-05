@@ -153,6 +153,9 @@ export function getSourceStatus() {
 export function getPickem() {
   return request(`/api/pickem`);
 }
+export function getPickemPerformance() {
+  return request(`/api/pickem/performance`);
+}
 export function savePickemSettings(settings) {
   return jsonPost(`/api/pickem/settings`, settings);
 }

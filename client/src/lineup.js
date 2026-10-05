@@ -36,6 +36,27 @@ export function hasStarted(player, now = Date.now()) {
   return Boolean(player && (player.played || player.started || (player.kickoff != null && player.kickoff <= now)));
 }
 
+/**
+ * v3.4: locked = his game has kicked off and the week isn't over, so no move
+ * (swap, IR move, drop, claim around him) can fix anything for him. After the
+ * week's last game everything is open again (next week's moves).
+ */
+export function isLocked(player, league, now = Date.now()) {
+  return hasStarted(player, now) && !league?.weekOver;
+}
+/** Names of your roster players (starters, bench, IR) who are locked — for rules keyed by a name. */
+export function lockedNames(league, now = Date.now()) {
+  const out = new Set();
+  if (league?.weekOver) return out;
+  const add = (p) => {
+    if (p && hasStarted(p, now)) out.add(p.name);
+  };
+  (league?.starters || []).forEach((s) => add(s.player));
+  (league?.bench || []).forEach(add);
+  (league?.ir || []).forEach(add);
+  return out;
+}
+
 export function playerKey(player) {
   return `${player.name}|${player.pos}`;
 }
@@ -243,7 +264,7 @@ export function effectiveLineup(league, orderKeysOverride) {
   }
 
   // Starters projected at exactly 0 — the "red" case, for the status badge.
-  const zeroStarters = (league.starters || []).map((s) => s.player).filter((p) => isZeroProjection(p));
+  const zeroStarters = (league.starters || []).map((s) => s.player).filter((p) => isZeroProjection(p) && !isLocked(p, league)); // v3.4: a locked starter can't be swapped
 
   let status;
   if (custom) {
