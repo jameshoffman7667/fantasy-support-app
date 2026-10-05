@@ -4,6 +4,7 @@ import * as pickem from "./pickem.js";
 import { encrypt, decrypt } from "./sleeperPrivate.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
 import { getAllUserStates, getUser } from "./db.js";
+import * as nat from "./cbsNative.js";
 
 /**
  * v3.2 — push Pick'em picks to CBS pick'em pools.
@@ -18,6 +19,11 @@ import { getAllUserStates, getUser } from "./db.js";
  * Safeguards: opt-in (off by default), pause switch, dry run, submission log, read-back verification (when the
  * recipe has one), the first real run touches ONE test pool until it is verified (or the user confirms it),
  * and a game is never sent once it has kicked off. Auto-push runs ~60 minutes before each kickoff slot.
+ *
+ * v3.3: James captured the real requests, so the default engine is now "native" (cbsNative.js: server-action sign-in,
+ * GraphQL read + batch save with CBS's own echo as the read-back). The v3.2 recipe engine is kept as engine "recipe".
+ * Auto mode = the 60-minute push; it switches itself OFF when a pick is changed on CBS (detected by comparing CBS's
+ * picks with the snapshot taken after the app's last push / when auto mode last looked).
  */
 db.exec(`
   CREATE TABLE IF NOT EXISTS cbs_push_log (
@@ -41,7 +47,14 @@ const accKey = (u) => `cbs_account:${u}`;
 const setKey = (u) => `cbs_settings:${u}`;
 const autoKey = (u, season, week, slot) => `cbs_auto:${u}:${season}:${week}:${slot}`;
 
-export const DEFAULT_SETTINGS = { enabled: false, paused: false, notify: true, pools: [], testPoolId: null, verifiedOnce: false, recipe: {} };
+export const DEFAULT_SETTINGS = { enabled: false, paused: false, notify: true, pools: [], testPoolId: null, verifiedOnce: false, recipe: {}, engine: "native", native: {} };
+export const WATCH_EVERY_MS = 30 * 60 * 1000;
+const snapKey = (u, season, week, poolId) => `cbs_snap:${u}:${season}:${week}:${poolId}`;
+const watchKey = (u) => `cbs_watch:${u}`;
+const alertKey = (u) => `cbs_alert:${u}`;
+const infoKey = (u) => `cbs_login_info:${u}`;
+let testFetch; // tests inject a mock fetch
+export const _setFetchForTests = (f) => { testFetch = f; };
 
 /* ---------------- account + settings ---------------- */
 export function setAccount(username, { email, password }) {
@@ -76,7 +89,7 @@ export class CbsError extends Error {
 
 export function getSettings(username) {
   const s = store.getState(setKey(username), null) || {};
-  return { ...DEFAULT_SETTINGS, ...s, pools: Array.isArray(s.pools) ? s.pools : [], recipe: s.recipe || {} };
+  return { ...DEFAULT_SETTINGS, ...s, pools: Array.isArray(s.pools) ? s.pools : [], recipe: s.recipe || {}, engine: s.engine === "recipe" ? "recipe" : "native", native: s.native && typeof s.native === "object" ? s.native : {} };
 }
 
 const str = (v, max = 4000) => (v == null ? "" : String(v).slice(0, max));
@@ -109,19 +122,45 @@ function cleanRecipe(r) {
   out.teamMap = tm;
   return out;
 }
+function cleanNative(n) {
+  const out = {};
+  if (n && typeof n === "object") {
+    if (/^[0-9a-f]{40,64}$/i.test(String(n.nextActionId || ""))) out.nextActionId = String(n.nextActionId).toLowerCase();
+    for (const k of ["picksPageHash", "saveHash"]) if (/^[0-9a-f]{64}$/i.test(String(n[k] || ""))) out[k] = String(n[k]).toLowerCase();
+  }
+  return out;
+}
 export function saveSettings(username, patch = {}) {
   const cur = getSettings(username);
   const next = { ...cur };
   for (const k of ["enabled", "paused", "notify", "verifiedOnce"]) if (typeof patch[k] === "boolean") next[k] = patch[k];
+  if (patch.engine === "native" || patch.engine === "recipe") next.engine = patch.engine;
+  if (patch.native !== undefined) next.native = patch.native === null ? {} : { ...cur.native, ...cleanNative(patch.native) };
   if (Array.isArray(patch.pools)) {
     next.pools = patch.pools
-      .map((p) => ({ id: str(p.id, 80).trim(), name: str(p.name, 120).trim() || str(p.id, 80).trim(), enabled: p.enabled !== false }))
+      .map((p) => {
+        const raw = str(p.url || p.id, 400).trim();
+        let id = str(p.id, 80).trim();
+        let entryId = p.entryId ? str(p.entryId, 80) : null;
+        if (next.engine === "native" && raw) {
+          const parsed = nat.parsePoolInput(raw);
+          if (!parsed) throw new CbsError(`Couldn't read the pool "${raw.slice(0, 60)}". Paste the address of your pool's picks page from the browser (it contains /pools/… and ?entryId=…).`);
+          id = parsed.id;
+          entryId = parsed.entryId || entryId;
+        }
+        return { id, name: str(p.name, 120).trim() || id, enabled: p.enabled !== false, entryId };
+      })
       .filter((p) => p.id)
       .slice(0, 30);
   }
   if ("testPoolId" in patch) next.testPoolId = patch.testPoolId ? str(patch.testPoolId, 80) : null;
   if (patch.recipe !== undefined) next.recipe = cleanRecipe(patch.recipe);
   if (next.enabled && !account(username)) next.enabled = false;
+  if (next.enabled && !cur.enabled) {
+    // Turning auto mode on: forget the old alert and take a fresh "what CBS holds right now" baseline at the next check.
+    store.setState(alertKey(username), null);
+    store.setState(watchKey(username), { at: 0, rebaseline: true });
+  }
   store.setState(setKey(username), next);
   return status(username);
 }
@@ -245,7 +284,9 @@ async function session(username, recipe, { fresh = false } = {}) {
   return login(username, recipe);
 }
 export async function testLogin(username) {
-  const recipe = getSettings(username).recipe;
+  const settings = getSettings(username);
+  if (settings.engine === "native") return nativeTestLogin(username, settings);
+  const recipe = settings.recipe;
   try {
     await session(username, recipe, { fresh: true });
     log(username, { mode: "login-test", ok: true, detail: "login accepted" });
@@ -363,6 +404,7 @@ export async function pushForUser(username, { mode = "manual", slot = null, pool
   const settings = getSettings(username);
   const recipe = settings.recipe;
   if (!account(username)) throw new CbsError("Save your CBS login first.");
+  if (settings.engine === "native") return nativePush(username, settings, { mode, slot, poolIds, dryRun, board });
   if (!recipe.submit) throw new CbsError("The recipe has no submit step yet — see CBS-CAPTURE.md.");
   if (!recipe.login) throw new CbsError("The recipe has no login step yet — see CBS-CAPTURE.md.");
   if (!settings.pools.some((p) => p.enabled)) throw new CbsError("Add at least one pool (its id) and leave it enabled.");
@@ -481,12 +523,186 @@ async function pushPool(username, recipe, jar, pool, games, picks, base) {
   return { ok, sent, verified, detail: `${sent}/${games.length} game(s) accepted.${failures.length ? " Failed: " + failures.slice(0, 4).join("; ") + "." : ""}${vnote}${baseP.missingIds?.length ? ` No CBS id found for: ${baseP.missingIds.join(", ")}.` : ""}${verified === "no-readback" ? " (No read-back configured, so CBS's acceptance is the only evidence.)" : ""}` };
 }
 
+/* ---------------- native engine (v3.3) ---------------- */
+async function nativeSession(username, settings, { fresh = false } = {}) {
+  const s = sessions.get(username);
+  if (!fresh && s?.native && Date.now() - s.at < SESSION_TTL_MS) return s.jar;
+  const c = creds(username);
+  if (!c) throw new CbsError("No CBS login saved.");
+  const jar = new Map();
+  const r = await nat.nativeLogin({ email: c.email, password: c.password, jar, native: settings.native, fetchImpl: testFetch });
+  store.setState(infoKey(username), { at: Date.now(), ok: r.ok, detail: r.detail, cookieNames: r.cookieNames, warnings: r.warnings || [], actionId: r.actionId || null });
+  if (!r.ok) throw new CbsError(`CBS login did not succeed: ${r.detail}`);
+  if (r.actionId && r.actionId !== nat.cfgOf(settings.native).nextActionId) saveSettings(username, { native: { nextActionId: r.actionId } });
+  sessions.set(username, { jar, at: Date.now(), native: true });
+  return jar;
+}
+const natArgs = (settings, jar, pool) => ({ jar, fetchImpl: testFetch, native: settings.native, pool });
+/** Reads a pool's page; if CBS says we're signed out, signs in once more and retries. */
+async function nativeRead(username, settings, pool) {
+  let jar = await nativeSession(username, settings);
+  try {
+    return await nat.readPicksPage(natArgs(settings, jar, pool));
+  } catch (e) {
+    if (e.code !== "unauth") throw e;
+    jar = await nativeSession(username, settings, { fresh: true });
+    return nat.readPicksPage(natArgs(settings, jar, pool));
+  }
+}
+async function nativeTestLogin(username, settings) {
+  try {
+    await nativeSession(username, settings, { fresh: true });
+    const info = store.getState(infoKey(username), {});
+    const pool = settings.pools.find((p) => p.enabled);
+    let picksDetail = "";
+    let picksOk = null;
+    if (pool) {
+      try {
+        const page = await nativeRead(username, settings, pool);
+        picksOk = true;
+        picksDetail = ` The picks site accepted the session: ${page.poolName || "pool"}, week ${page.week}, ${page.events.length} games, ${Object.keys(page.picks).length} picks saved on CBS.`;
+        if (!pool.entryId && page.entryId) saveSettings(username, { pools: settings.pools.map((p) => (p === pool ? { ...p, entryId: page.entryId } : p)) });
+      } catch (e) {
+        picksOk = false;
+        picksDetail = ` Signed in, but reading the picks page failed: ${e.message}`;
+      }
+    } else picksDetail = " Add a pool to also check that the picks site accepts the session.";
+    store.setState(infoKey(username), { ...info, picksOk });
+    log(username, { mode: "login-test", ok: picksOk !== false, detail: `login accepted;${picksDetail}`.slice(0, 500) });
+    return { ok: picksOk !== false, detail: `CBS accepted the sign-in.${picksDetail}`, cookieNames: info.cookieNames || [], warnings: info.warnings || [] };
+  } catch (e) {
+    const info = store.getState(infoKey(username), {});
+    log(username, { mode: "login-test", ok: false, detail: e.message });
+    return { ok: false, detail: e.message, cookieNames: info.cookieNames || [], warnings: info.warnings || [] };
+  }
+}
+
+async function notifyUser(username, title, body) {
+  if (getSettings(username).notify && isPushConfigured()) await sendPushToUser(username, { title, body }).catch(() => {});
+}
+/** Auto mode switches itself off (and says why) when something was changed on CBS behind the app's back. */
+async function autoOff(username, detail) {
+  saveSettings(username, { enabled: false });
+  store.setState(alertKey(username), { at: Date.now(), detail });
+  log(username, { mode: "auto-off", ok: true, detail });
+  await notifyUser(username, "CBS pick'em: auto mode switched OFF", detail);
+}
+const gamesWord = (n) => `${n} pick${n === 1 ? "" : "s"}`;
+
+async function nativePush(username, settings, { mode, slot, poolIds, dryRun, board }) {
+  if (!settings.pools.some((p) => p.enabled)) throw new CbsError("Add at least one pool (paste its address) and leave it enabled.");
+  board = board || (await pickem.getBoard());
+  const now = Date.now();
+  const { picks, tiebreaker } = finalPicks(username, board);
+  const games = board.games.filter((g) => picks.has(g.key) && g.kickoff != null && g.kickoff > now && g.state !== "in" && g.state !== "post" && (slot == null || g.kickoff === slot));
+  const { pools, skipped } = poolsToUse(settings, poolIds);
+  const tbGame = board.tiebreaker ? board.games.find((g) => g.key === board.tiebreaker.game) : null;
+  const tbOpen = tiebreaker != null && (!tbGame || tbGame.kickoff == null || tbGame.kickoff > now);
+  if (!games.length && !(tbOpen && mode !== "auto")) return { ok: true, nothing: true, detail: "No unstarted games with a pick to send.", results: [], skippedPools: skipped };
+  const results = [];
+  const planned = [];
+  for (const pool of pools) {
+    const row = { season: board.season, week: board.week, slot: slot ?? null, poolId: pool.id, mode, games: games.length };
+    try {
+      const page = await nativeRead(username, settings, pool);
+      if (!pool.entryId && page.entryId) pool.entryId = page.entryId;
+      const sk = snapKey(username, board.season, board.week, pool.id);
+      const prev = store.getState(sk, null);
+      if (mode === "auto") {
+        const changed = nat.externalChanges(prev, page);
+        if (changed.length) {
+          const detail = `Auto mode switched off: ${changed.includes("tiebreaker") && changed.length === 1 ? "the tiebreaker" : gamesWord(changed.filter((c) => c !== "tiebreaker").length)} in "${pool.name}" ${changed.length === 1 ? "was" : "were"} changed on CBS since the app last looked, so nothing was sent.`;
+          await autoOff(username, detail);
+          results.push({ pool: pool.id, ok: false, autoOff: true, detail });
+          return { ok: false, autoOff: true, results, games: games.length, skippedPools: skipped };
+        }
+      }
+      const plan = nat.planPush({ page, games, picks, tiebreaker, tbOpen, now });
+      const summary = `${plan.toSave.length} to change, ${plan.unchanged.length} already match${plan.unmatched.length ? `, ${plan.unmatched.length} not found on CBS (${plan.unmatched.join(", ")})` : ""}${plan.skippedLocked.length ? `, ${plan.skippedLocked.length} locked on CBS` : ""}${plan.tiebreaker != null ? `, tiebreaker ${plan.tiebreaker}` : ""}`;
+      if (dryRun) {
+        planned.push({ pool: pool.id, name: pool.name, week: page.week, toSave: plan.toSave.map((p) => ({ key: p.gameKey, pick: p.pick })), unchanged: plan.unchanged.length, unmatched: plan.unmatched, skippedLocked: plan.skippedLocked, tiebreaker: plan.tiebreaker });
+        continue;
+      }
+      if (!plan.toSave.length && plan.tiebreaker == null) {
+        store.setState(sk, nat.snapshotOf(page));
+        const detail = `Nothing to send: CBS already matches (${summary}).`;
+        results.push({ pool: pool.id, ok: true, sent: 0, verified: "yes", detail });
+        log(username, { ...row, ok: true, sent: 0, verified: "yes", detail });
+        continue;
+      }
+      const r = await nat.savePicks({ ...natArgs(settings, (await nativeSession(username, settings)), pool), page, plan });
+      const verified = !r.echoed ? "no-readback" : r.matched === r.checked && r.tiebreakerOk !== false ? "yes" : r.matched > 0 ? "partial" : r.checked === 0 && r.tiebreakerOk ? "yes" : "no";
+      const ok = verified !== "no" && verified !== "partial";
+      const detail = `${r.checked ? `${r.matched}/${r.checked} changed pick(s) confirmed by CBS's echo` : "tiebreaker only"}${r.tiebreakerOk === false ? "; tiebreaker not echoed back correctly" : r.tiebreakerOk ? "; tiebreaker confirmed" : ""}${r.notMatching.length ? ` (not matching: ${r.notMatching.join(", ")})` : ""}. ${summary}.`;
+      if (r.savedPicks) store.setState(sk, { picks: r.savedPicks, tb: r.tiebreakerValue ?? page.tiebreakerValue ?? null, at: Date.now() });
+      results.push({ pool: pool.id, ok, sent: plan.toSave.length, verified, detail });
+      log(username, { ...row, ok, sent: plan.toSave.length, verified, detail });
+      if (!settings.verifiedOnce && ok && verified === "yes" && pool.id === pools[0]?.id) saveSettings(username, { verifiedOnce: true });
+    } catch (e) {
+      results.push({ pool: pool.id, ok: false, detail: e.message });
+      log(username, { ...row, ok: false, sent: 0, detail: e.message });
+    }
+  }
+  if (dryRun) return { ok: true, dryRun: true, native: true, pools: planned, games: games.map((g) => ({ key: g.key, pick: picks.get(g.key).pick })), requests: planned, skippedPools: skipped };
+  const okN = results.filter((r) => r.ok).length;
+  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped };
+  const first = results.find((r) => !r.ok);
+  const sentN = results.reduce((a, r) => a + (r.sent || 0), 0);
+  await notifyUser(
+    username,
+    out.ok ? `CBS pick'em: ${sentN ? gamesWord(sentN) + " sent" : "already up to date"} (${okN} pool${okN > 1 ? "s" : ""})` : `CBS pick'em: ${results.length - okN} of ${results.length} pools FAILED`,
+    out.ok ? results.map((r) => `${r.pool}: ${r.verified === "yes" ? "verified" : r.verified}`).join("; ") : `${first?.pool}: ${first?.detail}`
+  );
+  return out;
+}
+
+/**
+ * Scheduler hook: every ~30 min (only while this week still has unstarted games) re-reads CBS for each auto-mode user's
+ * pools and compares with the snapshot. A difference on an unlocked game = the user changed it on CBS -> auto mode off.
+ */
+export async function watchTick({ now = Date.now(), board = null } = {}) {
+  const users = getAllUserStates().map((s) => s.username).filter((u) => {
+    const st = getSettings(u);
+    return st.engine === "native" && st.enabled && !st.paused && account(u) && st.pools.some((p) => p.enabled) && getUser(u)?.active;
+  });
+  if (!users.length) return [];
+  board = board || (await pickem.getBoard());
+  if (!board.games.some((g) => g.kickoff != null && g.kickoff > now)) return [];
+  const ran = [];
+  for (const u of users) {
+    const w = store.getState(watchKey(u), null) || { at: 0 };
+    if (now - (w.at || 0) < WATCH_EVERY_MS) continue;
+    store.setState(watchKey(u), { at: now, rebaseline: false });
+    const settings = getSettings(u);
+    const { pools } = poolsToUse(settings, null);
+    for (const pool of pools) {
+      try {
+        const page = await nativeRead(u, settings, pool);
+        const sk = snapKey(u, board.season, board.week, pool.id);
+        const prev = store.getState(sk, null);
+        const changed = w.rebaseline ? [] : nat.externalChanges(prev, page);
+        if (changed.length) {
+          const n = changed.filter((c) => c !== "tiebreaker").length;
+          await autoOff(u, `Auto mode switched off: ${n ? gamesWord(n) : "the tiebreaker"} in "${pool.name}" ${changed.length === 1 ? "was" : "were"} changed on CBS, so the app will no longer overwrite them. Turn auto mode back on to re-sync.`);
+          ran.push({ user: u, pool: pool.id, changed: changed.length });
+          break;
+        }
+        if (!prev || w.rebaseline) store.setState(sk, nat.snapshotOf(page));
+        ran.push({ user: u, pool: pool.id, changed: 0 });
+      } catch (e) {
+        log(u, { season: board.season, week: board.week, mode: "watch", poolId: pool.id, ok: false, detail: e.message });
+      }
+    }
+  }
+  return ran;
+}
+
 /* ---------------- auto-push ---------------- */
 /** Scheduler hook (every ~5 min): for each opted-in user, push each kickoff slot's games ~60 min before it starts. */
 export async function autoTick({ now = Date.now(), board = null } = {}) {
   const users = getAllUserStates().map((s) => s.username).filter((u) => {
     const st = getSettings(u);
-    return st.enabled && !st.paused && account(u) && st.recipe.submit && st.recipe.login && getUser(u)?.active;
+    return st.enabled && !st.paused && account(u) && (st.engine === "native" ? st.pools.some((p) => p.enabled) : st.recipe.submit && st.recipe.login) && getUser(u)?.active;
   });
   if (!users.length) return [];
   board = board || (await pickem.getBoard());
@@ -495,6 +711,7 @@ export async function autoTick({ now = Date.now(), board = null } = {}) {
   for (const u of users) {
     for (const slot of slots) {
       const lead = slot - now;
+      if (!getSettings(u).enabled) break; // switched off (e.g. a pick was changed on CBS) while this tick was running
       if (lead > AUTO_LEAD_MS || lead < MIN_LEAD_MS) continue;
       const k = autoKey(u, board.season, board.week, slot);
       const st = store.getState(k, null) || { attempts: 0, done: false, lastAt: 0 };
@@ -505,6 +722,7 @@ export async function autoTick({ now = Date.now(), board = null } = {}) {
       try {
         const out = await pushForUser(u, { mode: "auto", slot, board });
         if (out.ok || out.nothing) st.done = true;
+        if (out.autoOff) st.done = true;
         ran.push({ user: u, slot, ok: out.ok });
       } catch (e) {
         log(u, { season: board.season, week: board.week, slot, mode: "auto", ok: false, detail: e.message });
@@ -533,8 +751,12 @@ export function status(username) {
     testPoolId: s.testPoolId,
     verifiedOnce: s.verifiedOnce,
     recipe: r,
-    recipeReady: Boolean(r.login && r.submit),
-    hasReadback: Boolean(r.readback?.url && r.readback?.pickRegex),
+    recipeReady: s.engine === "native" ? true : Boolean(r.login && r.submit),
+    hasReadback: s.engine === "native" ? true : Boolean(r.readback?.url && r.readback?.pickRegex),
     allowedHosts: ALLOWED_HOSTS(),
+    engine: s.engine,
+    native: { ...nat.cfgOf(s.native), custom: Object.keys(s.native || {}) },
+    alert: store.getState(alertKey(username), null),
+    lastLogin: store.getState(infoKey(username), null),
   };
 }

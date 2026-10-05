@@ -32,7 +32,7 @@ const URLS = [
   "https://api.sleeper.app/projections/nfl",
 ];
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
-const CACHE_TTL_MS = 60 * 60 * 1000;
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // v3.3 (R23): 6-hour baseline; the scheduler force-refreshes 3 hours and 60 minutes before each kickoff slot
 const BROWSER_UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 const PLACEHOLDER = 999; // values at/above this are placeholders, not projections

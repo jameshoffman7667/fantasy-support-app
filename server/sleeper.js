@@ -1,39 +1,102 @@
 const SLEEPER_BASE = "https://api.sleeper.app/v1";
 import { cacheGet, cacheSet } from "./db.js";
 
+// v3.3: ONE place decides how long each Sleeper answer is reused (API-call reductions R1–R21).
+// Everything is cached through db.js, so it survives a restart. `fresh: true` on a call skips the cache.
+const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+export const TTL = { rosters: 5 * MIN, matchups: 5 * MIN, trending: HOUR, transactionsLive: 6 * HOUR, week: 7 * DAY, season: 30 * DAY, user: 30 * DAY, playersInSeason: DAY, playersOff: 7 * DAY };
+const FOREVER = 3650 * DAY;
+
+let bootFresh = true; // /state/nfl is pulled once per server start, then only at its scheduled times
+let nowFn = () => Date.now();
+export function _setNowForTests(fn) { nowFn = fn || (() => Date.now()); bootFresh = true; }
+
+// Kickoff awareness for rosters/matchups: skip the 5-minute cache within 15 minutes of any kickoff and for 15 minutes after a push.
+let kickoffs = [];
+const NEAR_MS = 15 * MIN;
+const wroteAt = new Map();
+export function setKickoffs(list) { kickoffs = (list || []).filter((k) => Number.isFinite(k)); }
+export function noteWrite(leagueId) { wroteAt.set(String(leagueId), nowFn()); }
+function liveWindow(leagueId) {
+  const now = nowFn();
+  if (kickoffs.some((k) => Math.abs(k - now) <= NEAR_MS)) return true;
+  const w = wroteAt.get(String(leagueId));
+  return w != null && now - w <= NEAR_MS;
+}
+
+async function cached(key, ttl, fetcher, { fresh = false } = {}) {
+  if (!fresh) {
+    const hit = cacheGet(key);
+    if (hit !== null) return hit;
+  }
+  const v = await fetcher();
+  if (v !== undefined && v !== null) cacheSet(key, v, typeof ttl === "function" ? ttl(v) : ttl);
+  return v;
+}
+
+// Next Tue/Wed/Thu 05:00 America/Toronto strictly after `from` (R15).
+const torontoParts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", weekday: "short", hour: "numeric", minute: "numeric", hourCycle: "h23" });
+export function torontoNow(t = nowFn()) {
+  const p = Object.fromEntries(torontoParts.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  return { weekday: p.weekday, hour: Number(p.hour), date: new Date(t).toLocaleDateString("en-CA", { timeZone: "America/Toronto" }) };
+}
+export function nextStatePull(from) {
+  let t = Math.floor(from / (5 * MIN)) * 5 * MIN + 5 * MIN;
+  for (let i = 0; i < 8 * 24 * 60 / 5; i++, t += 5 * MIN) {
+    const p = Object.fromEntries(torontoParts.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    if (["Tue", "Wed", "Thu"].includes(p.weekday) && Number(p.hour) === 5 && Number(p.minute) < 5) return t;
+  }
+  return from + DAY;
+}
+
+
+
 async function sleeperFetch(path) {
   const res = await fetch(`${SLEEPER_BASE}${path}`);
   if (!res.ok) throw new Error(`Sleeper API error ${res.status} on ${path}`);
   return res.json();
 }
 
-export function getUser(username) {
-  return sleeperFetch(`/user/${encodeURIComponent(username)}`);
+export function getUser(username, opts = {}) {
+  // R14: the Sleeper user id never changes — look it up at login/reconnect only.
+  return cached(`sl:user:${String(username).toLowerCase()}`, TTL.user, () => sleeperFetch(`/user/${encodeURIComponent(username)}`), opts);
 }
-export function getState() {
-  return sleeperFetch(`/state/nfl`);
+export async function getState(opts = {}) {
+  const fresh = opts.fresh || bootFresh;
+  bootFresh = false;
+  const now = nowFn();
+  return cached("sl:state", () => Math.max(MIN, nextStatePull(now) - now), () => sleeperFetch(`/state/nfl`), { fresh });
 }
-export function getUserLeagues(userId, season) {
-  return sleeperFetch(`/user/${userId}/leagues/nfl/${season}`);
+export function getUserLeagues(userId, season, opts = {}) {
+  // R16: the league list changes once a season (opts.ttl lets cross-ownership use a weekly lifetime instead).
+  return cached(`sl:uleagues:${userId}:${season}`, opts.ttl || TTL.season, () => sleeperFetch(`/user/${userId}/leagues/nfl/${season}`), opts);
 }
-export function getLeague(leagueId) {
-  return sleeperFetch(`/league/${leagueId}`);
+export function getLeague(leagueId, opts = {}) {
+  return cached(`sl:league:${leagueId}`, TTL.week, () => sleeperFetch(`/league/${leagueId}`), opts); // R17 weekly
 }
-export function getRosters(leagueId) {
-  return sleeperFetch(`/league/${leagueId}/rosters`);
+export function getRosters(leagueId, opts = {}) {
+  const ttl = opts.ttl || TTL.rosters; // R1 (5 min); R20 passes a weekly ttl for other managers' leagues
+  const fresh = opts.fresh || (!opts.ttl && liveWindow(leagueId));
+  return cached(`sl:rosters:${leagueId}`, ttl, () => sleeperFetch(`/league/${leagueId}/rosters`), { fresh });
 }
-export function getLeagueUsers(leagueId) {
-  return sleeperFetch(`/league/${leagueId}/users`);
+export function getLeagueUsers(leagueId, opts = {}) {
+  return cached(`sl:lusers:${leagueId}`, TTL.week, () => sleeperFetch(`/league/${leagueId}/users`), opts); // R18 weekly
 }
 // v2.9: the waiver page wants the top 5 trending PER POSITION, so ask for more
 // than the old 60 (the feed is ordered by add count; the cap Sleeper applies to
 // `limit` is not documented — if it silently caps lower, positions fill up
 // less, nothing breaks).
-export function getTrendingAdds(limit = 200, lookbackHours = 24) {
-  return sleeperFetch(`/players/nfl/trending/add?lookback_hours=${lookbackHours}&limit=${limit}`);
+export function getTrendingAdds(limit = 200, lookbackHours = 24, opts = {}) {
+  return cached(`sl:trend:${limit}:${lookbackHours}`, TTL.trending, () => sleeperFetch(`/players/nfl/trending/add?lookback_hours=${lookbackHours}&limit=${limit}`), opts); // R3 1h
 }
-export function getTransactions(leagueId, round) {
-  return sleeperFetch(`/league/${leagueId}/transactions/${round}`);
+// R19: the current week is re-read every 6 hours; weeks that are over are stored permanently.
+// "Over" = at least two weeks behind the current one, because Sleeper can still book waiver
+// results into the week that just ended (not confirmed either way, so this errs on re-reading).
+export async function getTransactions(leagueId, round, opts = {}) {
+  let cur = null;
+  try { cur = Number((await getState())?.week); } catch { /* unknown week: use the short lifetime */ }
+  const settled = Number.isFinite(cur) && Number(round) <= cur - 2;
+  return cached(`sl:tx:${leagueId}:${round}`, settled ? FOREVER : TTL.transactionsLive, () => sleeperFetch(`/league/${leagueId}/transactions/${round}`), opts);
 }
 // Sleeper's own docs only show a per-team `points` total in this
 // response, but the real payload is widely reported (community wrappers,
@@ -42,19 +105,36 @@ export function getTransactions(leagueId, round) {
 // to `starters`) once stats start coming in for a game. Used for "lock
 // in actual score once played" — see buildLeague.js, which checks for
 // this field's actual presence rather than assuming it's there.
-export function getMatchups(leagueId, week) {
-  return sleeperFetch(`/league/${leagueId}/matchups/${week}`);
+export function getMatchups(leagueId, week, opts = {}) {
+  const fresh = opts.fresh || liveWindow(leagueId);
+  return cached(`sl:matchups:${leagueId}:${week}`, TTL.matchups, () => sleeperFetch(`/league/${leagueId}/matchups/${week}`), { fresh });
+}
+
+// R5: Game Day looks at the scoreboard while games are live. One shared in-memory answer per league
+// (max `maxAgeMs` old, concurrent callers share one request), so ten viewers cost the same as one.
+const liveMatchups = new Map();
+export function getMatchupsLive(leagueId, week, maxAgeMs = 45 * 1000) {
+  const k = `${leagueId}:${week}`;
+  const hit = liveMatchups.get(k);
+  if (hit && nowFn() - hit.at < maxAgeMs) return hit.p;
+  const p = sleeperFetch(`/league/${leagueId}/matchups/${week}`);
+  liveMatchups.set(k, { at: nowFn(), p });
+  p.catch(() => liveMatchups.delete(k));
+  return p;
 }
 
 // ~5MB dictionary of every NFL player. Sleeper's own docs ask integrators
-// not to poll this more than once a day. Now persisted via db.js so a
-// container restart doesn't force an immediate 5MB re-fetch either.
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+// not to poll this more than once a day. R21: daily in season, weekly in the offseason.
 export async function getPlayers() {
-  const cached = cacheGet("sleeper:players");
-  if (cached !== null) return cached;
+  const cachedPlayers = cacheGet("sleeper:players");
+  if (cachedPlayers !== null) return cachedPlayers;
+  let inSeason = true;
+  try {
+    const st = cacheGet("sl:state");
+    if (st && st.season_type) inSeason = st.season_type === "regular" || st.season_type === "post";
+  } catch { /* default to the daily lifetime */ }
   const data = await sleeperFetch(`/players/nfl`);
-  cacheSet("sleeper:players", data, ONE_DAY_MS);
+  cacheSet("sleeper:players", data, inSeason ? TTL.playersInSeason : TTL.playersOff);
   return data;
 }
 

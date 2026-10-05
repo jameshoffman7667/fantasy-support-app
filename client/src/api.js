@@ -122,6 +122,11 @@ export function adminDeleteUser(username) {
   return request(`/api/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" });
 }
 
+/* ---------------- My performance (v3.3) ---------------- */
+export function getPerformance(params = {}) {
+  return request(`/api/performance?${new URLSearchParams(params)}`);
+}
+
 /* ---------------- Projection accuracy + history backfill (v2.5) ---------------- */
 export function getAccuracy(params) {
   return request(`/api/accuracy?${new URLSearchParams(params)}`);
@@ -196,8 +201,8 @@ export function getWaiverPlan(leagueId) {
 export function saveWaiverPlan(leagueId, plan) {
   return jsonPost(`/api/waiver-plan`, { leagueId, plan });
 }
-export function getTradeAdvice(sessionId, leagueId, force = false) {
-  return jsonPost(`/api/trade/advice`, { sessionId, leagueId, force });
+export function getTradeAdvice(sessionId, leagueId, force = false, cacheOnly = false) {
+  return jsonPost(`/api/trade/advice`, { sessionId, leagueId, force, cacheOnly });
 }
 
 /* ---------------- Sleeper private access (v3.0) — the token itself never comes back to the browser ---------------- */

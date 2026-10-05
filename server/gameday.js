@@ -77,7 +77,11 @@ export async function getGameDay(username, { week: weekParam } = {}) {
   const week = Number(weekParam) || Number(nfl.week);
   const user = await sleeper.getUser(username);
   if (!user) throw new Error(`No Sleeper user named "${username}".`);
-  const [players, sched] = await Promise.all([sleeper.getPlayers(), schedule.getWeekSchedule(season, week, { live: true }).catch(() => null)]);
+  // R5: the live scoreboard (and the 45-second shared Sleeper matchup look) only runs while a game is actually on.
+  const sched0 = await schedule.getWeekSchedule(season, week, { live: false }).catch(() => null);
+  const nowMs = Date.now();
+  const liveNow = Object.values(sched0?.byTeam || {}).some((g) => g.kickoffMillis != null && g.kickoffMillis <= nowMs && nowMs <= g.kickoffMillis + 5 * 3600 * 1000);
+  const [players, sched] = await Promise.all([sleeper.getPlayers(), liveNow ? schedule.getWeekSchedule(season, week, { live: true }).catch(() => sched0) : sched0]);
   const gameFor = (team) => (team && sched ? sched.byTeam?.[schedule.normalizeTeam(team)] || null : null);
 
   const leagues = [];
@@ -89,7 +93,7 @@ export async function getGameDay(username, { week: weekParam } = {}) {
         sleeper.getLeague(leagueId),
         sleeper.getRosters(leagueId),
         sleeper.getLeagueUsers(leagueId),
-        sleeper.getMatchups(leagueId, week).catch(() => []),
+        (liveNow ? sleeper.getMatchupsLive(leagueId, week) : sleeper.getMatchups(leagueId, week)).catch(() => []),
       ]);
       const ls = settings.leagues[leagueId] || { importance: 1, include: true };
       const mine = rosters.find((r) => r.owner_id === user.user_id || (r.co_owners || []).includes(user.user_id));

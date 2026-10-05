@@ -1,5 +1,9 @@
-# Stage 1: build the static bundle
-FROM node:20-alpine AS build
+# Stage 1: build the static bundle.
+# --platform=$BUILDPLATFORM runs this stage NATIVELY on the CI runner (amd64) even when the
+# target image is arm64: the output is plain static files (HTML/JS/CSS), identical on every
+# architecture, so there is no reason to build it under slow QEMU emulation. Only the small
+# nginx stage below is produced per-architecture.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS build
 WORKDIR /app
 COPY package.json ./
 RUN npm install

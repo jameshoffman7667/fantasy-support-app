@@ -473,6 +473,9 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v3.3 additions
+CBS auto mode now signs in and saves picks directly (no recipe needed; see CBS-CAPTURE.md), switches itself off if you change a pick on CBS, and asks before a manual pick turns it off. Analytics has a new "My performance" tab. Sleeper/other API calls are cached much more (details in the changelog). The GitHub image build is faster.
+
 ### v3.2 additions
 Pick'em picks can be chosen in the app and pushed to your CBS pools about an hour before each kickoff slot. Set it up under Account → CBS pick'em push; read CBS-CAPTURE.md first. Off by default; untested against real CBS.
 

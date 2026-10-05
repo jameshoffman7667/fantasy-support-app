@@ -44,8 +44,8 @@ export async function computeOwnership({
   sleeperPlayers = null, // accepted for API symmetry; not needed (ids are compared directly)
   concurrency = 4, maxLeagueFetches = MAX_LEAGUE_FETCHES, deps = {},
 } = {}) {
-  const getUserLeagues = deps.getUserLeagues || sleeper.getUserLeagues;
-  const getRosters = deps.getRosters || sleeper.getRosters;
+  const getUserLeagues = deps.getUserLeagues || ((id, season) => sleeper.getUserLeagues(id, season, { ttl: sleeper.TTL.week }));
+  const getRosters = deps.getRosters || ((id) => sleeper.getRosters(id, { ttl: sleeper.TTL.week }));
   const mine = new Set((myPlayerIds || []).map(String));
   const owners = [...new Set((opponentOwnerIds || []).map(String))];
   let errors = 0;

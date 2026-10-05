@@ -314,8 +314,9 @@ export function setUserState(username, leagueIds, week) {
   ).run(username, JSON.stringify(leagueIds), week, Date.now());
 }
 export function getAllUserStates() {
-  return db.prepare("SELECT username, league_ids, week FROM user_state").all().map((r) => ({
+  return db.prepare("SELECT username, league_ids, week, updated_at FROM user_state").all().map((r) => ({
     username: r.username,
+    updatedAt: r.updated_at,
     leagueIds: JSON.parse(r.league_ids || "[]"),
     week: r.week,
   }));

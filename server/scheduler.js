@@ -9,6 +9,7 @@ import * as dvp from "./dvp.js";
 import * as backfill from "./backfill.js";
 import * as pickem from "./pickem.js";
 import * as cbs from "./cbs.js";
+import * as performance from "./performance.js";
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -17,8 +18,17 @@ const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // hourly, per the request this exis
 // v2.4: on top of the hourly refresh, a fresh projection pull ~60 minutes
 // before each kickoff slot (TNF, Sunday early/late/night, MNF, ...).
 const PREKICK_LEAD_MS = 60 * 60 * 1000;
+// v3.3 (R23): Sleeper and ESPN projections also get a refresh 3 hours before each slot (Tank01/Pick'em stay at 60 minutes).
+const PREKICK_EARLY_LEAD_MS = 3 * 60 * 60 * 1000;
 const PREKICK_WINDOW_MS = 15 * 60 * 1000; // fires between 60 and 45 min before kickoff, so a short outage doesn't skip it
 const PREKICK_CHECK_MS = 5 * 60 * 1000;
+
+// v3.3 (R12): background refreshes skip people who haven't used the app for this long (their data rebuilds when they come back).
+export const INACTIVE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
+export function isInactive(user, state, now = Date.now()) {
+  const seen = Math.max(user?.lastLoginAt || 0, state?.updatedAt || 0);
+  return seen > 0 && now - seen > INACTIVE_AFTER_MS;
+}
 
 const ALERT_DEDUP_TTL_MS = 9 * 24 * 60 * 60 * 1000; // outlives a week so the same alert doesn't repeat next cycle
 const ALERT_LOOKAHEAD_MS = 26 * 60 * 60 * 1000; // only alert about a kickoff within about a day
@@ -86,9 +96,10 @@ async function refreshUser(state) {
   const user = getUser(state.username);
   if (!user?.active) return; // revoked/removed since they last used the app — don't spend API calls on them
   if (!state.leagueIds?.length) return;
+  if (isInactive(user, state)) return; // R12
 
   try {
-    const sleeperUser = await sleeper.getUser(state.username);
+    const sleeperUser = await sleeper.getUser(state.username); // R14: cached after login
     if (!sleeperUser) return; // username changed/deleted on Sleeper since — nothing sensible to refresh
     const sleeperState = await sleeper.getState();
     const week = state.week || sleeperState.week;
@@ -100,6 +111,7 @@ async function refreshUser(state) {
       try {
         const built = await buildFullLeague(sleeperUser.user_id, leagueSummary, week, trending, []);
         setBuiltLeague(state.username, leagueSummary.league_id, built);
+        performance.record(state.username, built); // v3.3: timeline of the app's suggestions (for My performance)
         await scanForAlerts(state.username, built).catch((err) => console.warn(`[scheduler] Alert scan failed for league ${leagueSummary.league_id}: ${err.message}`));
       } catch (err) {
         console.warn(`[scheduler] Background refresh failed for ${state.username} / league ${leagueSummary.league_id}: ${err.message}`);
@@ -112,12 +124,20 @@ async function refreshUser(state) {
 }
 
 let refreshing = null;
+let warmedOnce = false;
 async function refreshAllUsers() {
   // One run at a time: the hourly and pre-kickoff refreshes can coincide.
   if (refreshing) return refreshing;
   refreshing = (async () => {
     // Sequential on purpose: shared projection caches make the second
     // user's refresh mostly cache hits, and it keeps rate limits safe.
+    // R13: no hourly rebuilds in the offseason (Sleeper's season_type "off"); the first run after boot still warms the cache.
+    let offSeason = false;
+    try {
+      offSeason = (await sleeper.getState())?.season_type === "off";
+    } catch { /* unknown: keep refreshing */ }
+    if (offSeason && warmedOnce) return;
+    warmedOnce = true;
     for (const state of getAllUserStates()) {
       await refreshUser(state);
     }
@@ -147,25 +167,29 @@ async function preKickoffCheck() {
       if (!slots.has(g.kickoffMillis)) slots.set(g.kickoffMillis, []);
       slots.get(g.kickoffMillis).push(tank01.normTeam(team));
     }
+    sleeper.setKickoffs([...slots.keys()]); // R1: rosters/matchups skip their 5-minute cache within 15 minutes of a kickoff
     const now = Date.now();
     for (const [kickoff, teams] of slots) {
-      const lead = kickoff - now;
-      if (lead > PREKICK_LEAD_MS || lead <= PREKICK_LEAD_MS - PREKICK_WINDOW_MS) continue;
-      const doneKey = `prekick:${season}:${week}:${kickoff}`;
-      if (cacheGet(doneKey) !== null) continue;
-      cacheSet(doneKey, true, 2 * 24 * 60 * 60 * 1000);
-      console.log(`[scheduler] Pre-kickoff refresh for the ${new Date(kickoff).toISOString()} slot (${teams.join(", ")}).`);
+      for (const leadMs of [PREKICK_EARLY_LEAD_MS, PREKICK_LEAD_MS]) {
+        const lead = kickoff - now;
+        if (lead > leadMs || lead <= leadMs - PREKICK_WINDOW_MS) continue;
+        const early = leadMs === PREKICK_EARLY_LEAD_MS;
+        const doneKey = `prekick:${season}:${week}:${kickoff}${early ? ":3h" : ""}`;
+        if (cacheGet(doneKey) !== null) continue;
+        cacheSet(doneKey, true, 2 * 24 * 60 * 60 * 1000);
+        console.log(`[scheduler] ${early ? "3-hour" : "Pre-kickoff"} refresh for the ${new Date(kickoff).toISOString()} slot (${teams.join(", ")}).`);
 
-      await slp.getWeekProjections(season, week, { force: true }).catch((err) => console.warn(`[scheduler] Pre-kickoff Sleeper pull failed: ${err.message}`));
-      await espn.getWeekProjections(season, week, { force: true }).catch((err) => console.warn(`[scheduler] Pre-kickoff ESPN pull failed: ${err.message}`));
-      if (tank01.isConfigured()) {
-        const current = await tank01.getWeekData(season, week); // schedule comes from here
-        const gameIDs = (current?.schedule?.games || []).filter((g) => teams.includes(g.home) || teams.includes(g.away)).map((g) => g.gameID);
-        await tank01.getWeekData(season, week, { projections: true, gameIDs });
+        await slp.getWeekProjections(season, week, { force: true }).catch((err) => console.warn(`[scheduler] Pre-kickoff Sleeper pull failed: ${err.message}`));
+        await espn.getWeekProjections(season, week, { force: true }).catch((err) => console.warn(`[scheduler] Pre-kickoff ESPN pull failed: ${err.message}`));
+        if (!early && tank01.isConfigured()) {
+          const current = await tank01.getWeekData(season, week); // schedule comes from here
+          const gameIDs = (current?.schedule?.games || []).filter((g) => teams.includes(g.home) || teams.includes(g.away)).map((g) => g.gameID);
+          await tank01.getWeekData(season, week, { projections: true, gameIDs });
+        }
+        hub.clearCache(); // recompute (and re-record) every source with the fresh numbers
+        await refreshAllUsers();
+        if (!early) await pickem.updateAllUsers(); // final pre-kickoff recommendations (flags/pushes any change)
       }
-      hub.clearCache(); // recompute (and re-record) every source with the fresh numbers
-      await refreshAllUsers();
-      await pickem.updateAllUsers(); // final pre-kickoff recommendations (flags/pushes any change)
     }
   } catch (err) {
     console.warn(`[scheduler] Pre-kickoff check failed: ${err.message}`);
@@ -180,15 +204,27 @@ export function startScheduler() {
   setInterval(preKickoffCheck, PREKICK_CHECK_MS);
   // v2.5: actual scores for finished weeks (hourly) and the history backfill's
   // scheduled runs (batch 2 at +40 days; month-end continuation).
-  setInterval(() => actuals.updateActuals().catch((err) => console.warn(`[scheduler] Actuals update failed: ${err.message}`)), REFRESH_INTERVAL_MS);
+  // R6: actuals only matter once a week is over — check twice a day (a check with nothing to fetch costs no calls).
+  setInterval(() => actuals.updateActuals().catch((err) => console.warn(`[scheduler] Actuals update failed: ${err.message}`)), 12 * 60 * 60 * 1000);
   setTimeout(() => actuals.updateActuals().catch(() => {}), 60 * 1000);
   // v2.7: Pick'em recommendations hourly (red-dot flags + push on changes before kickoff).
   setInterval(() => pickem.updateAllUsers().catch((err) => console.warn(`[scheduler] Pick'em update failed: ${err.message}`)), REFRESH_INTERVAL_MS);
   // v3.2: CBS pick'em auto-push (opt-in per user): each kickoff slot's games ~60 minutes before it starts.
   setInterval(() => cbs.autoTick().catch((err) => console.warn(`[scheduler] CBS auto-push failed: ${err.message}`)), PREKICK_CHECK_MS);
+  // v3.3: while auto mode is on, look at CBS about every 30 min (the call itself is throttled per user) and switch auto mode
+  // off if a pick was changed on CBS.
+  setInterval(() => cbs.watchTick().catch((err) => console.warn(`[scheduler] CBS watch failed: ${err.message}`)), PREKICK_CHECK_MS);
   // v2.8: matchup-difficulty stats — finished games hourly; last season once.
   setTimeout(() => dvp.ensureLoaded().catch((err) => console.warn(`[scheduler] Matchup stats load failed: ${err.message}`)), 20 * 1000);
-  setInterval(() => dvp.ensureLoaded().catch((err) => console.warn(`[scheduler] Matchup stats load failed: ${err.message}`)), REFRESH_INTERVAL_MS);
+  // R22: finished games are loaded after Tuesday's finals and again Thursday (corrections), not hourly; the check itself is free.
+  setInterval(() => {
+    const t = sleeper.torontoNow();
+    if (!["Tue", "Thu"].includes(t.weekday) || t.hour < 5) return;
+    const k = `dvp-run:${t.date}`;
+    if (cacheGet(k) !== null) return;
+    cacheSet(k, true, 2 * 24 * 60 * 60 * 1000);
+    dvp.ensureLoaded().catch((err) => console.warn(`[scheduler] Matchup stats load failed: ${err.message}`));
+  }, 30 * 60 * 1000);
   setInterval(() => backfill.scheduledCheck().catch((err) => console.warn(`[scheduler] Backfill check failed: ${err.message}`)), PREKICK_CHECK_MS);
 }
 

@@ -96,7 +96,7 @@ Reply with ONLY a JSON array, no prose: [{"game":"AWAY@HOME","upsetMentions":0,"
  * Unverified from the build sandbox: model id and response shape (see top).
  */
 const TRADE_TTL = 3 * 60 * 60 * 1000;
-export async function tradeNews(season, week, items, { force = false } = {}) {
+export async function tradeNews(season, week, items, { force = false, cacheOnly = false } = {}) {
   if (!isConfigured() || !items?.length) return null;
   const listKey = items.map((i) => i.key).sort().join("~");
   let h = 0;
@@ -104,6 +104,7 @@ export async function tradeNews(season, week, items, { force = false } = {}) {
   const cacheKey = `gemini:trade:${season}:${week}:${h}`;
   const cached = cacheGet(cacheKey);
   if (cached && !force) return cached;
+  if (cacheOnly && !force) return null; // v3.3 (R11): opening the page never starts a Gemini search by itself
 
   const who = (p) => `${p.name} (${p.pos}${p.team ? `, ${p.team}` : ""})`;
   const lines = items.map((i) => `- ${i.key}: I would GIVE ${who(i.give)} and GET ${who(i.get)}`).join("\n");

@@ -231,6 +231,8 @@ function StatusBadge({ status, label, onClick, compact }) {
 // Projection source codes from the server (v2.4): V = Vegas props, T = Tank01,
 // S = Sleeper, E = ESPN.
 const SOURCE_TAG = { V: "VEGAS", T: "TANK01", S: "SLEEPER", E: "ESPN" };
+// v3.3: the same per-source colours the Analytics page uses; tags on player cards / lineup rows match them.
+const SRC_COLOR = { V: "#4A8FC2", T: "#D9A521", S: "#3FAE58", E: "#B07CC6" };
 
 function SourceTag({ source, factor }) {
   if (!source) return null;
@@ -242,7 +244,7 @@ function SourceTag({ source, factor }) {
     );
   }
   return (
-    <span style={{ color: C.textFaint }} className="absolute bottom-1 right-1.5 text-[9px] font-medium tracking-wide">
+    <span style={{ color: SRC_COLOR[source] || C.textFaint }} className="absolute bottom-1 right-1.5 text-[9px] font-medium tracking-wide">
       {SOURCE_TAG[source] || source}
       {factor ? ` ×${factor}` : ""}
     </span>
@@ -410,8 +412,7 @@ function StatLine({ player }) {
   const src = SOURCE_TAG[player.projSource] || player.projSource;
   return (
     <div style={{ color: C.textFaint }} className="text-[10px] mt-1 leading-snug">
-      Proj ({src}): {formatStatLine(player.projStats)}
-      {player.projSource === "E" ? " — ESPN only gives receptions and pass TDs" : ""}
+      Proj (<span style={{ color: SRC_COLOR[player.projSource] || undefined }}>{src}</span>): {formatStatLine(player.projStats)}
     </div>
   );
 }
@@ -1216,7 +1217,7 @@ function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, o
         <div style={{ color: zero ? C.major : C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-base font-semibold">
           {p.proj != null ? p.proj.toFixed(1) : "—"}
         </div>
-        <div style={{ color: C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : SOURCE_TAG[p.projSource] || p.projSource || "no proj"}{p.projFactor ? ` ×${p.projFactor}` : ""}</div>
+        <div style={{ color: p.projSource === "actual" ? C.brand : SRC_COLOR[p.projSource] || C.textFaint }} className="text-[10px]">{p.projSource === "actual" ? "FINAL" : SOURCE_TAG[p.projSource] || p.projSource || "no proj"}{p.projFactor ? ` ×${p.projFactor}` : ""}</div>
       </div>
     </div>
   );
@@ -2486,7 +2487,7 @@ function TradeTab({ league, sessionId, onRefresh, onOpenAccount }) {
       if (!finderSig) return;
       setAdvice((a) => ({ ...a, loading: true, error: null }));
       try {
-        const r = await api.getTradeAdvice(sessionId, league.id, force);
+        const r = await api.getTradeAdvice(sessionId, league.id, force === true, force === "open");
         setAdvice({ loading: false, configured: r.configured, byKey: r.byKey || {}, at: r.at, error: null });
       } catch (err) {
         setAdvice((a) => ({ ...a, loading: false, error: err.message }));
@@ -2494,9 +2495,9 @@ function TradeTab({ league, sessionId, onRefresh, onOpenAccount }) {
     },
     [sessionId, league.id, finderSig]
   );
-  // Results are cached on the server for 3 hours, so opening the page is cheap.
+  // Opening the page only shows what is already cached (v3.3); the news check itself runs when you press its button.
   useEffect(() => {
-    runAdvice(false);
+    runAdvice("open");
   }, [runAdvice]);
 
   return (
@@ -3308,7 +3309,7 @@ function CbsPanel() {
       api.getCbsStatus().then((d) => {
         setSt(d);
         setRecipeText((t) => t || (d.recipe && Object.keys(d.recipe).some((k) => k !== "teamMap") ? JSON.stringify(d.recipe, null, 2) : ""));
-        setPoolsText((t) => t || (d.pools || []).map((p) => `${p.id} ${p.name === p.id ? "" : p.name}`.trim()).join("\n"));
+        setPoolsText((t) => t || (d.pools || []).map((p) => `${d.engine === "native" ? `https://picks.cbssports.com/football/pickem/pools/${p.id}${p.entryId ? `?entryId=${p.entryId}` : ""}` : p.id} ${p.name === p.id ? "" : p.name}`.trim()).join("\n"));
       }).catch((e) => setMsg(e.message)),
     []
   );
@@ -3331,9 +3332,10 @@ function CbsPanel() {
   const parsePools = () =>
     poolsText.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
       const [id, ...rest] = l.split(/\s+/);
-      const old = (st?.pools || []).find((p) => p.id === id);
-      return { id, name: rest.join(" ") || id, enabled: old ? old.enabled : true };
+      const old = (st?.pools || []).find((p) => p.id === id || id.includes(p.id));
+      return { id, url: id, name: rest.join(" ") || old?.name || id, enabled: old ? old.enabled : true, entryId: old?.entryId || null };
     });
+  const savePools = () => act(() => api.saveCbsSettings({ pools: parsePools() }), "Pools saved.");
   const saveRecipe = () => {
     let r;
     try {
@@ -3346,7 +3348,7 @@ function CbsPanel() {
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-2.5" data-cbs-panel>
       <div style={{ color: C.textMuted }} className="text-xs">
-        Optional. Sends your Pick'em picks to your CBS pick'em pools automatically, about an hour before each kickoff slot. CBS has no public API, so this signs in with your CBS email and password (stored encrypted on your server, never sent back to the browser) and replays the requests you captured from your browser — see CBS-CAPTURE.md. CBS's terms may not allow automation, the requests can stop working whenever CBS changes its site, and nothing here has been tried against the real CBS. It is off until you switch it on, and every push is logged.
+        Optional. Auto mode sends your Pick'em picks to your CBS pick'em pools about an hour before each kickoff slot, and switches itself off if you change a pick on CBS. CBS has no public API, so this signs in with your CBS email and password (stored encrypted on your server, never sent back to the browser) and uses the same requests CBS's own site makes. CBS's terms may not allow automation, it can stop working whenever CBS changes its site or blocks scripted sign-ins, and it has not yet been tried against the real CBS — use "Test login" first. It is off until you switch it on, and every push is logged.
       </div>
       {!st ? (
         <div style={{ color: C.textMuted }} className="text-xs">Loading…</div>
@@ -3364,20 +3366,26 @@ function CbsPanel() {
           {st.configured && (
             <>
               <label className="flex flex-col gap-0.5 text-xs" style={{ color: C.textMuted }}>
-                Pools (one per line: pool id, then an optional name)
+                {st.engine === "native" ? "Pools (one per line: paste the address of the pool's picks page from your browser — it contains /pools/… and ?entryId=… — then an optional name)" : "Pools (one per line: pool id, then an optional name)"}
                 <textarea value={poolsText} onChange={(e) => setPoolsText(e.target.value)} rows={3} style={inputStyle} className="rounded-md px-2.5 py-1.5 text-xs font-mono" data-cbs-pools />
               </label>
-              <label className="flex flex-col gap-0.5 text-xs" style={{ color: C.textMuted }}>
-                Request recipe (JSON from your captured requests)
-                <textarea value={recipeText} onChange={(e) => setRecipeText(e.target.value)} rows={9} placeholder={RECIPE_EXAMPLE} style={inputStyle} className="rounded-md px-2.5 py-1.5 text-[11px] font-mono" data-cbs-recipe />
-              </label>
+              {st.engine === "recipe" && (
+                <label className="flex flex-col gap-0.5 text-xs" style={{ color: C.textMuted }}>
+                  Request recipe (JSON from your captured requests)
+                  <textarea value={recipeText} onChange={(e) => setRecipeText(e.target.value)} rows={9} placeholder={RECIPE_EXAMPLE} style={inputStyle} className="rounded-md px-2.5 py-1.5 text-[11px] font-mono" data-cbs-recipe />
+                </label>
+              )}
               <div className="flex gap-2 flex-wrap">
-                <button type="button" disabled={busy} onClick={saveRecipe} style={{ background: C.brand, color: "#fff" }} className="rounded-md px-3 py-1.5 text-xs font-medium" data-cbs-save-recipe>Save recipe &amp; pools</button>
-                <button type="button" disabled={busy || !st.recipeReady} onClick={() => act(() => api.testCbsLogin(), (r) => (r.ok ? "CBS accepted the login." : `Login failed: ${r.detail}`))} style={{ color: C.text, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-xs" data-cbs-login-test>Test login</button>
+                {st.engine === "recipe" ? (
+                  <button type="button" disabled={busy} onClick={saveRecipe} style={{ background: C.brand, color: "#fff" }} className="rounded-md px-3 py-1.5 text-xs font-medium" data-cbs-save-recipe>Save recipe &amp; pools</button>
+                ) : (
+                  <button type="button" disabled={busy} onClick={savePools} style={{ background: C.brand, color: "#fff" }} className="rounded-md px-3 py-1.5 text-xs font-medium" data-cbs-save-pools>Save pools</button>
+                )}
+                <button type="button" disabled={busy || !st.recipeReady} onClick={() => act(() => api.testCbsLogin(), (r) => `${r.ok ? "" : "Login test failed: "}${r.detail}${r.cookieNames?.length ? ` Cookies received (names only): ${r.cookieNames.join(", ")}.` : ""}${r.warnings?.length ? ` Note: ${r.warnings.join(" ")}` : ""}`)} style={{ color: C.text, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-xs" data-cbs-login-test>Test login</button>
               </div>
               <label className="flex items-start gap-2 text-sm" style={{ color: C.text }}>
                 <input type="checkbox" checked={st.enabled} disabled={busy || !st.recipeReady || !(st.pools || []).length} onChange={(e) => act(() => api.saveCbsSettings({ enabled: e.target.checked }))} className="mt-1" data-cbs-enabled />
-                <span>Auto-push picks<span style={{ color: C.textMuted }} className="block text-xs">About 60 minutes before each kickoff slot; never for a game that has started. Needs a saved recipe and at least one pool.</span></span>
+                <span>Auto mode<span style={{ color: C.textMuted }} className="block text-xs">Sends your picks about 60 minutes before each kickoff slot; never for a game that has started. Switches itself off if you change a pick on CBS (the app looks at CBS about every 30 minutes while auto mode is on). Needs at least one pool.</span></span>
               </label>
               <label className="flex items-center gap-2 text-sm" style={{ color: C.text }}>
                 <input type="checkbox" checked={st.paused} disabled={busy} onChange={(e) => act(() => api.saveCbsSettings({ paused: e.target.checked }))} data-cbs-paused />
@@ -3387,6 +3395,24 @@ function CbsPanel() {
                 <input type="checkbox" checked={st.notify} disabled={busy} onChange={(e) => act(() => api.saveCbsSettings({ notify: e.target.checked }))} data-cbs-notify />
                 Notify me after every push (success or failure)
               </label>
+              {st.alert && (
+                <div style={{ color: C.minor, border: `1px solid ${C.minor}55` }} className="rounded-md px-2.5 py-1.5 text-xs" data-cbs-alert>{st.alert.detail}</div>
+              )}
+              {st.engine === "native" && (
+                <details className="text-xs" style={{ color: C.textMuted }}>
+                  <summary className="cursor-pointer">Advanced: values copied from CBS's site</summary>
+                  <div className="space-y-1.5 pt-1.5">
+                    <div>If CBS changes its site these may need updating. The sign-in id is re-discovered automatically when it stops working.</div>
+                    <div className="font-mono text-[10px] break-all">sign-in id: {st.native?.nextActionId}</div>
+                    <div className="font-mono text-[10px] break-all">picks-page query: {st.native?.picksPageHash}</div>
+                    <div className="font-mono text-[10px] break-all">save query: {st.native?.saveHash}</div>
+                    <button type="button" disabled={busy} onClick={() => act(() => api.saveCbsSettings({ engine: "recipe" }), "Switched to the older request-recipe mode.")} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-2.5 py-1 text-xs">Use the older request-recipe mode instead</button>
+                  </div>
+                </details>
+              )}
+              {st.engine === "recipe" && (
+                <button type="button" disabled={busy} onClick={() => act(() => api.saveCbsSettings({ engine: "native" }), "Switched back to the built-in CBS mode.")} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-2.5 py-1 text-xs">Use the built-in CBS mode</button>
+              )}
               {!st.verifiedOnce && (st.pools || []).length > 0 && (
                 <div style={{ color: C.minor }} className="text-xs" data-cbs-testonly>
                   First run: only the first pool ({(st.pools.find((p) => p.id === st.testPoolId) || st.pools[0]).name}) is used until a push is read back from CBS{st.hasReadback ? "" : " (no read-back is set up, so check that pool on CBS yourself)"}.{" "}
@@ -3620,7 +3646,6 @@ function AdminScreen({ authUser }) {
 /*  PROJECTION ACCURACY (v2.5)                                         */
 /* ------------------------------------------------------------------ */
 const SRC_NAME = { V: "Vegas", T: "Tank01", S: "Sleeper", E: "ESPN" };
-const SRC_COLOR = { V: "#4A8FC2", T: "#D9A521", S: "#3FAE58", E: "#B07CC6" };
 
 function Select({ value, onChange, options, label }) {
   return (
@@ -3757,6 +3782,191 @@ function BackfillPanel() {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  MY PERFORMANCE (v3.3)                                              */
+/* ------------------------------------------------------------------ */
+const signed = (n) => (n == null ? "—" : `${n > 0 ? "+" : ""}${n}`);
+const goodBad = (n) => (n > 0 ? C.ok : n < 0 ? C.major : C.textMuted);
+
+// Cumulative lines by week: lineup decisions, waiver misses and waiver claims. Plain inline SVG.
+function PerfTrend({ trend }) {
+  if (trend.length < 2) return <div style={{ color: C.textFaint }} className="text-xs px-1 py-2">The trend needs at least two scored weeks.</div>;
+  const series = [
+    { k: "lineupCum", label: "Lineup: going against the app", color: "#4A8FC2" },
+    { k: "waiverMissedCum", label: "Waivers: passed on a pick-up", color: "#D9A521" },
+    { k: "waiverClaimedCum", label: "Waivers: claims you made", color: "#3FAE58" },
+  ];
+  const W = 340, H = 160, P = { l: 34, r: 8, t: 8, b: 20 };
+  const vals = trend.flatMap((t) => series.map((s) => t[s.k] || 0).concat(0));
+  const lo = Math.min(...vals), hi = Math.max(...vals, 1);
+  const span = hi - lo || 1;
+  const weeks = trend.map((t) => t.week);
+  const x = (w) => P.l + ((w - weeks[0]) / (weeks[weeks.length - 1] - weeks[0] || 1)) * (W - P.l - P.r);
+  const y = (v) => H - P.b - ((v - lo) / span) * (H - P.t - P.b);
+  const ticks = [lo, 0, hi].filter((v, i, a) => a.indexOf(v) === i).map((v) => Math.round(v * 10) / 10);
+  return (
+    <div data-perf-trend>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Cumulative points by week">
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={P.l} x2={W - P.r} y1={y(t)} y2={y(t)} stroke={t === 0 ? C.textFaint : C.border} strokeWidth="1" />
+            <text x={P.l - 4} y={y(t) + 3} fontSize="9" textAnchor="end" fill={C.textFaint}>{t}</text>
+          </g>
+        ))}
+        {weeks.map((w) => <text key={w} x={x(w)} y={H - 6} fontSize="9" textAnchor="middle" fill={C.textFaint}>{w}</text>)}
+        {series.map((s) => (
+          <g key={s.k}>
+            <polyline fill="none" stroke={s.color} strokeWidth="2" points={trend.map((t) => `${x(t.week)},${y(t[s.k] || 0)}`).join(" ")} />
+            {trend.map((t) => <circle key={t.week} cx={x(t.week)} cy={y(t[s.k] || 0)} r="2.5" fill={s.color}><title>{`${s.label}, through week ${t.week}: ${signed(t[s.k])} pts`}</title></circle>)}
+          </g>
+        ))}
+      </svg>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px]" style={{ color: C.textMuted }}>
+        {series.map((s) => <span key={s.k}><span style={{ color: s.color }}>●</span> {s.label}</span>)}
+      </div>
+    </div>
+  );
+}
+
+function PerformanceScreen() {
+  const [leagueId, setLeagueId] = useState("");
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [week, setWeek] = useState(null);
+  useEffect(() => {
+    setData(null);
+    api.getPerformance(leagueId ? { leagueId } : {}).then((d) => {
+      setData(d);
+      setError(null);
+      setWeek((w) => (w != null && d.weekly.some((x) => x.week === w) ? w : d.weekly.length ? d.weekly[d.weekly.length - 1].week : null));
+    }).catch((e) => setError(e.message));
+  }, [leagueId]);
+  if (error) return <div className="px-4 py-3"><ErrorScreen message={error} /></div>;
+  if (!data) return <div className="px-4 py-6"><BootstrapScreen /></div>;
+  const wk = data.weekly.find((x) => x.week === week) || null;
+  const t = data.totals;
+  const th = "text-[10px] uppercase tracking-wide font-medium px-1.5 py-1 text-right";
+  const td = "text-xs px-1.5 py-1 text-right whitespace-nowrap";
+  return (
+    <div className="px-4 py-3 space-y-3" data-performance>
+      <div style={{ color: C.textMuted }} className="text-xs">
+        How your lineup and waiver decisions worked out against what the app suggested, in real points once a week's scores are in. Only lineup swaps and waiver claims are tracked. Each suggestion is judged by the latest one the app showed before the relevant kickoff.
+        {data.since ? ` History starts ${new Date(data.since).toLocaleDateString([], { month: "short", day: "numeric" })} — earlier weeks weren't recorded.` : ""}
+      </div>
+      {data.note && <div style={{ color: C.minor }} className="text-xs" data-perf-note>{data.note}</div>}
+      {data.leagues.length > 1 && (
+        <Select label="League" value={leagueId} onChange={setLeagueId} options={[{ value: "", label: "All leagues" }, ...data.leagues.map((l) => ({ value: l.id, label: l.name }))]} />
+      )}
+      {data.weekly.length > 0 && (
+        <>
+          <div>
+            <SectionLabel>Season so far</SectionLabel>
+            <div className="grid grid-cols-2 gap-2 pt-1.5 text-xs" data-perf-totals>
+              {[
+                ["Lineup swaps suggested", `${t.suggested} (you followed ${t.followed})`, null],
+                ["Went against the app", signed(t.ignoredEffect) + " pts", t.ignoredEffect],
+                ["Following the app gained", signed(t.followedGain) + " pts", t.followedGain],
+                ["App right (lineup)", t.appJudged ? `${t.appRight}/${t.appJudged} (${Math.round((100 * t.appRight) / t.appJudged)}%)` : "—", null],
+                ["Waiver pick-ups passed on", signed(t.waiverMissed) + " pts", t.waiverMissed ? -t.waiverMissed : 0],
+                ["Waiver claims you made", signed(t.waiverClaimed) + " pts", t.waiverClaimed],
+              ].map(([label, value, tone]) => (
+                <div key={label} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-2.5 py-2">
+                  <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">{label}</div>
+                  <div style={{ color: tone == null ? C.text : goodBad(tone) }} className="font-medium">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ color: C.textFaint }} className="text-[10px] pt-1">+ means the decision gained you points. "Went against the app" is what you started minus what the app suggested, summed over every swap you declined. Waiver figures are the suggested player's points since the week he was flagged minus the player you added or kept; "passed on" is shown from your point of view (negative = you left points on the wire).</div>
+          </div>
+          <div>
+            <SectionLabel>Trend by week (cumulative)</SectionLabel>
+            <div className="pt-1.5"><PerfTrend trend={data.trend} /></div>
+          </div>
+          <div>
+            <SectionLabel>Weekly report</SectionLabel>
+            <div className="flex gap-1.5 flex-wrap pt-1.5">
+              {data.weekly.map((w) => (
+                <button key={w.week} onClick={() => setWeek(w.week)} style={{ background: week === w.week ? C.brand : C.surfaceRaised, color: week === w.week ? C.text : C.textMuted }} className="text-xs rounded-md px-2.5 py-1">Wk {w.week}{w.scored ? "" : " ·"}</button>
+              ))}
+            </div>
+            {wk && (
+              <div className="space-y-2.5 pt-2" data-perf-week>
+                {!wk.scored && <div style={{ color: C.minor }} className="text-xs">Week {wk.week} hasn't been scored yet — results appear after the games finish and the app has pulled the final stats.</div>}
+                <div style={{ color: C.text }} className="text-xs">
+                  Lineup: {wk.lineup.suggested} swap{wk.lineup.suggested === 1 ? "" : "s"} suggested — followed {wk.lineup.followed}, declined {wk.lineup.ignored}.{" "}
+                  <span style={{ color: goodBad(wk.lineup.ignoredEffect) }}>Going against the app: {signed(wk.lineup.ignoredEffect)} pts.</span>{" "}
+                  {wk.lineup.appJudged ? `The app's pick outscored the player it replaced in ${wk.lineup.appRight} of ${wk.lineup.appJudged}.` : ""}
+                </div>
+                {wk.lineup.rows.length > 0 && (
+                  <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${C.border}` }}>
+                    <table className="w-full" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                      <thead style={{ background: C.surfaceRaised, color: C.textMuted }}>
+                        <tr>
+                          <th className={`${th} text-left`}>Slot</th>
+                          <th className={`${th} text-left`}>App suggested</th>
+                          <th className={`${th} text-left`}>Instead</th>
+                          <th className={th} title="Projected gap suggested minus replaced, when the app showed it">Proj gap</th>
+                          <th className={th} title="Actual gap suggested minus replaced">Actual gap</th>
+                          <th className={th} title="Points your decision gained (+) or lost (−) versus the app">You</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {wk.lineup.rows.map((r, i) => (
+                          <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                            <td className={`${td} text-left`} style={{ color: C.textMuted }}>{r.slot}{data.leagues.length > 1 ? ` · ${r.leagueName}` : ""}</td>
+                            <td className={`${td} text-left`}>{r.suggested.name} <span style={{ color: C.textFaint }}>{r.suggested.pts}</span></td>
+                            <td className={`${td} text-left`} style={{ color: C.textMuted }}>{r.followed ? <span style={{ color: C.ok }}>followed</span> : `${r.started ? r.started.name : "—"} ${r.started ? r.started.pts : ""}`}</td>
+                            <td className={td}>{signed(r.projGap)}</td>
+                            <td className={td} style={{ color: r.appRight == null ? C.textMuted : r.appRight ? C.ok : C.major }}>{signed(r.actualGap)}</td>
+                            <td className={td} style={{ color: goodBad(r.effect) }}>{signed(r.effect)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div style={{ color: C.text }} className="text-xs">
+                  Waivers: {wk.waiver.suggested} pick-up{wk.waiver.suggested === 1 ? "" : "s"} flagged this week — you claimed {wk.waiver.claimed}, passed on {wk.waiver.missed}.
+                </div>
+                {wk.waiver.rows.length > 0 && (
+                  <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${C.border}` }}>
+                    <table className="w-full" style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                      <thead style={{ background: C.surfaceRaised, color: C.textMuted }}>
+                        <tr>
+                          <th className={`${th} text-left`}>Flagged free agent</th>
+                          <th className={`${th} text-left`}>You</th>
+                          <th className={th} title="The free agent's points since the week he was flagged">His pts</th>
+                          <th className={th} title="Points of the player you added or kept, same weeks">Other pts</th>
+                          <th className={th} title="Free agent minus the other player">Diff</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {wk.waiver.rows.map((r, i) => (
+                          <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                            <td className={`${td} text-left`}>{r.suggested.name} <span style={{ color: C.textFaint }}>{r.suggested.pos}{data.leagues.length > 1 ? ` · ${r.leagueName}` : ""}</span></td>
+                            <td className={`${td} text-left`} style={{ color: C.textMuted }}>
+                              {r.followed ? <span style={{ color: C.ok }}>claimed</span> : r.altKind === "added" ? `added ${r.alt?.name || "someone else"}` : `kept ${r.alt?.name || "roster"}`}
+                              {r.claimsKnown === false && !r.followed ? " (transactions unavailable)" : ""}
+                            </td>
+                            <td className={td}>{r.suggestedPts}</td>
+                            <td className={td}>{r.altPts}</td>
+                            <td className={td} style={{ color: r.followed ? goodBad(r.diff) : goodBad(-r.diff) }}>{signed(r.diff)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{ color: C.textFaint }} className="text-[10px] px-1.5 py-1">Cumulative through week {data.lastScoredWeek}. Colour: green = your decision came out ahead.</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // v2.8: Analytics has two views — projection accuracy and matchup rankings.
 function AnalyticsScreen({ authUser, onDvpChange }) {
   const [view, setView] = useState("matchups");
@@ -3766,6 +3976,7 @@ function AnalyticsScreen({ authUser, onDvpChange }) {
         {[
           ["matchups", "Matchup rankings"],
           ["accuracy", "Projection accuracy"],
+          ["performance", "My performance"],
         ].map(([k, label]) => (
           <button
             key={k}
@@ -3777,7 +3988,7 @@ function AnalyticsScreen({ authUser, onDvpChange }) {
           </button>
         ))}
       </div>
-      {view === "accuracy" ? <AccuracyScreen authUser={authUser} /> : <MatchupRankings onDvpChange={onDvpChange} authUser={authUser} />}
+      {view === "accuracy" ? <AccuracyScreen authUser={authUser} /> : view === "performance" ? <PerformanceScreen /> : <MatchupRankings onDvpChange={onDvpChange} authUser={authUser} />}
     </div>
   );
 }
@@ -4675,15 +4886,11 @@ function PickCard({ g, onSeen, leverageOn, publicPct, onPublicPct, onChoose }) {
 }
 
 
-function CbsPushBar({ week }) {
-  const [st, setSt] = useState(null);
+function CbsPushBar({ week, st, reload }) {
   const [out, setOut] = useState(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  useEffect(() => {
-    api.getCbsStatus().then(setSt).catch(() => {});
-  }, [out]);
-  if (!st || !st.configured || !st.recipeReady) return null;
+  if (!st || !st.configured || !st.recipeReady || !(st.pools || []).length) return null;
   const run = async (dryRun) => {
     setBusy(true);
     try {
@@ -4693,24 +4900,48 @@ function CbsPushBar({ week }) {
     } finally {
       setBusy(false);
       setConfirming(false);
+      reload?.();
+    }
+  };
+  const setAuto = async (on) => {
+    setBusy(true);
+    try {
+      await api.saveCbsSettings({ enabled: on });
+    } catch (e) {
+      setOut({ ok: false, error: e.message });
+    } finally {
+      setBusy(false);
+      reload?.();
     }
   };
   const pools = (st.pools || []).filter((p) => p.enabled);
+  const autoOn = st.enabled && !st.paused;
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2 space-y-1.5 text-xs" data-cbs-bar>
-      <div style={{ color: C.text }} className="font-medium">CBS pick'em · {st.enabled && !st.paused ? "auto-push on" : st.paused ? "paused" : "auto-push off"}</div>
-      <div style={{ color: C.textMuted }}>Sends your picks (yours, or the recommendation where you haven't chosen) for games that haven't started to {st.verifiedOnce ? `${pools.length} pool${pools.length === 1 ? "" : "s"}` : "the test pool"}.</div>
+      <div className="flex items-center justify-between gap-2">
+        <div style={{ color: C.text }} className="font-medium">CBS pick'em · {autoOn ? "auto mode ON" : st.paused ? "paused" : "auto mode off — you pick"}</div>
+        <label className="flex items-center gap-1.5" style={{ color: C.textMuted }}>
+          Auto
+          <input type="checkbox" checked={st.enabled} disabled={busy} onChange={(e) => setAuto(e.target.checked)} data-cbs-auto-toggle />
+        </label>
+      </div>
+      {st.alert && <div style={{ color: C.minor }} data-cbs-alert>{st.alert.detail}</div>}
+      <div style={{ color: C.textMuted }}>
+        {autoOn
+          ? `Your picks (the recommendation where you haven't chosen) go to CBS about 60 minutes before each kickoff slot. Choosing a pick yourself turns auto mode off; so does changing a pick on CBS.`
+          : `Auto mode is off: choose your own picks below. "Push now" sends them (and the recommendation where you haven't chosen) for games that haven't started to ${st.verifiedOnce ? `${pools.length} pool${pools.length === 1 ? "" : "s"}` : "the test pool"}.`}
+      </div>
       {!confirming ? (
         <div className="flex gap-2">
-          <button type="button" disabled={busy} onClick={() => run(true)} style={{ color: C.text, border: `1px solid ${C.border}` }} className="rounded px-2.5 py-1" data-cbs-dry>Preview (sends nothing)</button>
+          <button type="button" disabled={busy} onClick={() => run(true)} style={{ color: C.text, border: `1px solid ${C.border}` }} className="rounded px-2.5 py-1" data-cbs-dry>Preview (reads CBS, sends nothing)</button>
           <button type="button" disabled={busy} onClick={() => setConfirming(true)} style={{ background: C.brand, color: "#fff" }} className="rounded px-2.5 py-1 font-medium" data-cbs-push>Push now…</button>
         </div>
       ) : (
-        <ConfirmPush title="Push picks to CBS?" lines={[`Week ${week}: every unstarted game with a pick`, `${st.verifiedOnce ? pools.map((p) => p.name).join(", ") : (pools.find((p) => p.id === st.testPoolId) || pools[0])?.name + " (test pool)"}`]} buttonLabel="Send to CBS" busy={busy} onConfirm={() => run(false)} onCancel={() => setConfirming(false)} />
+        <ConfirmPush title="Push picks to CBS?" lines={[`Week ${week}: every unstarted game with a pick (only picks that differ from CBS are sent)`, `${st.verifiedOnce ? pools.map((p) => p.name).join(", ") : (pools.find((p) => p.id === st.testPoolId) || pools[0])?.name + " (test pool)"}`]} buttonLabel="Send to CBS" busy={busy} onConfirm={() => run(false)} onCancel={() => setConfirming(false)} />
       )}
       {out && (
         <div style={{ color: out.ok ? C.ok : C.major }} data-cbs-result>
-          {out.error ? out.error : out.dryRun ? `Preview: ${out.games.length} game(s) would be sent to ${out.requests.length} pool(s); nothing was sent.` : out.nothing ? out.detail : (out.results || []).map((r) => `${r.pool}: ${r.ok ? "ok" : "FAILED"} — ${r.detail}`).join(" | ")}
+          {out.error ? out.error : out.dryRun ? (out.native ? out.pools.map((q) => `${q.name}: ${q.toSave.length} pick(s) would change on CBS (${q.unchanged} already match${q.unmatched?.length ? `, not found on CBS: ${q.unmatched.join(", ")}` : ""}${q.tiebreaker != null ? `, tiebreaker ${q.tiebreaker}` : ""}); nothing was sent.`).join(" | ") : `Preview: ${out.games.length} game(s) would be sent to ${out.requests.length} pool(s); nothing was sent.`) : out.nothing ? out.detail : (out.results || []).map((r) => `${r.pool}: ${r.ok ? "ok" : "FAILED"} — ${r.detail}`).join(" | ")}
         </div>
       )}
     </div>
@@ -4721,6 +4952,12 @@ function PickemScreen({ onChangedCount }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [cbsSt, setCbsSt] = useState(null);
+  const [pendingChoice, setPendingChoice] = useState(null); // v3.3: a manual pick made while CBS auto mode is on
+  const loadCbs = useCallback(() => api.getCbsStatus().then(setCbsSt).catch(() => {}), []);
+  useEffect(() => {
+    loadCbs();
+  }, [loadCbs]);
   const load = useCallback(() => {
     api.getPickem().then((d) => {
       setData(d);
@@ -4741,9 +4978,21 @@ function PickemScreen({ onChangedCount }) {
     await api.markPickemSeen(data.season, data.week, gameKey);
     load();
   };
-  const choose = async (gameKey, pick) => {
+  const applyChoice = async (gameKey, pick) => {
     await api.savePickemChoice({ season: data.season, week: data.week, gameKey, pick });
     load();
+  };
+  const choose = async (gameKey, pick) => {
+    // Making a manual pick while auto mode is on needs confirmation, and turns auto mode off.
+    if (cbsSt?.configured && cbsSt.enabled && !cbsSt.paused) return setPendingChoice({ gameKey, pick });
+    return applyChoice(gameKey, pick);
+  };
+  const confirmChoice = async () => {
+    const pc = pendingChoice;
+    setPendingChoice(null);
+    await api.saveCbsSettings({ enabled: false }).catch(() => {});
+    await applyChoice(pc.gameKey, pc.pick);
+    loadCbs();
   };
   const setTiebreaker = async (v) => {
     await api.savePickemChoice({ season: data.season, week: data.week, tiebreaker: v });
@@ -4814,7 +5063,16 @@ function PickemScreen({ onChangedCount }) {
           <input type="number" min="0" max="200" defaultValue={data.choices?.tiebreaker ?? ""} placeholder={data.tiebreaker ? String(data.tiebreaker.total) : ""} onBlur={(e) => setTiebreaker(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="rounded px-2 py-0.5 w-16" data-pick-tiebreaker />
         </label>
       </div>
-      <CbsPushBar week={data.week} />
+      {pendingChoice && (
+        <ConfirmPush
+          title="Turn off CBS auto mode?"
+          lines={["Choosing a pick yourself switches auto mode off.", "Nothing will be sent to CBS automatically until you turn it back on (or press Push now)."]}
+          buttonLabel="Turn off and use my pick"
+          onConfirm={confirmChoice}
+          onCancel={() => setPendingChoice(null)}
+        />
+      )}
+      <CbsPushBar week={data.week} st={cbsSt} reload={loadCbs} />
       <div style={{ color: C.textFaint }} className="text-[10px] px-1">
         {data.gemini.configured ? (data.gemini.at ? `Article scan (Gemini) ${new Date(data.gemini.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "Article scan pending") : "Article scan off — set GEMINI_API_KEY to add upset mentions and game notes"}
       </div>

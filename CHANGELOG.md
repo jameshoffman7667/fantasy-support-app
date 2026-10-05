@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,35 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.3 — native CBS auto mode, My performance, fewer API calls
+
+**Commit (short):** `v3.3: feat: CBS auto mode, performance, caching`
+
+**Commit (extended):**
+v3.3 replaces the CBS recipe with a native adapter: sign-in, read the
+pool's games and picks, and save only the changed picks, with the save
+reply used as the read-back. Auto mode still sends once, 60 minutes
+before each kickoff slot; it switches itself off if you change a pick
+on CBS, and a manual pick in the app asks first. Analytics gains "My
+performance": lineup swaps and waiver flags judged against actual points,
+weekly and cumulative. Player-card source tags use the Analytics
+colours. API calls drop sharply through one central Sleeper cache,
+Tue/Wed/Thu week pulls, slower projection pulls with 3-hour and
+60-minute pre-kickoff refreshes, 6-hour trade-offer snapshots, shared
+live Game Day polling, and no rebuilds for inactive users or off-season.
+The client image now builds natively with per-image caching. CBS sign-in
+and several details remain unverified against the live site.
+
+**Details**
+- CBS: `server/cbsNative.js` (new), `server/cbs.js` (native engine, watchTick, alerts); recipe engine kept under Advanced. Auto-off detection, confirm pop-up, Preview, test login reporting cookie names only.
+- Performance: `server/performance.js`, `GET /api/performance`, Analytics "My performance" tab. History starts at the first build with this.
+- Reductions: R1, R3, R5, R6, R10-R25 as listed in spec section 8.2l (R2, R4, R7, R8, R9, R26, R27 unchanged or superseded). Note: R1 (5-minute own rosters/matchups cache) overlaps R27; R1 was answered yes later and is what is built.
+- Trade news (Gemini) no longer runs when the Trades page opens; the existing button runs it.
+- Build: client `--platform=$BUILDPLATFORM`; per-image gha cache; timeout 40 min; package versions 0.0.0. Server arm64 still builds under QEMU.
+- Tests: mock-CBS native and recipe tests, performance tests, reduction tests, earlier server regressions, 187 browser checks, all passing. Not run here: vite build (npm blocked), live CBS/Sleeper.
 
 ---
 

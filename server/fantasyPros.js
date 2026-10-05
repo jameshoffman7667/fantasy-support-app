@@ -15,7 +15,7 @@ const FP_BASE = process.env.FANTASYPROS_BASE_URL || "https://api.fantasypros.com
 // asking. Cached in SQLite (via db.js), not just in memory, so a
 // container restart doesn't immediately re-spend quota re-fetching
 // something it already had five minutes ago.
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min: long enough to matter for quota, short enough that news during the day still shows up within a reasonable window
+const CACHE_TTL_MS = 60 * 60 * 1000; // v3.3 (R10): 60 min (was 10)
 
 async function fpFetch(path, { retries = 2 } = {}) {
   const cacheKey = `fp:${path}`;

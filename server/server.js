@@ -29,6 +29,7 @@ import * as backfill from "./backfill.js";
 import * as gameday from "./gameday.js";
 import * as pickem from "./pickem.js";
 import * as cbs from "./cbs.js";
+import * as performance from "./performance.js";
 import * as dvp from "./dvp.js";
 import * as weather from "./weather.js";
 import { getImage } from "./images.js";
@@ -257,7 +258,7 @@ app.post("/api/admin/users", requireOwner, async (req, res) => {
     // Sleeper by this username, so a typo would just be a dead account). A Sleeper
     // outage shouldn't block adding someone, so only a definite "no such user" stops it.
     try {
-      const sleeperUser = await sleeper.getUser(username);
+      const sleeperUser = await sleeper.getUser(username, { fresh: true });
       if (!sleeperUser) return res.status(404).json({ error: `No Sleeper account named "${username}" — check the spelling.` });
     } catch {
       console.warn(`[admin] Couldn't verify "${username}" against Sleeper (network issue) — adding the account anyway.`);
@@ -347,10 +348,10 @@ app.use("/api/trade", requireAuth);
 app.get("/api/connect", async (req, res) => {
   const username = req.user.username;
   try {
-    const user = await sleeper.getUser(username);
+    const user = await sleeper.getUser(username, { fresh: true }); // R14: login/reconnect is when the id is looked up
     if (!user) return res.status(404).json({ error: `No Sleeper user found named "${username}".` });
     const state = await sleeper.getState();
-    const leaguesRaw = await sleeper.getUserLeagues(user.user_id, state.season);
+    const leaguesRaw = await sleeper.getUserLeagues(user.user_id, state.season, { fresh: true });
     if (leaguesRaw.length === 0) {
       return res.status(404).json({ error: "That account has no leagues for the current season." });
     }
@@ -416,6 +417,7 @@ app.post("/api/leagues/build", async (req, res) => {
         const league = await buildFullLeague(session.userId, leagueSummary, session.week, trending, session.builtLeagues);
         built.push(league);
         setBuiltLeague(req.user.username, leagueSummary.league_id, league);
+        performance.record(req.user.username, league); // v3.3
       } catch (err) {
         // A live build failing doesn't have to mean an empty screen —
         // if the background scheduler (or a previous successful build)
@@ -561,7 +563,7 @@ app.post("/api/private/claim/cancel", async (req, res) => {
 
 /* ---------------- Trade advice (v2.9): Gemini news check on Trade Finder swaps ---------------- */
 app.post("/api/trade/advice", async (req, res) => {
-  const { sessionId, leagueId, force } = req.body || {};
+  const { sessionId, leagueId, force, cacheOnly } = req.body || {};
   const session = ownSession(req, res, sessionId);
   if (!session) return;
   const lg = (session.builtLeagues || []).find((l) => l.id === leagueId);
@@ -573,7 +575,7 @@ app.post("/api/trade/advice", async (req, res) => {
     get: { name: t.get.name, pos: t.get.pos },
   }));
   try {
-    const out = await gemini.tradeNews(lg.season || new Date().getFullYear(), lg.week, items, { force: Boolean(force) });
+    const out = await gemini.tradeNews(lg.season || new Date().getFullYear(), lg.week, items, { force: Boolean(force), cacheOnly: Boolean(cacheOnly) });
     res.json({ configured: true, at: out?.at ?? null, byKey: out?.byKey ?? {}, sources: out?.sources ?? [] });
   } catch (err) {
     res.json({ configured: true, error: err.message, byKey: {}, sources: [] });
@@ -708,6 +710,17 @@ app.post("/api/pickem/choice", async (req, res) => {
     res.json(pickem.saveChoice(req.user.username, season, week, req.body || {}));
   } catch (e) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+/* ---------------- My performance (v3.3) ---------------- */
+app.get("/api/performance", requireAuth, async (req, res) => {
+  try {
+    const st = await sleeper.getState();
+    res.json(await performance.report(req.user.username, { season: Number(req.query.season) || Number(st.season), leagueId: req.query.leagueId || null }));
+  } catch (err) {
+    console.error("[performance] failed:", err);
+    res.status(502).json({ error: err.message || "Couldn't build the performance report." });
   }
 });
 

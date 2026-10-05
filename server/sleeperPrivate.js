@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import db from "./db.js";
 import * as store from "./projectionStore.js";
+import * as sleeperPublic from "./sleeper.js";
 
 /**
  * v3.0 — Sleeper's PRIVATE (undocumented) GraphQL API, server-side only.
@@ -223,6 +224,8 @@ function guardWrite(username, confirm, group) {
 }
 async function doWrite(username, leagueId, action, request, fn) {
   try {
+    store.setState(`priv_dirty:${username}:${leagueId}`, Date.now()); // v3.3 (R24): trade/claim snapshot is now out of date
+    sleeperPublic.noteWrite(leagueId); // v3.3 (R1): the 5-minute rosters/matchups cache is skipped for 15 minutes after any push
     const out = await fn();
     audit(username, leagueId, action, request, out.ok !== false, out.detail || "");
     return out;

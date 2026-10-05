@@ -37,7 +37,7 @@ import { normalizeName } from "./matching.js";
  * server logs.
  */
 const SEASON_BASE = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons";
-const CACHE_TTL_MS = 60 * 60 * 1000; // projections move during the week (injuries, news) — hourly is plenty
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // v3.3 (R23): 6-hour baseline; the scheduler force-refreshes 3 hours and 60 minutes before each kickoff slot
 const STAT_RECEPTIONS = "53";
 const STAT_PASS_TD = "4";
 const ESPN_DEFAULT_PASS_TD = 4;

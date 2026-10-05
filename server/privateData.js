@@ -100,8 +100,13 @@ export function summarizeLog(row) {
   return { id: String(row.log_id), at: row.created ?? null, type: row.event_type || null, text: text.slice(0, 400) };
 }
 
-async function fetchLeague(username, lg, ctx) {
-  const info = { at: Date.now() };
+const TX_SNAPSHOT_MS = 6 * 3600 * 1000; // R24: trade offers + pending claims are re-read from Sleeper every 6 hours
+const LOG_SNAPSHOT_MS = WEEK_MS; // R25: the league change log weekly
+export const dirtyKey = (username, leagueId) => `priv_dirty:${username}:${leagueId}`;
+
+async function fetchLeague(username, lg, ctx, prev = null) {
+  const now = Date.now();
+  const info = { at: now };
   const tasks = [];
   const roster = (lg.leagueTeams || []).reduce((m, t) => ((m[t.rosterId] = t.label), m), {});
   const players = ctx.players || {};
@@ -110,20 +115,42 @@ async function fetchLeague(username, lg, ctx) {
     return m ? { name: `${m.first_name || ""} ${m.last_name || ""}`.trim() || pid, pos: m.position || "?", team: m.team || null } : {};
   };
   const leg = lg.week;
-  tasks.push(
-    priv.getProposedTrades(username, lg.id, leg).then(
-      (rows) => (info.trades = { ...classifyTrades(rows, { myRosterId: lg.myRosterId, myUserId: lg.ownerId, seasonType: ctx.seasonType, teamKickoff: ctx.teamKickoff, playerInfo, rosterLabel: (r) => roster[r] || (r != null ? `Team ${r}` : null) }), legChecked: leg }),
-      (e) => (info.trades = { incoming: [], outgoing: [], error: e.message })
-    ),
-    priv.getEventLogs(username, lg.id).then(
-      (rows) => (info.log = { items: rows.map(summarizeLog) }),
-      (e) => (info.log = { items: [], error: e.message })
-    ),
-    priv.getPendingClaims(username, lg.id, leg, lg.myRosterId).then(
-      (r) => (info.claims = { pending: r.claims.map((c) => ({ id: String(c.transaction_id), adds: Object.keys(c.adds || {}), drops: Object.keys(c.drops || {}), bid: c.settings?.waiver_bid ?? null, status: c.status })), statuses: r.statuses }),
-      (e) => (info.claims = { pending: [], statuses: [], error: e.message })
-    )
-  );
+  const classify = (rows) => ({ ...classifyTrades(rows, { myRosterId: lg.myRosterId, myUserId: lg.ownerId, seasonType: ctx.seasonType, teamKickoff: ctx.teamKickoff, playerInfo, rosterLabel: (r) => roster[r] || (r != null ? `Team ${r}` : null) }), legChecked: leg });
+  const dirty = store.getState(dirtyKey(username, lg.id), 0) || 0; // a push of yours makes the snapshot out of date
+  const txFresh = prev && prev.rawTrades && prev.claims && !prev.claims.error && prev.legChecked === leg && prev.txAt && now - prev.txAt < TX_SNAPSHOT_MS && dirty <= prev.txAt;
+  if (txFresh) {
+    // Snapshot reused; the red "stale" flag depends on today's date and kickoffs, so it is recomputed on every page load.
+    info.rawTrades = prev.rawTrades;
+    info.trades = classify(prev.rawTrades);
+    info.claims = prev.claims;
+    info.txAt = prev.txAt;
+    info.legChecked = leg;
+  } else {
+    info.txAt = now;
+    info.legChecked = leg;
+    tasks.push(
+      priv.getProposedTrades(username, lg.id, leg).then(
+        (rows) => { info.rawTrades = rows; info.trades = classify(rows); },
+        (e) => { info.txAt = 0; info.trades = { incoming: [], outgoing: [], error: e.message }; }
+      ),
+      priv.getPendingClaims(username, lg.id, leg, lg.myRosterId).then(
+        (r) => (info.claims = { pending: r.claims.map((c) => ({ id: String(c.transaction_id), adds: Object.keys(c.adds || {}), drops: Object.keys(c.drops || {}), bid: c.settings?.waiver_bid ?? null, status: c.status })), statuses: r.statuses }),
+        (e) => { info.txAt = 0; info.claims = { pending: [], statuses: [], error: e.message }; }
+      )
+    );
+  }
+  if (prev && prev.log && !prev.log.error && prev.logAt && now - prev.logAt < LOG_SNAPSHOT_MS) {
+    info.log = prev.log;
+    info.logAt = prev.logAt;
+  } else {
+    info.logAt = now;
+    tasks.push(
+      priv.getEventLogs(username, lg.id).then(
+        (rows) => (info.log = { items: rows.map(summarizeLog) }),
+        (e) => { info.logAt = 0; info.log = { items: [], error: e.message }; }
+      )
+    );
+  }
   await Promise.all(tasks);
   return info;
 }
@@ -145,7 +172,7 @@ export async function attach(username, leagues, { live = false } = {}) {
       if (l.error) return l;
       let info;
       if (live) {
-        info = await fetchLeague(username, l, ctx);
+        info = await fetchLeague(username, l, ctx, store.getState(snapKey(username, l.id), null));
         store.setState(snapKey(username, l.id), info);
       } else {
         info = store.getState(snapKey(username, l.id), null) || { empty: true };
