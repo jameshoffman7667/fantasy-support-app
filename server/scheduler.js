@@ -12,6 +12,7 @@ import * as cbs from "./cbs.js";
 import * as performance from "./performance.js";
 import * as gameday from "./gameday.js"; // v3.5: Game Day baselines before the week's first kickoff
 import * as faabDb from "./faabDb.js"; // v3.7: opponent bid collection 2 h before each league's waivers
+import * as commish from "./commish.js"; // v3.8: charters re-read each July
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -240,6 +241,11 @@ export function startScheduler() {
     const users = getAllUserStates().filter((st) => getUser(st.username)?.active && st.leagueIds?.length && !isInactive(getUser(st.username), st)).map((st) => st.username);
     faabDb.tick({ users }).catch((err) => console.warn(`[scheduler] FAAB collection check failed: ${err.message}`));
   }, 10 * 60 * 1000);
+  // v3.8: each July, linked charters are downloaded again and re-read by Gemini only if they changed (one Gemini read a day).
+  setInterval(() => {
+    const users = getAllUserStates().filter((st) => getUser(st.username)?.active).map((st) => st.username);
+    commish.julyTick({ users }).catch((err) => console.warn(`[scheduler] Charter re-read failed: ${err.message}`));
+  }, 6 * 60 * 60 * 1000);
 }
 
 export { preKickoffCheck as _preKickoffCheckForTests };

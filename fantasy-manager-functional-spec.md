@@ -153,6 +153,7 @@ instead of a colored status badge.
 - Tapping a **status indicator** next to a league → deep-links directly into that sub-tab for that league.
 - **Breadcrumb header** on every screen: `Sleeper username > League Name > Sub-tab name`. Every level but the current one is clickable — this replaced an earlier back-button-only pattern. (v3.5: the Sleeper photo and name at the top left open the user menu — My leagues, League management, Enable alerts, Account settings, Log out.)
 - **Player card (v3.5):** tapping a player's photo or name anywhere opens his card (Section 8.2n).
+- **Bottom tabs (v3.8):** League Management, Game Day, Pick'em, Analytics and Commish (Section 8.2q).
 - **Browser back/forward buttons work** — real `history.pushState`/`popstate` integration, not just an in-app control.
 - **Week selector** in the header (available on the dashboard, league overview, and every tab) — changing it rebuilds every tracked league for that week (fresh roster-for-week + projections/ECR for that week).
 
@@ -513,6 +514,26 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2q v3.8 — Commish (charters) and best ball
+
+**Commish tab.** A fifth bottom tab (after Analytics) with two sub-tabs, Charters and Best Ball. A red dot on the tab means some charter has an action due within a week.
+
+**Charters.** One charter per league, for any of the user's Sleeper leagues this season (the picker lists commissioner leagues first, marked ★, from Sleeper's `is_owner`). Source: a Google Docs / Drive link shared "Anyone with the link can view" (preferred; read only — the app never writes to the document) or an uploaded PDF, Word (.docx), text or Markdown file up to 10 MB. Gemini reads the charter when it is added and returns a short summary and a checklist of commissioner actions for the next 12 months: title, description, due date, yearly or one-off, and — when the action changes one of a fixed list of Sleeper settings (FAAB budget, adds locked, trade deadline, playoff start, playoff teams, waiver type, daily waivers, keepers, taxi slots, IR slots, draft rounds) — that setting and its new value. Without a Gemini key, charters are stored and actions are entered by hand.
+
+**Actions.** Editable (title, details, due date, every year), addable, deletable and tickable; done ones are listed collapsed. A ticked yearly action creates next year's copy. An open action tied to a setting ticks itself ("seen in the settings log") when the League page's settings change log shows that setting changing — to the stated value, if any — from 60 days before its due date. Re-reading the charter replaces only the open actions that came from it.
+
+**Status.** Red: an open action due within 7 days or overdue. Yellow: due within 30 days. Otherwise no colour. Each charter card shows the next due date with every action due that day, open and overdue counts, proposed rule changes and read problems; cards are sorted by next due date. A tracked league with a charter shows a "Commish" badge on its dashboard card in the same colours, opening the charter.
+
+**Rule changes.** Recorded as proposed, then approved or rejected (undoable), or deleted. With approved changes, Gemini drafts the updated charter in Markdown (affected sections changed in place, a dated "Changes" section at the end); the commissioner edits it, copies it into the document, then accepts it (the changes become "written into the charter") or discards it. Until the document itself changes, a further draft builds on the last accepted text.
+
+**Re-reading and seasons.** "Read again" on demand. Each July every linked charter is downloaded once; Gemini reads it again only if it changed, at most one Gemini read per day across users. Uploaded files are re-read only on demand. When a league renews (the new league's `previous_league_id` is the old one) its charter moves to the new league.
+
+**Best Ball.** A card per best ball league of the user's this season, opening a leaderboard of every team: rank, team name, username, avatar, total, payout for paid places. Default stat: Max points for (Sleeper's season `ppts`); alternatively Points for. Settings per league: combine up to 5 other best ball leagues into one leaderboard; hero multiplier (1–10×) with a hero player chosen per team from his roster; weeks from/to; entry fee and payouts by place as % of the pot (pot = entry fee × teams). With a hero or week rule, totals are recomputed week by week from Sleeper's matchups: the hero's points multiplied, then the best possible lineup for the league's starting slots found exactly, summed over the weeks; the hero bonus shows on the row. Rules can be written in plain words; Gemini turns them into these fields for the commissioner to check and save.
+
+**Evidence export.** A CSV with every team's counted lineup per week (league, week, team, username, slot, player, id, position, points, multiplier, counted, final / current week), then one line per team with the sum of its counted slots, Sleeper's figure and the leaderboard value.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -657,3 +678,10 @@ Collected here since they cut across multiple sections:
 85. **Add / drop lists (v3.7):** add = top 10 per position, contains search, "Name (QB - DAL)", sorted by weekly projection; drop = Auto (default), None, then bench lowest projection first.
 86. **League-type waivers (v3.7):** dynasty value/age/stashes vs rest-of-season points.
 87. **Waiver time (v3.7):** read from league settings as an estimate, editable per league.
+88. **Commish tab (v3.8):** a fifth bottom tab holding Charters and Best Ball.
+89. **Charter sources (v3.8):** Google link sharing preferred (read only), upload as the alternative; any of the user's Sleeper leagues, commissioner leagues listed first.
+90. **Charter reading (v3.8):** Gemini reads on add; links re-read each July only when changed; actions repeat yearly; charters follow the league into the next season.
+91. **Auto-tick (v3.8):** setting-linked actions tick themselves from the League page's settings change log.
+92. **Charter status (v3.8):** yellow when an action is due within a month, red within a week; card shows the next date and every action due that day; the same colours on the league's dashboard "Commish" box.
+93. **Charter updates (v3.8):** Gemini drafts Markdown from approved rule changes to accept, modify or reject; the user pastes it back into the document.
+94. **Best ball leaderboards (v3.8):** Max PF by default with usernames, pot and payouts; optional combined leagues, hero multipliers and week ranges; rules entered in plain words via Gemini; the data behind every total exportable as CSV evidence.

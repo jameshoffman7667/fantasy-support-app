@@ -7,7 +7,10 @@ import { C, STATUS } from "../ui/theme.js";
 /* ------------------------------------------------------------------ */
 /*  SCREENS                                                            */
 /* ------------------------------------------------------------------ */
-export function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, onOpenAccuracy, sleeperUser, onOpenVariances }) {
+// v3.8: a league with a charter gets a "Commish" box — red when an action is due within a week, yellow within a month.
+const COMMISH_STATUS = { red: "major", yellow: "minor", ok: "ok" };
+
+export function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, onOpenAccuracy, sleeperUser, onOpenVariances, commishSummary = {}, onOpenCommish }) {
   const allVariances = computed.flatMap((lg) => lg.variances || []);
   return (
     <div className="px-4 py-3">
@@ -41,10 +44,11 @@ export function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditL
               )}
             </div>
             {!lg.error && (
-              <div className="flex items-center gap-1 flex-nowrap overflow-x-auto px-4 pb-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.border}` }} data-badge-row={lg.id}>
+              <div className="flex items-center gap-[3px] flex-wrap px-3 pb-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.border}` }} data-badge-row={lg.id}>
                 {STATUS_BADGE_TABS.map((key) => (
                   <StatusBadge key={key} status={lg[key].status} label={TAB_META[key].short} compact onClick={() => onOpenTab(lg.id, key)} />
                 ))}
+                {commishSummary[lg.id] && <StatusBadge status={COMMISH_STATUS[commishSummary[lg.id].status] || "ok"} label="Commish" compact onClick={() => onOpenCommish?.(lg.id)} />}
               </div>
             )}
           </div>

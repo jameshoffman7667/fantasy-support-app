@@ -3,6 +3,7 @@ import { PAGE_LABEL, applyAcks, autoClearKeys, collectVariances } from "./varian
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccountScreen, AdminScreen, ForcePasswordScreen, LoginScreen } from "./pages/Account.jsx";
 import { AnalyticsScreen } from "./pages/Analytics.jsx";
+import { CommishScreen } from "./pages/Commish.jsx"; // v3.8
 import { Dashboard, LeagueOverview, SelectLeaguesScreen } from "./pages/Dashboard.jsx";
 import { GameDayScreen } from "./pages/GameDay.jsx";
 import { InjuryTab } from "./pages/InjuryPage.jsx";
@@ -406,6 +407,21 @@ export default function App() {
     return () => clearInterval(id);
   }, [authUser]);
 
+  // v3.8: charter status per league (the "Commish" box on league cards and the tab's red dot).
+  const [commishSummary, setCommishSummary] = useState({});
+  const loadCommishSummary = useCallback(() => {
+    api.getCommishSummary().then((r) => setCommishSummary(r.byLeague || {})).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!authUser || authUser.mustChangePassword) return undefined;
+    loadCommishSummary();
+    const id = setInterval(loadCommishSummary, 60 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [authUser, loadCommishSummary]);
+  useEffect(() => {
+    if (view.screen === "dashboard" && authUser && !authUser.mustChangePassword) loadCommishSummary();
+  }, [view.screen, authUser, loadCommishSummary]);
+
   // v2.8.1: load cleared variances; after each build, drop clears for issues
   // that have gone away (so if one comes back it's new again).
   useEffect(() => {
@@ -521,6 +537,7 @@ export default function App() {
     if (view.screen === "analytics") return [{ label: "Analytics" }];
     if (view.screen === "gameday") return [{ label: "Game Day" }];
     if (view.screen === "pickem") return [{ label: "Pick'em" }];
+    if (view.screen === "commish") return [{ label: "Commish" }];
     if (view.screen === "admin") return [root, { label: "Account", onClick: () => navigate({ screen: "account" }) }, { label: "Manage users" }];
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
     if (view.screen === "dashboard") return [{ label: root.label, root: true }];
@@ -568,11 +585,12 @@ export default function App() {
       />
       {authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange"].includes(view.screen) && (
         <TabBar
-          active={["gameday", "analytics", "pickem"].includes(view.screen) ? view.screen : "leagues"}
-          dots={{ pickem: pickemChanged > 0 }}
+          active={["gameday", "analytics", "pickem", "commish"].includes(view.screen) ? view.screen : "leagues"}
+          dots={{ pickem: pickemChanged > 0, commish: Object.values(commishSummary).some((x) => x.status === "red") }}
           onSelect={(tab) => {
             if (tab === "gameday") navigate({ screen: "gameday" });
             else if (tab === "pickem") navigate({ screen: "pickem" });
+            else if (tab === "commish") navigate({ screen: "commish" });
             else if (tab === "analytics") navigate({ screen: "analytics" });
             else navigate(liveLeagues.length ? { screen: "dashboard" } : { screen: "select" });
           }}
@@ -592,12 +610,15 @@ export default function App() {
           onOpenAccount={() => navigate({ screen: "account" })}
           sleeperUser={sleeperUser}
           onOpenVariances={openVariances}
+          commishSummary={commishSummary}
+          onOpenCommish={(id) => navigate({ screen: "commish", commishLeagueId: id })}
         />
       )}
       {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
       {view.screen === "analytics" && <AnalyticsScreen authUser={authUser} onDvpChange={() => setDvpVersion((v) => v + 1)} />}
       {view.screen === "gameday" && <GameDayScreen />}
       {view.screen === "pickem" && <PickemScreen onChangedCount={setPickemChanged} />}
+      {view.screen === "commish" && <CommishScreen key={view.commishLeagueId || "all"} initialLeagueId={view.commishLeagueId || null} onSummaryChange={loadCommishSummary} />}
       {view.screen === "account" && <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />}
       {view.screen === "admin" && authUser?.role === "owner" && <AdminScreen authUser={authUser} />}
       {view.screen === "select" && (

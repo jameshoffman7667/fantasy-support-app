@@ -110,6 +110,11 @@ export function getMatchups(leagueId, week, opts = {}) {
   return cached(`sl:matchups:${leagueId}:${week}`, TTL.matchups, () => sleeperFetch(`/league/${leagueId}/matchups/${week}`), { fresh });
 }
 
+// v3.8: one week's matchups for best ball leaderboards — finished weeks are kept 30 days, the current one 10 minutes.
+export function getMatchupsWeek(leagueId, week, { settled = false } = {}) {
+  return cached(`sl:bbm:${leagueId}:${week}`, settled ? TTL.season : 10 * MIN, () => sleeperFetch(`/league/${leagueId}/matchups/${week}`));
+}
+
 // R5: Game Day looks at the scoreboard while games are live. One shared in-memory answer per league
 // (max `maxAgeMs` old, concurrent callers share one request), so ten viewers cost the same as one.
 const liveMatchups = new Map();

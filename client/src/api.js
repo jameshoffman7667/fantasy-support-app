@@ -289,3 +289,51 @@ export function collectFaab(leagueId) {
 export function simulateWaivers(leagueId, claims, openSpots) {
   return jsonPost("/api/faab/simulate", { leagueId, claims, openSpots });
 }
+
+/* ---------------- v3.8: Commish (charters) and best ball ---------------- */
+export function getCommish() {
+  return request("/api/commish");
+}
+export function getCommishSummary() {
+  return request("/api/commish/summary");
+}
+export function getCharter(leagueId) {
+  return request(`/api/commish/charter?leagueId=${encodeURIComponent(leagueId)}`);
+}
+export function setCharterLink(leagueId, link) {
+  return jsonPost("/api/commish/charter/link", { leagueId, link });
+}
+export function uploadCharter(leagueId, { name, mime, base64 }) {
+  return jsonPost("/api/commish/charter/upload", { leagueId, name, mime, base64 });
+}
+export function rereadCharter(leagueId, force = true) {
+  return jsonPost("/api/commish/charter/reread", { leagueId, force });
+}
+export function saveCharterActions(leagueId, actions) {
+  return jsonPost("/api/commish/charter/actions", { leagueId, actions });
+}
+export function saveCharterRules(leagueId, ruleChanges) {
+  return jsonPost("/api/commish/charter/rules", { leagueId, ruleChanges });
+}
+export function draftCharter(leagueId) {
+  return jsonPost("/api/commish/charter/draft", { leagueId });
+}
+export function resolveCharterDraft(leagueId, accept, markdown = null) {
+  return jsonPost("/api/commish/charter/draft/resolve", { leagueId, accept, markdown });
+}
+export function deleteCharter(leagueId) {
+  return jsonPost("/api/commish/charter/delete", { leagueId });
+}
+export function getBestBall() {
+  return request("/api/bestball");
+}
+export function getBestBallBoard(leagueId) {
+  return request(`/api/bestball/board?leagueId=${encodeURIComponent(leagueId)}`);
+}
+export function saveBestBall(leagueId, patch) {
+  return jsonPost("/api/bestball/settings", { leagueId, ...patch });
+}
+export function parseBestBallRules(leagueId, prompt) {
+  return jsonPost("/api/bestball/parse", { leagueId, prompt });
+}
+export const bestBallCsvUrl = (leagueId) => `/api/bestball/evidence.csv?leagueId=${encodeURIComponent(leagueId)}`;

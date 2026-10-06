@@ -203,3 +203,105 @@ Reply with ONLY a JSON array, no prose: [{"key":"<the key before the colon>","fl
   cacheSet(cacheKey, out, TRADE_TTL);
   return out;
 }
+
+/* ---------------- v3.8: Commish (charters) and best ball rules ---------------- */
+/**
+ * Plain generation (no web search). `parts` = Gemini content parts (text and/or inline PDF). With `json`, asks for a
+ * JSON reply. Returns the reply text. Same key and model as everything else here; UNVERIFIED from the sandbox.
+ */
+async function generate(parts, { json = false } = {}) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
+    body: JSON.stringify({ contents: [{ role: "user", parts }], ...(json ? { generationConfig: { responseMimeType: "application/json" } } : {}) }),
+  });
+  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const body = await res.json();
+  return (body?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("\n");
+}
+function parseJsonLoose(text) {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const raw = fenced ? fenced[1] : text.slice(Math.min(...["{", "["].map((c) => (text.indexOf(c) < 0 ? Infinity : text.indexOf(c)))), Math.max(text.lastIndexOf("}"), text.lastIndexOf("]")) + 1);
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+}
+const docParts = (text, pdfBase64) => (pdfBase64 ? [{ inline_data: { mime_type: "application/pdf", data: pdfBase64 } }] : [{ text: `CHARTER:\n${String(text || "").slice(0, 120000)}` }]);
+export const CHARTER_SETTINGS = ["waiver_budget", "disable_adds", "trade_deadline", "playoff_week_start", "playoff_teams", "waiver_type", "daily_waivers", "max_keepers", "taxi_slots", "reserve_slots", "draft_rounds"];
+
+/**
+ * A commissioner's checklist from a league charter: dated actions for the next 12 months.
+ * Returns { summary, actions: [{ title, description, due: "YYYY-MM-DD", repeat: "yearly"|null, setting|null, value|null }] }.
+ */
+export async function charterChecklist({ leagueName, season, today, text, pdfBase64 }) {
+  if (!isConfigured()) throw new Error("No Gemini key set (GEMINI_API_KEY).");
+  const prompt = `You help the commissioner of a Sleeper fantasy football league ("${leagueName}", ${season} season) run it by the league's charter.
+Today is ${today}. Read the charter and list every recurring or one-off ACTION the commissioner must take in the next 12 months — for example: reset FAAB budgets, collect dues, pay out winnings, lock/unlock waivers or adds, set or check the trade deadline, keeper/taxi deadlines, roster compliance checks, schedule the draft, run polls on proposed rule changes.
+For each action give: a short title (max 60 characters), a description (max 200 characters, quoting the charter's rule when useful), a due date as YYYY-MM-DD (the next time it is due after today; estimate from NFL calendar context when the charter gives only a week or month), "repeat": "yearly" for actions that happen every season else null, and "setting": the Sleeper league setting the action changes if it is one of ${CHARTER_SETTINGS.join(", ")} (else null), with "value" the new value when the charter states it (else null).
+Also give a 2-sentence summary of the charter.
+Reply with ONLY JSON: {"summary":"...","actions":[{"title":"...","description":"...","due":"YYYY-MM-DD","repeat":"yearly","setting":null,"value":null}]}`;
+  const out = parseJsonLoose(await generate([{ text: prompt }, ...docParts(text, pdfBase64)], { json: true }));
+  if (!out || !Array.isArray(out.actions)) throw new Error("Gemini didn't return a checklist.");
+  const day = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? String(s) : null);
+  return {
+    summary: out.summary ? String(out.summary).slice(0, 600) : null,
+    actions: out.actions
+      .filter((a) => a && a.title)
+      .slice(0, 40)
+      .map((a) => ({
+        title: String(a.title).slice(0, 80),
+        description: a.description ? String(a.description).slice(0, 300) : "",
+        due: day(a.due),
+        repeat: a.repeat === "yearly" ? "yearly" : null,
+        setting: CHARTER_SETTINGS.includes(a.setting) ? a.setting : null,
+        value: a.value == null ? null : String(a.value).slice(0, 40),
+      })),
+  };
+}
+
+/** A charter update in Markdown that adds the approved rule changes (the commissioner reviews it). */
+export async function charterUpdate({ leagueName, text, pdfBase64, approved, today = new Date().toISOString().slice(0, 10) }) {
+  if (!isConfigured()) throw new Error("No Gemini key set (GEMINI_API_KEY).");
+  const list = approved.map((r, i) => `${i + 1}. ${r.text}`).join("\n");
+  const prompt = `You maintain the charter of the fantasy football league "${leagueName}". The members approved these rule changes:
+${list}
+Rewrite the charter so it includes them: change the affected sections in place, keep everything else as it is, keep the existing structure and tone, and add a short "Changes" section at the end listing what changed, dated ${today}. Reply with ONLY the full updated charter in Markdown.`;
+  const md = await generate([{ text: prompt }, ...docParts(text, pdfBase64)]);
+  const fenced = md.match(/```(?:markdown|md)?\s*([\s\S]*?)```/);
+  return (fenced ? fenced[1] : md).trim().slice(0, 200000);
+}
+
+/**
+ * Best ball scoring rules from the commissioner's own words.
+ * Returns { metric: "maxPF"|"PF", combineWith: [league names], heroMultiplier: number|null, weeksFrom, weeksTo,
+ *           entryFee: number|null, payouts: [{ place, pct }], notes }.
+ */
+export async function bestBallRules({ prompt, leagueName, otherLeagues = [] }) {
+  if (!isConfigured()) throw new Error("No Gemini key set (GEMINI_API_KEY).");
+  const ask = `A fantasy football best ball league ("${leagueName}") has these leaderboard rules, written by its commissioner:
+"""${String(prompt).slice(0, 4000)}"""
+Other best ball leagues the commissioner has: ${otherLeagues.map((l) => `"${l}"`).join(", ") || "none"}.
+Turn the rules into JSON: "metric": "maxPF" (max points for / best ball points, the default) or "PF"; "combineWith": names of the other leagues whose teams share this leaderboard (only from the list above); "heroMultiplier": the multiplier applied to each manager's hero player's points (e.g. 2) or null; "weeksFrom"/"weeksTo": the weeks that count (numbers or null); "entryFee": dollars per team or null; "payouts": [{"place":1,"pct":60},...] of the total pot (empty if not stated); "notes": anything that can't be expressed in these fields (max 300 characters).
+Reply with ONLY the JSON object.`;
+  const out = parseJsonLoose(await generate([{ text: ask }], { json: true }));
+  if (!out || typeof out !== "object") throw new Error("Gemini didn't return rules.");
+  const n = (x) => (x == null || x === "" || !Number.isFinite(Number(x)) ? null : Number(x));
+  return {
+    metric: out.metric === "PF" ? "PF" : "maxPF",
+    combineWith: Array.isArray(out.combineWith) ? out.combineWith.map(String).slice(0, 5) : [],
+    heroMultiplier: n(out.heroMultiplier),
+    weeksFrom: n(out.weeksFrom),
+    weeksTo: n(out.weeksTo),
+    entryFee: n(out.entryFee),
+    payouts: Array.isArray(out.payouts) ? out.payouts.map((p) => ({ place: n(p?.place), pct: n(p?.pct) })).filter((p) => p.place && p.pct != null).slice(0, 10) : [],
+    notes: out.notes ? String(out.notes).slice(0, 300) : null,
+  };
+}

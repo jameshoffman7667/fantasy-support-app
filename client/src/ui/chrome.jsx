@@ -1,5 +1,5 @@
 import * as api from "../api.js";
-import { ArrowLeftRight, Bell, BellOff, CheckCircle2, ChevronRight, ListChecks, Loader2, LogOut, RefreshCw, Settings2, Stethoscope, TrendingUp, Trophy, UserCog, Users } from "lucide-react";
+import { ArrowLeftRight, Bell, BellOff, CheckCircle2, ChevronRight, ClipboardList, ListChecks, Loader2, LogOut, RefreshCw, Settings2, Stethoscope, TrendingUp, Trophy, UserCog, Users } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Avatar, FootballPlayerIcon, UprightsIcon } from "./common.jsx";
 import { C } from "./theme.js";
@@ -209,6 +209,7 @@ const TABS = [
   { key: "gameday", label: "Game Day", Icon: UprightsIcon },
   { key: "pickem", label: "Pick'em", Icon: CheckCircle2 },
   { key: "analytics", label: "Analytics", Icon: TrendingUp },
+  { key: "commish", label: "Commish", Icon: ClipboardList }, // v3.8
 ];
 
 export function TabBar({ active, onSelect, dots = {} }) {
@@ -226,7 +227,7 @@ export function TabBar({ active, onSelect, dots = {} }) {
         >
           <span className="relative">
             <Icon size={18} />
-            {dots[key] ? <span className="absolute -top-0.5 -right-1.5 inline-block w-2 h-2 rounded-full" style={{ background: C.major }} aria-label="Changed picks" /> : null}
+            {dots[key] ? <span className="absolute -top-0.5 -right-1.5 inline-block w-2 h-2 rounded-full" style={{ background: C.major }} aria-label={key === "commish" ? "Charter action due within a week" : "Changed picks"} /> : null}
           </span>
           <span className="text-[10.5px] font-medium leading-tight text-center">{label}</span>
         </button>

@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,35 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.8 — Commish tab: league charters and best ball leaderboards
+
+**Commit (short):** `v3.8: feat: Commish charters, best ball boards`
+
+**Commit (extended):**
+v3.8 adds a fifth tab, Commish, for leagues you run.
+
+Charters: give any of your Sleeper leagues (commissioner leagues first) its charter as a Google Docs or Drive link shared "Anyone with the link can view", or upload a PDF, Word, text or Markdown file. Gemini reads it once and builds a dated checklist of commissioner actions. Actions can be edited, added, deleted and ticked; yearly ones roll forward when done, and actions tied to a Sleeper setting tick themselves when the League page's settings log shows the change. Cards turn yellow when an action is due within a month, red within a week, showing the next date and everything due that day; tracked leagues get the same Commish box on the dashboard. Proposed, approved and rejected rule changes are recorded, and Gemini drafts the updated charter in Markdown to accept, edit or discard. Links are re-read each July only if changed; charters follow their league into the next season.
+
+Best Ball: one leaderboard per best ball league (Max PF by default) with usernames, pot and payouts; leagues can be combined, hero players multiplied and rules typed in plain words. Evidence behind every total exports as CSV.
+
+**Details**
+- Commish tab (`client/src/pages/Commish.jsx`, new): fifth bottom tab after Analytics (clipboard icon) with two sub-tabs, **Charters** and **Best Ball**. The tab shows a red dot when any charter has an action due within a week.
+- Charter sources (`server/commish.js`, new): a Google Docs link is read through Google's plain-text export, a Google Drive file link through Drive's direct download, any other http(s) link as it is; or an uploaded file (PDF, Word .docx, .txt, .md; 10 MB max). PDFs go to Gemini as they are; Word text is extracted in the app. If Google answers with a sign-in page the app says to share the document as "Anyone with the link can view". The app only reads documents — it never writes to Google. Uploaded files (and linked PDFs) are kept in a new `commish_files` table; everything else in app_state.
+- Leagues: any of your Sleeper leagues this season can have a charter; the picker lists commissioner leagues first, marked ★ (Sleeper's `is_owner` flag on the league's users). When a new season's league names the old one as `previous_league_id`, its charter (actions, rule changes, stored file) moves to the new league.
+- Checklist (`gemini.charterChecklist`): Gemini lists the commissioner's actions for the next 12 months — title, description (quoting the rule), due date, "every year" or once, and the Sleeper setting it changes when it is one of FAAB budget, adds locked, trade deadline, playoff start, playoff teams, waiver type, daily waivers, keepers, taxi slots, IR slots, draft rounds (with the new value when the charter states it). Re-reading replaces the open actions that came from the charter and keeps yours and the done ones.
+- Actions: edit title, details, date and "every year"; add; delete; tick (done list collapsed). A ticked yearly action gets next year's copy. Settings-log auto-tick: an open action tied to a setting is marked done ("seen in the settings log") when the League page's change log (Sleeper private access, v3.0) shows that setting changing — to the stated value, if any — from 60 days before its due date onwards; checked whenever the charters or dashboard boxes load.
+- Status: red when an open action is due within 7 days (or overdue), yellow within 30 days. Each card shows the next due date and every action due that same day, the open and overdue counts, proposed rule changes and read errors; cards are sorted by next due date. Tracked leagues with a charter get a sixth "Commish" badge on their dashboard card in the same colours, opening that charter. The badge row now wraps and the badges are slightly smaller.
+- Rule changes: add a proposed change; Approve / Reject (Undo); Delete. "Draft the charter update" (Gemini) rewrites the charter in Markdown with the approved changes and a dated "Changes" section; edit it in place, Copy it into your document, then Accept (the changes become "written into the charter") or Discard. A second update before the document itself changes builds on the last accepted text.
+- Re-reads: "Read again" on a charter on demand. In July the scheduler (every 6 hours) downloads each linked charter once; Gemini reads it again only if the document changed, at most one Gemini read a day across all users (so a dozen charters spread over the month). Uploaded files are never re-read automatically.
+- Best Ball (`server/bestBall.js`, new): every best ball league of yours this season gets a card; its leaderboard ranks all teams with team name, username, avatar and total. Default stat Max points for = Sleeper's own season figure (`ppts`), or Points for. Pot = entry fee × teams, payouts by place as % of the pot, paid places highlighted with their amounts.
+- Leaderboard rules: combine up to 5 of your other best ball leagues into one board; hero multiplier (1–10×) with a hero player picked per team from his roster; weeks from/to. With a hero or week rule, every week is recomputed from Sleeper's matchups: the hero's points are multiplied, the best lineup for the league's starting slots (incl. flex, superflex and IDP slots) is found exactly (assignment solve, not greedy) and the weeks are summed; each row shows the hero bonus. Rules can be typed in plain words — Gemini fills the fields (league names matched to yours, unmatched ones listed), you check them, "Use these", then "Save and recalculate".
+- Evidence (`GET /api/bestball/evidence.csv`): every team's counted lineup, week by week (league, week, team, username, slot, player, id, position, points, multiplier, counted, final / current week), then one line per team with the sum of its counted slots, Sleeper's figure and the leaderboard value. A "Sleeper x" note appears under a leaderboard row when the recomputed total and Sleeper's differ.
+- Server: routes under `/api/commish` (list, summary, charter, link, upload, reread, actions, rules, draft, draft/resolve, delete) and `/api/bestball` (list, board, evidence.csv, settings, parse), all login-only and limited to your own Sleeper leagues; a 15 MB JSON limit for the upload route only; `sleeper.getMatchupsWeek` (cached for the season once a week is over, 10 minutes otherwise).
+- Tests: new Commish / best ball suite, 72 checks (Google link conversion; HTML, Word, PDF and sign-in-page reading; action cleaning; red/yellow thresholds and same-day items; yearly roll-over; checklist merge; settings-log auto-tick incl. a wrong value; Gemini read on add, no Gemini call when the document is unchanged, read again when changed; draft, accept and discard, a second draft building on the accepted text; next-season move; exact best lineup vs greedy, empty slots, superflex; two leagues combined with hero ×2 and a week range; pot and payouts; evidence adding up to every total; CSV quoting and totals section; current-week marking). Earlier suites unchanged: unit 97, integration 62 (55 with value sites down), client modules 12 + 22, server 4, FAAB 36. Browser harness over every page plus the Commish tab (dashboard box, charter cards and colours, add form, charter detail, editing and saving an action, opening a charter from the dashboard box, best ball list, leaderboard, rules form, CSV link): no page errors. eslint no-undef clean.
+- Not verified live: Google's export / download answers for shared documents, Gemini's checklist and rules replies (model `GEMINI_MODEL`, default gemini-3.5-flash-lite), Sleeper's `is_owner` for commissioners (co-commissioners may not be flagged), the setting names in the League page's change log that auto-tick matches on, and whether Sleeper's `ppts` in best ball includes a week still in progress; vite and Docker builds.
 
 ---
 

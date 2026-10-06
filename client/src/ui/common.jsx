@@ -17,8 +17,8 @@ export function StatusBadge({ status, label, onClick, compact }) {
       style={{ background: s.bg, color: s.color, border: `1px solid ${s.color}33` }}
       className={`flex items-center ${compact ? "gap-0.5 px-1 py-1" : "gap-1 px-2.5 py-1.5"} rounded-md shrink-0`}
     >
-      <Icon size={compact ? 12 : 14} strokeWidth={2.3} />
-      {label && <span className={`${compact ? "text-[11px]" : "text-xs"} font-medium`} style={{ fontFamily: "Inter, sans-serif" }}>{label}</span>}
+      <Icon size={compact ? 11 : 14} strokeWidth={2.3} />
+      {label && <span className={`${compact ? "text-[10.5px] tracking-tight" : "text-xs"} font-medium`} style={{ fontFamily: "Inter, sans-serif" }}>{label}</span>}
     </Tag>
   );
 }

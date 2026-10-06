@@ -41,6 +41,8 @@ import * as privateData from "./privateData.js";
 import * as playerCard from "./playerCard.js"; // v3.5
 import * as waiverPlan from "./waiverPlan.js";
 import * as faabDb from "./faabDb.js"; // v3.7: FAAB database, opponent bid report, waiver simulator
+import * as commish from "./commish.js"; // v3.8: charters
+import * as bestBall from "./bestBall.js"; // v3.8: best ball leaderboards
 import * as gemini from "./gemini.js";
 import * as tank01 from "./tank01.js";
 import { getLastSummary } from "./projectionHub.js";
@@ -74,7 +76,10 @@ import {
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// v3.8: the charter upload route takes files up to 10 MB (as base64 JSON); everything else keeps the small default.
+const jsonBig = express.json({ limit: "15mb" });
+const jsonSmall = express.json();
+app.use((req, res, next) => (req.path === "/api/commish/charter/upload" ? next() : jsonSmall(req, res, next)));
 
 // Manual cookie parsing (see auth.js) — populates req.cookies for every
 // route below, including the login route itself.
@@ -346,6 +351,8 @@ app.use("/api/waiver-plan", requireAuth);
 app.use("/api/private", requireAuth);
 app.use("/api/trade", requireAuth);
 app.use("/api/player-card", requireAuth); // v3.5
+app.use("/api/commish", requireAuth); // v3.8
+app.use("/api/bestball", requireAuth); // v3.8
 
 // Step 1: the logged-in user's Sleeper account -> their leagues for the
 // current season. (v2.1: the username comes from the login, not from a form
@@ -697,6 +704,124 @@ app.post("/api/faab/simulate", async (req, res) => {
     res.json({ faab: true, budget, remaining, leagueFactor: lf, ...sim, results: sim.results.map((r) => ({ ...r, canOutbid: threats(claims.find((c) => c.key === r.key)?.bid ?? 0) })) });
   } catch (err) {
     res.status(502).json({ error: err.message || "Simulation failed." });
+  }
+});
+
+/* ---------------- v3.8: Commish — charters ---------------- */
+const charterLeague = async (req, res, leagueId) => {
+  const list = await commish.candidateLeagues(req.user.username).catch(() => []);
+  const l = list.find((x) => x.leagueId === String(leagueId));
+  if (!l) {
+    res.status(404).json({ error: "That isn't one of your Sleeper leagues this season." });
+    return null;
+  }
+  return l;
+};
+const withCharter = (fn) => async (req, res) => {
+  try {
+    const leagueId = String(req.body?.leagueId || req.query.leagueId || "");
+    if (!commish.getCharter(req.user.username, leagueId)) return res.status(404).json({ error: "No charter for that league." });
+    res.json(await fn(req.user.username, leagueId, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+app.get("/api/commish", async (req, res) => {
+  try {
+    const leagues = await commish.candidateLeagues(req.user.username);
+    const moved = commish.followSeasons(req.user.username, leagues);
+    res.json({ geminiConfigured: gemini.isConfigured(), leagues, moved, charters: commish.summaries(req.user.username) });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't load your leagues." });
+  }
+});
+app.get("/api/commish/summary", (req, res) => res.json({ byLeague: commish.summaries(req.user.username) }));
+app.get("/api/commish/charter", (req, res) => {
+  const c = commish.getCharter(req.user.username, String(req.query.leagueId || ""));
+  if (!c) return res.status(404).json({ error: "No charter for that league." });
+  const { text, ...rest } = c;
+  res.json({ ...rest, textLength: text ? text.length : 0, textPreview: text ? text.slice(0, 4000) : null, status: commish.statusOf(c.actions || []) });
+});
+app.post("/api/commish/charter/link", async (req, res) => {
+  const b = req.body || {};
+  const l = await charterLeague(req, res, b.leagueId);
+  if (!l) return;
+  try {
+    res.json(await commish.setSource(req.user.username, { leagueId: l.leagueId, leagueName: l.name, season: l.season, link: String(b.link || "") }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post("/api/commish/charter/upload", jsonBig, async (req, res) => {
+  const b = req.body || {};
+  const l = await charterLeague(req, res, b.leagueId);
+  if (!l) return;
+  try {
+    res.json(await commish.setSource(req.user.username, { leagueId: l.leagueId, leagueName: l.name, season: l.season, upload: { name: String(b.name || "charter").slice(0, 120), mime: String(b.mime || ""), base64: String(b.base64 || "") } }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post("/api/commish/charter/reread", withCharter((u, l, b) => commish.reread(u, l, { force: b.force === true })));
+app.post("/api/commish/charter/actions", withCharter((u, l, b) => commish.saveActions(u, l, b.actions)));
+app.post("/api/commish/charter/rules", withCharter((u, l, b) => commish.saveRuleChanges(u, l, b.ruleChanges)));
+app.post("/api/commish/charter/draft", withCharter((u, l) => commish.draftUpdate(u, l)));
+app.post("/api/commish/charter/draft/resolve", withCharter((u, l, b) => commish.resolveDraft(u, l, { accept: b.accept === true, markdown: b.markdown ?? null })));
+app.post("/api/commish/charter/delete", withCharter((u, l) => (commish.deleteCharter(u, l), { ok: true })));
+
+/* ---------------- v3.8: Commish — best ball ---------------- */
+const bbLeague = async (req, res, leagueId) => {
+  const list = await bestBall.listLeagues(req.user.username).catch(() => []);
+  if (!list.some((l) => l.leagueId === String(leagueId))) {
+    res.status(404).json({ error: "That isn't one of your best ball leagues this season." });
+    return null;
+  }
+  return list;
+};
+app.get("/api/bestball", async (req, res) => {
+  try {
+    res.json({ geminiConfigured: gemini.isConfigured(), leagues: await bestBall.listLeagues(req.user.username) });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't load your best ball leagues." });
+  }
+});
+app.get("/api/bestball/board", async (req, res) => {
+  const leagueId = String(req.query.leagueId || "");
+  if (!(await bbLeague(req, res, leagueId))) return;
+  try {
+    res.json(await bestBall.board(req.user.username, leagueId, { evidence: req.query.evidence === "1" }));
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't build the leaderboard." });
+  }
+});
+app.get("/api/bestball/evidence.csv", async (req, res) => {
+  const leagueId = String(req.query.leagueId || "");
+  if (!(await bbLeague(req, res, leagueId))) return;
+  try {
+    const b = await bestBall.board(req.user.username, leagueId, { evidence: true });
+    const name = (b.leagues[0]?.name || "best-ball").replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${name}-leaderboard-evidence.csv"`);
+    res.send(bestBall.evidenceCsv(b.evidence || [], b.evidenceTotals || []));
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't build the evidence file." });
+  }
+});
+app.post("/api/bestball/settings", async (req, res) => {
+  const b = req.body || {};
+  const list = await bbLeague(req, res, b.leagueId);
+  if (!list) return;
+  const allowed = new Set(list.map((l) => l.leagueId));
+  const patch = { ...b, combineWith: Array.isArray(b.combineWith) ? b.combineWith.filter((id) => allowed.has(String(id))) : undefined };
+  res.json(bestBall.saveSettings(req.user.username, String(b.leagueId), patch));
+});
+app.post("/api/bestball/parse", async (req, res) => {
+  const b = req.body || {};
+  if (!(await bbLeague(req, res, b.leagueId))) return;
+  try {
+    res.json(await bestBall.parseRules(req.user.username, String(b.leagueId), String(b.prompt || "")));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 

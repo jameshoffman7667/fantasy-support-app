@@ -473,6 +473,13 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v3.8 additions
+- **Commish tab** (fifth bottom tab) with **Charters** and **Best Ball**.
+- **Charters:** pick one of your Sleeper leagues (★ = you're the commissioner) and give it its charter — a Google Docs / Drive link shared as **"Anyone with the link can view"** (the app only reads it), or upload a PDF, Word, text or Markdown file (10 MB max). Gemini (`GEMINI_API_KEY`, the same key as Pick'em) reads it and builds the dated checklist; without a key you add actions by hand. Linked charters are re-read each July, and Gemini only runs again if the document changed (at most one Gemini read a day).
+- Actions tied to a Sleeper setting tick themselves when the League page's settings log shows the change (needs the private Sleeper access from v3.0 for that league).
+- Approved rule changes → "Draft the charter update" gives Markdown to paste back into your document.
+- **Best Ball:** a leaderboard per best ball league (Max PF by default), optional combined leagues, hero multipliers, week ranges, pot and payouts. "Export the evidence (CSV)" downloads every team's counted lineups week by week plus the totals.
+
 ### v3.7 additions
 - **FAAB database and Opponents tab** (Waivers → Opponents): the app stores every bid (won and lost) from your leagues and — unless you switch it off there — your opponents' other leagues of the same type, collected 2 hours before each league's waivers. Check the waiver day/time shown on the tab; it's read from Sleeper's settings and may need correcting with "Change".
 - **Waiver simulator** on the Claims page: win chance per claim, the likely top rival bid and how many teams could outbid you.
@@ -996,7 +1003,7 @@ server/
   backfill.js              History backfill: free sources + Tank01 batches (v2.5)
   gameday.js               Game Day cheer for/against across leagues (v2.6)
   pickem.js                Pick'em board, recommendations, change tracking, record (v2.7)
-  gemini.js                Gemini grounded article scan for upset picks (v2.7)
+  gemini.js                Gemini: grounded article scan for upset picks (v2.7); charter checklists, charter updates, best ball rules (v3.8)
   dvp.js                   Matchup difficulty: Sleeper game stats, defense/offense rankings by position (v2.8)
   weather.js               Stadium table + Open-Meteo forecasts + weather flags (v2.8)
   images.js                Cached headshot/logo proxy (v2.8)
@@ -1009,6 +1016,8 @@ server/
   buildLeague.js          Merges everything into the shape the UI renders
   values.js               Trade values: Roster Audit (dynasty) and FantasyCalc (redraft/keeper; dynasty fallback) (v3.5)
   faabDb.js               FAAB database (won + lost bids), opponent bid report, waiver simulator, collection timing (v3.7)
+  commish.js              Charters: link/upload reading, Gemini checklist, actions, status, settings-log auto-tick, July re-reads (v3.8)
+  bestBall.js             Best ball leaderboards: Max PF, combined leagues, hero multipliers, exact best lineups, CSV evidence (v3.8)
   rosProjections.js       Rest-of-season points from Sleeper weekly projections (v3.5)
   tradeTools.js           Position strength, strengths/weaknesses, pick slots, value fairness (v3.5)
   nflverseStats.js        nflverse CSV downloads (weekly, season, team, snaps, PFR, NGS, players), disk-cached (v3.5)
@@ -1024,7 +1033,7 @@ client/
   src/ui/                 theme.js (colours, formatting), common.jsx (shared components), modals.jsx,
                           playerCard.jsx (player pop-up), chrome.jsx (header, user menu, tab bar), compute.js (page status)
   src/pages/              Dashboard, RosterPage, WaiverPage, TradePage, InjuryPage, LeaguePage, SeasonOutlook,
-                          Account, Analytics, GameDay, Pickem
+                          Account, Analytics, GameDay, Pickem, Commish (v3.8)
   src/lineup.js, rosterChanges.js, variances.js, waiverPlan.js   Pure logic (unit-tested)
   src/api.js              Calls our own backend, never external APIs directly
   public/manifest.webmanifest  PWA manifest (installable in Chrome)
