@@ -155,6 +155,32 @@ function rankThreshold(pos, superflex) {
  * current-vs-optimal lineup comparison, persistent Injury Watch, and a
  * heuristic Trade Radar based on positional ECR depth.
  */
+/** v3.6: implied team totals from ESPN's listed odds (fallback when Tank01 has no line). */
+export function espnGameLines(weekSchedule) {
+  const out = {};
+  for (const g of weekSchedule?.games || []) {
+    const o = g.espnOdds;
+    if (!o || o.total == null || o.homeSpread == null || !g.home || !g.away) continue;
+    const r1 = (x) => Math.round(x * 10) / 10;
+    const hi = r1((o.total - o.homeSpread) / 2);
+    const ai = r1((o.total + o.homeSpread) / 2);
+    out[g.home] = { implied: hi, oppImplied: ai, spread: r1(o.homeSpread), total: r1(o.total), source: "ESPN" };
+    out[g.away] = { implied: ai, oppImplied: hi, spread: r1(-o.homeSpread), total: r1(o.total), source: "ESPN" };
+  }
+  return out;
+}
+
+/** v3.6: Tank01 prop bag → { key: line } for display; anytime TD keeps its American odds. */
+export function propLines(props) {
+  if (!props) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(props)) {
+    const val = k === "anytd" ? v?.odds ?? v?.line : v?.line ?? v?.odds;
+    if (val != null && Number.isFinite(Number(val))) out[k] = Number(val);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export async function buildFullLeague(userId, leagueSummary, week, trending, prevLeagues = []) {
   const leagueId = leagueSummary.league_id;
   const season = leagueSummary.season;
@@ -283,6 +309,12 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   };
   const lockedHidden = new Set();
 
+  // v3.6: game lines (implied team totals) — Tank01's sportsbook average when present, else ESPN's listed odds —
+  // and, once any game this week has kicked off, Sleeper's live weekly stats for actual stat lines on the cards.
+  const gameLines = { ...espnGameLines(weekSchedule), ...(projWeek?.gameLines || {}) };
+  const anyStarted = (weekSchedule?.games || []).some((g) => g.state === "in" || g.state === "post" || (g.kickoffMillis != null && g.kickoffMillis <= nowMs));
+  const weekStats = anyStarted ? await sleeper.getWeekStatsLive(season, week).catch(() => null) : null;
+
   // v3.1: which injury statuses this league lets you put on IR. Read from the league settings
   // (reserve_allow_out / _doubtful / _sus / _na / _dnr / _cov — names expected from Sleeper's league
   // object but UNVERIFIED). IR and PUP are always allowed. If the league carries none of those
@@ -319,11 +351,19 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
     }
     const { kickoff, kickoffLabel, onBye } = kickoffFor(meta?.team);
-    let { proj, projSource, projFactor, projStats } = await resolveProjection(id);
+    let { proj, projSource, projFactor, projStats, props } = await resolveProjection(id);
     // v2.8: this week's matchup and forecast, for the player card.
     const nt = meta?.team ? schedule.normalizeTeam(meta.team) : null;
     const g = nt && weekSchedule ? weekSchedule.byTeam[nt] : null;
-    const matchup = g ? { team: nt, opp: g.opponent, home: g.homeAway === "home", kickoff: g.kickoffMillis, kickoffLabel: g.kickoffLabel } : null;
+    const ln = nt ? gameLines[nt] || null : null;
+    // v3.6: + live state, both teams' points, implied team totals and the spread.
+    const matchup = g
+      ? {
+          team: nt, opp: g.opponent, home: g.homeAway === "home", kickoff: g.kickoffMillis, kickoffLabel: g.kickoffLabel,
+          state: g.state ?? null, statusDetail: g.statusDetail ?? null, teamScore: g.score ?? null, oppScore: g.opponentScore ?? null,
+          implied: ln?.implied ?? null, oppImplied: ln?.oppImplied ?? null, spread: ln?.spread ?? null, total: ln?.total ?? null, linesSource: ln?.source ?? null,
+        }
+      : null;
     const wx = nt && weekWeather ? weekWeather.byTeam[nt] || null : null;
 
     // "Once players have played, update their projection to their actual
@@ -334,6 +374,9 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     // whether an absent/zero entry means "hasn't started" or "scored
     // zero so far").
     const played = livePointsById && kickoff != null && kickoff < Date.now() && livePointsById[id] != null;
+    // v3.6: keep the pre-game projection so the roster card can show projected AND actual points.
+    const preProj = played ? proj : null;
+    const preProjSource = played ? projSource : null;
     if (played) {
       proj = Number(livePointsById[id]);
       projSource = "actual";
@@ -347,12 +390,17 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       matchup,
       weather: wx,
       projStats: projSource === "actual" ? null : projStats || null,
+      // v3.6: Vegas player prop lines (Tank01) and, once his game has started, his actual stat line (Sleeper).
+      props: propLines(props),
+      actualStats: g && (g.state === "in" || g.state === "post" || (g.kickoffMillis != null && g.kickoffMillis <= Date.now())) ? hub.trimStatLine(weekStats?.[String(id)]) : null,
       status: onBye && (!meta?.injury_status || meta.injury_status === "Healthy") ? "Bye" : mapPlayerStatus(meta),
       kickoff,
       kickoffLabel,
       proj,
       projSource,
       projFactor: projSource === "actual" ? null : projFactor ?? null,
+      preProj: preProj ?? null,
+      preProjSource: preProjSource ?? null,
       played: Boolean(played),
       // v2.6: a player whose game has kicked off can't be moved in or out of a
       // lineup any more, so he's out of every recommendation from then on.

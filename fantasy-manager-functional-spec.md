@@ -487,6 +487,18 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2o v3.6 — Roster tabs, Pick'em logo cards, page files
+
+**Roster page.** Two tabs. *Current lineup*: starters, bench (open slots included), IR and taxi as rich rows — slot box in Sleeper position colours, photo, name, position, team, bye, injury, matchup chip (offence vs defence colours), kickoff, weather, implied team totals, live/final score, Vegas prop lines, projected stat line, actual stat line once his game starts, usage, and projected points (or live/final points with the projection underneath); rule and injury-opportunity notes on each row. At the bottom, *Suggested changes* with tick boxes and "Accept all": lineup changes (free-agent ones listed but not tickable), flex timing swaps and IR moves. *Proposed lineup*: the lineup with the accepted changes applied (changes highlighted, benched players marked), current vs proposed points, and Push to Sleeper.
+
+**Flex timing swap.** A flex-type starter (FLEX, SFLX, W/R, W/T) whose game kicks off before a starter at his own position in a positional slot is swapped with the latest such starter, so the flex keeps the later game. Never involves a locked player or a slot that a pushable lineup change uses.
+
+**Pick'em card.** Logos at both ends of the win bar; tap to pick (tap again to return to the app's pick). Logo outlines: app pick dashed and semi-transparent, your pick solid; green = favourite, yellow = underdog. Team and home/away above each logo; "Favourite (−x)" / "Underdog (+x)" below. Weather above the bar, game status below the card. After the game, ✓ on the winner and ✕ on the loser. Card border: green/red/grey while the pick that counts leads, trails or is level.
+
+**Code layout.** The client is split into `src/ui/*` and `src/pages/*`; `App.jsx` is the shell.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -619,3 +631,8 @@ Collected here since they cut across multiple sections:
 73. **Game Day (v3.5):** colour threshold = 5% of both teams' remaining projected points; baseline = projected totals at the week's first kickoff; live win % on each card.
 74. **Header (v3.5):** user menu under the Sleeper photo/name holds League management (the old Edit tracked leagues), alerts, account settings and log out.
 75. **Images (v3.5):** amd64 only (the server is a Linux Intel PC).
+76. **Roster tabs (v3.6):** "Current lineup" (rich rows with notes, suggested-change tick boxes and Accept all at the bottom) and "Proposed lineup" (accepted changes applied, Push to Sleeper) replace Proposed changes / Update roster.
+77. **Timing swaps (v3.6):** flex lock-order problems are fixed by a pushable swap with the latest-kickoff starter at the flex player's position.
+78. **Roster card content (v3.6):** everything the old cards had plus implied team totals, live/final scores, prop lines and actual stat lines; projected and actual points side by side.
+79. **Pick'em card (v3.6):** tap a logo to pick; outlines only (app dashed + semi-transparent, yours solid; green favourite, yellow underdog); card border follows your pick, else the app's.
+80. **Page files (v3.6):** App.jsx split into ui/ and pages/ modules, no behaviour change.

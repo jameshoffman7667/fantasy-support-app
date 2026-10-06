@@ -473,6 +473,11 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v3.6 additions
+- **Roster page** has two tabs: *Current lineup* (every player with photo, position colours, matchup, implied team totals, live score, prop lines, projected and actual stat lines; suggested changes with tick boxes and **Accept all** at the bottom) and *Proposed lineup* (the lineup with your accepted changes, then **Push to Sleeper**). Flex timing swaps are suggested changes now.
+- **Pick'em**: tap a team's logo to pick it; dashed outline = app pick, solid = yours.
+- The client code is split into `client/src/ui/` and `client/src/pages/` (see Project layout).
+
 ### v3.5 additions
 - **Trade values.** Dynasty leagues use Roster Audit's public values (FantasyCalc if Roster Audit doesn't answer); redraft and keeper leagues use FantasyCalc's redraft values. Offers show the value change; an incoming offer losing 10%+ is a yellow variance. Team strengths: Roster Audit (dynasty) or rest-of-season projections (redraft/keeper). Neither site could be reached from the build sandbox, so check the Trades page's first line after deploying: it says which source was used, or that values were unavailable. Optional env vars: `VALUES_USER_AGENT` (some sites reject requests without a browser-like user agent), `ROSTER_AUDIT_BASE`, `FANTASYCALC_BASE`.
 - **Player card.** Tap any player's photo or name. Stats come from nflverse's public GitHub releases (downloaded on first use and cached in `DATA_DIR/nflverse`, roughly 30–50 MB including career seasons; optional `NFLVERSE_BASE` to point elsewhere) and ESPN's news feed. The first card after a restart takes a second or two while the files load.
@@ -1008,7 +1013,12 @@ server/
   Dockerfile              Multi-stage: compiles better-sqlite3, final image has no compiler toolchain
   .env.example            Template for native `npm run dev` (Option C)
 client/
-  src/App.jsx            The UI (breadcrumb nav, dashboard, league overview, 5 tabs)
+  src/App.jsx            The app shell: state, navigation, builds, modals (v3.6: pages split out)
+  src/ui/                 theme.js (colours, formatting), common.jsx (shared components), modals.jsx,
+                          playerCard.jsx (player pop-up), chrome.jsx (header, user menu, tab bar), compute.js (page status)
+  src/pages/              Dashboard, RosterPage, WaiverPage, TradePage, InjuryPage, LeaguePage, SeasonOutlook,
+                          Account, Analytics, GameDay, Pickem
+  src/lineup.js, rosterChanges.js, variances.js, waiverPlan.js   Pure logic (unit-tested)
   src/api.js              Calls our own backend, never external APIs directly
   public/manifest.webmanifest  PWA manifest (installable in Chrome)
   public/sw.js             Service worker (app-shell caching; never caches /api/*)

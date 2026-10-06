@@ -150,3 +150,16 @@ export async function getPlayers() {
 export function getWeekStats(season, week) {
   return sleeperFetch(`/stats/nfl/regular/${season}/${week}`);
 }
+
+// v3.6: the same stats while games are on, for actual stat lines on roster cards. One shared in-memory copy
+// (at most `maxAgeMs` old; concurrent callers share one request), so every league build in a refresh costs one call.
+const liveStats = new Map();
+export function getWeekStatsLive(season, week, maxAgeMs = 90 * 1000) {
+  const k = `${season}:${week}`;
+  const hit = liveStats.get(k);
+  if (hit && nowFn() - hit.at < maxAgeMs) return hit.p;
+  const p = sleeperFetch(`/stats/nfl/regular/${season}/${week}`);
+  liveStats.set(k, { at: nowFn(), p });
+  p.catch(() => liveStats.delete(k));
+  return p;
+}

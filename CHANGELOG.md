@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,30 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.6 — Roster tabs, Pick'em logo cards, page files
+
+**Commit (short):** `v3.6: feat: roster tabs, Pick'em logos, page files`
+
+**Commit (extended):**
+v3.6 reworks the Roster page into two tabs. "Current lineup" shows every player with what the old cards had and more: Sleeper position colours, photo, team strength against the opponent's defence, kickoff, weather, implied team totals, the live or final score, Vegas prop lines, the projected stat line and, once his game starts, his actual stat line and points next to the projection. Notes stay on each row. Suggested changes sit at the bottom with tick boxes and an "Accept all" button. Flex timing swaps are now suggestions too: a flex player whose game is earlier than a starter at his own position swaps with him, so the flex holds the later game. "Proposed lineup" shows the lineup with the accepted changes applied, the points difference and a "Push to Sleeper" button.
+
+Pick'em cards are redesigned: big logos at both ends of the win bar, tap a logo to pick; dashed outline = the app's pick, solid = yours, green favourite, yellow underdog; home/away and favourite/underdog with the spread; weather above, status below; ✓/✕ after the game; the card border tracks your pick live.
+
+App.jsx is split into page and UI files with no behaviour change.
+
+**Details**
+- Roster page (`client/src/pages/RosterPage.jsx`): the Proposed changes / Update roster sub-tabs are replaced by **Current lineup** and **Proposed lineup**. Rows (`RosterPlayerRow`): slot box in Sleeper position colours (bench grey, IR red, taxi purple), photo and name (open the player card), position, team, bye, injury chip, matchup chip (team offence vs opponent defence colours), kickoff, weather, implied team totals ("Implied KC 24.5 – BUF 22.5 · KC −2 · O/U 47"), live or final score, prop lines, projected stat line, actual stat line, last week's usage, and on the right the projection with its source, or the live/final points with "proj x" under it. Rule notes and injury-opportunity notes stay on the rows; open bench slots show as rows.
+- Suggested changes (bottom of Current lineup): lineup changes, flex timing swaps and IR moves with tick boxes, "Accept all", and a button to the Proposed lineup. Free-agent suggestions stay listed but can't be ticked.
+- Flex timing swaps (`rosterChanges.js`): a FLEX / SFLX / W-R / W-T starter whose game kicks off before a starter at his own position in a positional slot swaps with the latest such starter; never with a locked player or a slot a pushable lineup change already uses. Pushed as one starters update with the rest, refused if the roster changed since the build.
+- Proposed lineup: totals (current → proposed, ± points), starters with changes highlighted ("In for X (+n pts)", "Moved from FLEX — timing swap with Y"), bench with benched players marked, IR moves, then the accepted-changes summary and Push to Sleeper (same confirm, logging and read-back as before). A floating "Review & push" button jumps to it.
+- Server (`buildLeague.js`, `projectionHub.js`, `sleeper.js`): each player's matchup now carries game state, both scores, implied totals, spread and total (Tank01's sportsbook average, else ESPN's listed odds); `props` = Tank01 prop lines; `actualStats` = Sleeper's live weekly stat line once his game has started (one shared fetch per 90 s); `preProj` keeps the pre-game projection after points come in.
+- Pick'em card (`pages/Pickem.jsx`): logos in 64 px boxes at both ends of the win bar; tapping a logo picks it (again = back to the app's pick), replacing the "Your pick" buttons. Outlines only: app pick dashed and semi-transparent, yours solid; green favourite, yellow underdog. "JAX (Away)" above, "Favourite (−2.5)" / "Underdog (+2.5)" below; weather centred above the bar (yellow with reasons when flagged); score/time/status centred below the card; after the game ✓ on the winner's box and ✕ on the loser's outer corner; card border green / red / grey while your pick (else the app's) leads, trails or is level, red before kickoff when the app's pick changed.
+- Code layout: `App.jsx` (6,700 lines) is split into `src/ui/` (theme, common components, modals, player card, header/nav, computed page status) and `src/pages/` (Dashboard, Roster, Waivers, Trades, Injury, League, Season outlook, Account, Analytics, Game Day, Pick'em); `App.jsx` keeps the app shell. Generated mechanically with a dependency check (no import cycles); no behaviour change.
+- Tests: client modules 22 new checks (swaps: latest game chosen, locked/lineup-change slots skipped, blocked suggestions don't block a swap, push order, stale swap refused, arrangement and totals) plus the earlier 12; server 4 new (ESPN and Tank01 implied totals, prop lines); unit 97 and integration 56 (51 with value sites down) still pass; browser harness over every page (Roster tabs with live and pre-game fixtures, Accept all, push confirm, Pick'em cards with pre/live/final games and a logo tap) with no page errors.
+- Not verified live: Sleeper's live stats endpoint during games (the same `/v1/stats/nfl/regular/{season}/{week}` the accuracy tracker already uses after games), Tank01 prop lines on the cards (shown only when your Tank01 key is set), vite and Docker builds.
 
 ---
 

@@ -118,6 +118,7 @@ export function computeAllSources({ pools, settings, sleeperPlayers }) {
       const p = metaPos(sid) || pos;
       const e = entry(sid, p, metaTeam(sid) || team);
       const props = tank01.propsFor(tankWeek, tid);
+      if (props) e.props = props; // v3.6: the raw prop lines, shown on roster cards
       const vegas = tank01.propsStatLine(props, p, proj);
       if (vegas) {
         const pts = vegas.points ?? slp.scoreStats({ pos: p, stats: vegas.stats }, settings);
@@ -323,9 +324,32 @@ export async function getWeek({ season, week, settings, sleeperPlayers, force = 
   console.log(`[projectionHub] ${season} wk${week} ${profile.label}: ${all.size} players — Vegas ${counts.V}, Tank01 ${counts.T}, Sleeper ${counts.S}, ESPN ${counts.E}. Leans: ${leanSummary(leans)}`);
 
   lastSummary = { season: Number(season), week: Number(week), profile: profile.label, players: all.size, counts, at: Date.now(), tank01: Boolean(tankWeek), sleeper: Boolean(sleeperPool), espn: Boolean(espnPool) };
-  const result = { profile, all, leans };
+  const result = { profile, all, leans, gameLines: gameLinesByTeam(tankWeek) };
   cache.set(key, { at: Date.now(), result });
   return result;
+}
+
+/**
+ * v3.6: Vegas game lines by team from Tank01's odds (spread and total averaged across sportsbooks) →
+ * implied team totals: home = (total − home spread) / 2, away = (total + home spread) / 2.
+ * Returns { [TEAM]: { implied, oppImplied, spread, total, source } } (team's own spread: negative = favourite).
+ */
+export function gameLinesByTeam(tankWeek) {
+  const out = {};
+  for (const g of Object.values(tankWeek?.odds || {})) {
+    const l = g?.lines;
+    if (!l || l.total == null || l.homeSpread == null || !l.home || !l.away) continue;
+    const home = schedule.normalizeTeam(l.home);
+    const away = schedule.normalizeTeam(l.away);
+    const hi = round1((l.total - l.homeSpread) / 2);
+    const ai = round1((l.total + l.homeSpread) / 2);
+    out[home] = { implied: hi, oppImplied: ai, spread: round1(l.homeSpread), total: round1(l.total), source: "Tank01" };
+    out[away] = { implied: ai, oppImplied: hi, spread: round1(-l.homeSpread), total: round1(l.total), source: "Tank01" };
+  }
+  return out;
+}
+function round1(x) {
+  return Math.round(Number(x) * 10) / 10;
 }
 export function leanSummary(leans) {
   return ["T", "S", "E"]
@@ -339,14 +363,15 @@ export function pick(result, sleeperId) {
   if (!e) return { proj: null, projSource: null, projFactor: null, projStats: null };
   // v2.8: projStats is the stat line from the same source as the number
   // (raw, before any lean — the lean only scales the points total).
-  if (e.V != null) return { proj: e.V, projSource: "V", projFactor: null, projStats: e.lines?.V || null };
+  const props = e.props || null; // v3.6
+  if (e.V != null) return { proj: e.V, projSource: "V", projFactor: null, projStats: e.lines?.V || null, props };
   for (const src of ["T", "S", "E"]) {
     if (e[src] == null) continue;
     const lean = result.leans?.[src]?.[e.pos];
     const f = lean && !lean.none ? lean.factor : 1;
-    return { proj: round(e[src] * f), projSource: src, projFactor: f !== 1 ? f : null, projRaw: e[src], projStats: e.lines?.[src] || null };
+    return { proj: round(e[src] * f), projSource: src, projFactor: f !== 1 ? f : null, projRaw: e[src], projStats: e.lines?.[src] || null, props };
   }
-  return { proj: null, projSource: null, projFactor: null, projStats: null };
+  return { proj: null, projSource: null, projFactor: null, projStats: null, props };
 }
 
 export function clearCache() {
