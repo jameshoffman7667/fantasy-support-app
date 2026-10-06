@@ -272,3 +272,20 @@ export function testCbsLogin() {
 export function pushCbs({ dryRun = false, poolIds = null } = {}) {
   return jsonPost(`/api/cbs/push`, { dryRun, confirm: !dryRun, poolIds });
 }
+
+/* ---------------- v3.7: FAAB database, opponent bid report, waiver simulator ---------------- */
+export function getFaabReport(leagueId) {
+  return request(`/api/faab/report?leagueId=${encodeURIComponent(leagueId)}`);
+}
+export function getOwnerClaims(ownerId) {
+  return request(`/api/faab/claims?ownerId=${encodeURIComponent(ownerId)}`);
+}
+export function saveFaabSettings(patch) {
+  return jsonPost("/api/faab/settings", patch);
+}
+export function collectFaab(leagueId) {
+  return jsonPost("/api/faab/collect", { leagueId });
+}
+export function simulateWaivers(leagueId, claims, openSpots) {
+  return jsonPost("/api/faab/simulate", { leagueId, claims, openSpots });
+}

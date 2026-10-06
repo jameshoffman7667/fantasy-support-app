@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,31 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.7 — FAAB database, opponent bid report, waiver simulator
+
+**Commit (short):** `v3.7: feat: FAAB database, bid report, simulator`
+
+**Commit (extended):**
+v3.7 builds the app's own FAAB database. Every waiver claim with a bid, won or lost, is stored from your tracked leagues and, when the new opponent report is switched on, from your opponents' other leagues of the same type (dynasty or redraft/keeper, never best ball). Collection runs 2 hours before each league's waivers, which the app reads from league settings and lets you correct.
+
+A new Opponents tab on Waivers shows players your opponents bid on elsewhere this week (marked when available in your league), each opponent's bidding habits (claims, won/lost, median and top bids as % of budget, aggressiveness, positions, FAAB left), and their actual claims on tap.
+
+The Claims page has a waiver simulator: 2,000 simulated runs give each claim a win chance, the likely top rival bid and how many teams could outbid you. The custom claim form gets a searchable "player to add" list (top 10 per position, "Name (QB - DAL)") and a drop list with Auto, None, then your bench lowest projection first. Available players show dynasty value and age in dynasty leagues or rest-of-season points otherwise, with a sort toggle and dynasty stashes.
+
+**Details**
+- FAAB database (`server/faabDb.js`, new table `faab_claims`): one row per waiver claim with a bid — league, week, player, position, roster and owner, bid, budget, bid % of budget, won/lost (Sleeper's `complete` / `failed`), Sleeper's note when present, league type, best ball flag, teams, source (tracked / opponent). "Lost" can also mean roster full or already claimed by the same team's earlier claim. Your tracked leagues are read for every week so far; opponents' leagues for the current and previous week, up to 100 leagues per collection, three at a time; all reads go through the existing Sleeper caches.
+- Collection timing: 2 hours before each tracked league's waiver run (scheduler check every 10 minutes, once per run) plus a re-read of the league's own claims 30 minutes after it; "Collect now" on the Opponents tab (at most every 10 minutes). Waiver time = Sleeper's `waiver_day_of_week` (read as 0 = Monday, so the default 2 = Wednesday) at `daily_waivers_hour` Pacific, or daily when `daily_waivers` is on — an UNVERIFIED reading, shown on the tab with a "Change" control (day and hour in Eastern time, per league).
+- Opponent report switch (Waivers → Opponents, on by default, per user): off = only your own leagues' claims are read.
+- Opponents tab: "Bid on elsewhere this week" (players your opponents claimed or lost in their other same-type leagues this week or last, each bid as team · $ · % · won/lost, available-here first); "Opponents' bidding habits" per manager — claims, won/lost, median, top-quarter and max bid %, aggressiveness vs the database (≥1.5× Aggressive … ≤0.6× Conservative), positions, this league's numbers, FAAB left — tap for that manager's actual claims (all leagues stored, newest first).
+- Waiver simulator (`POST /api/faab/simulate`, Claims page): 2,000 runs. Per player, P(another team bids) = 90% if he drew bids in 2+ other leagues this week or 5,000+ Sleeper trending adds, 65% for 1 league or 1,000+ adds, else 35%; the top rival bid is drawn from his own winning bids in other leagues this week (3+) or winning bids at his position this season (last 6 weeks), scaled by this league's bidding level vs the pool (when there's enough history, 0.5–2×) and capped at the most FAAB any opponent has left. Your claims are then processed like the Claims page (budget, open spots, drops, highest bid first); ties are a coin flip. Shown per claim: win chance, likely top rival bid (median, 1-in-4), teams that could outbid you; and expected wins and spend.
+- FAAB suggestions (Available page) now also use the database's winning bids from opponents' same-type leagues.
+- Claims page: custom claim "player to add" is a type-to-search list of the top 10 free agents per position by this week's projection ("Name (QB - DAL)", contains match on name, position or team); drop list = Auto (adds the player like a bid from Available, so drops come from your willing-to-drop ranking), None, then your bench lowest projection first. Claim rows' drop lists use the same order with "None".
+- Available page by league type: dynasty rows show trade value, age and rookie flag, plus a "Dynasty stashes" section (top 10 available by dynasty value not already listed); redraft/keeper rows show rest-of-season points; a "Sort by" toggle (this week / dynasty value or rest of season). Server: `freeAgents[].value/ros/age/bye/rookie`, `addCandidates`, `dynastyStash`.
+- Tests: new FAAB module suite (36 checks: parsing won/lost, upsert, habits, aggression, waiver times incl. your own setting and daily waivers, simulator incl. budget caps and same-player claims, player reference, report, collection filters for type / best ball / FAAB and the off switch); integration 62 (55 with value sites down); earlier suites unchanged; browser harness over Available (extras, sort, stashes), Claims (simulator lines, search, drop list) and Opponents (report, claims on tap, Collect now).
+- Not verified live: the waiver-day reading of Sleeper's settings, Sleeper's failed-claim notes, and the API cost of a first collection across many opponents' leagues.
 
 ---
 

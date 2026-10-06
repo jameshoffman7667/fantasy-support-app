@@ -11,6 +11,7 @@ import * as pickem from "./pickem.js";
 import * as cbs from "./cbs.js";
 import * as performance from "./performance.js";
 import * as gameday from "./gameday.js"; // v3.5: Game Day baselines before the week's first kickoff
+import * as faabDb from "./faabDb.js"; // v3.7: opponent bid collection 2 h before each league's waivers
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -233,6 +234,12 @@ export function startScheduler() {
     dvp.ensureLoaded().catch((err) => console.warn(`[scheduler] Matchup stats load failed: ${err.message}`));
   }, 30 * 60 * 1000);
   setInterval(() => backfill.scheduledCheck().catch((err) => console.warn(`[scheduler] Backfill check failed: ${err.message}`)), PREKICK_CHECK_MS);
+  // v3.7: FAAB database — each tracked league's opponent bids are collected 2 hours before its waivers process, and its
+  // own claims re-read 30 minutes after (each once per waiver run; the check costs one cached league read per league).
+  setInterval(() => {
+    const users = getAllUserStates().filter((st) => getUser(st.username)?.active && st.leagueIds?.length && !isInactive(getUser(st.username), st)).map((st) => st.username);
+    faabDb.tick({ users }).catch((err) => console.warn(`[scheduler] FAAB collection check failed: ${err.message}`));
+  }, 10 * 60 * 1000);
 }
 
 export { preKickoffCheck as _preKickoffCheckForTests };

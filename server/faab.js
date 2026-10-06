@@ -1,4 +1,5 @@
 import { fetchLeagueTransactions, winningBids } from "./transactions.js";
+import * as faabDb from "./faabDb.js";
 
 /**
  * SCOPE REALITY CHECK (read this before the math below):
@@ -99,7 +100,19 @@ const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 export async function getFaabSuggestions(freeAgents, leagueSummaries, sleeperPlayers, currentWeek, opts = {}) {
   const now = opts.now ?? Date.now();
   const bids = await collectRecentWaiverBids(leagueSummaries || [], currentWeek, { now, getTransactions: opts.getTransactions });
-  const windowLabel = `Last ${WINDOW_DAYS} days (weeks ${lookbackWeeks(currentWeek)[0]}-${lookbackWeeks(currentWeek).slice(-1)[0]}) across tracked FAAB leagues`;
+  // v3.7: add the app's own FAAB database (opponents' other leagues of the same type, collected before each
+  // waiver run) — winning bids only here, same 21-day window, never best ball.
+  if (opts.leagueType) {
+    const seen = new Set(bids.map((b) => `${b.leagueId}|${b.playerId}|${b.at}`));
+    for (const r of faabDb.claimsFor({ leagueType: opts.leagueType, season: opts.season, since: now - WINDOW_DAYS * DAY_MS })) {
+      if (r.status !== "won" || r.best_ball || r.pct == null || !r.budget) continue;
+      const k = `${r.league_id}|${r.player_id}|${r.at}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      bids.push({ leagueId: r.league_id, leagueName: r.league_name || String(r.league_id), playerId: r.player_id, bidAmount: r.bid, budget: r.budget, bidPct: r.pct, at: r.at, week: r.week });
+    }
+  }
+  const windowLabel = `Last ${WINDOW_DAYS} days (weeks ${lookbackWeeks(currentWeek)[0]}-${lookbackWeeks(currentWeek).slice(-1)[0]}) across tracked FAAB leagues${opts.leagueType ? ` and your opponents' other ${opts.leagueType === "dynasty" ? "dynasty" : "redraft/keeper"} leagues` : ""}`;
 
   const enriched = bids
     .map((b) => ({ ...b, pos: posOf(sleeperPlayers, b.playerId), playerName: nameOf(sleeperPlayers, b.playerId) }))

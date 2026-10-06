@@ -499,6 +499,20 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2p v3.7 — FAAB database, opponent bid report, waiver simulator
+
+**FAAB database.** The app stores every FAAB waiver claim with a bid — won or lost — from the tracked leagues (all weeks) and, with the opponent report on, from the opponents' other leagues of the same type (dynasty vs redraft/keeper; best ball never), current and previous week. Collection runs 2 hours before each tracked league's waivers process (and on demand); the league's own claims are re-read 30 minutes after waivers. The waiver time is derived from the league settings (shown as an estimate) and can be set per league.
+
+**Opponents tab (Waivers).** Switch for the opponent collection; waiver time and next collection; players bid on elsewhere this week by this league's opponents (available here first) with each bid's team, $, % of budget and result; each opponent's habits (claims, won/lost, median / top-quarter / max bid %, aggressiveness vs the database, positions, FAAB left in this league); tap for that manager's actual claims.
+
+**Waiver simulator (Claims page).** Monte Carlo of your claims in processing order against likely rival bids from the database (his own bids in other leagues this week, else his position's winning bids this season), scaled to this league's bidding level and capped by opponents' remaining FAAB. Per claim: win chance, likely top rival bid, teams able to outbid; overall expected wins and spend.
+
+**Claims form.** "Player to add" = searchable top 10 per position by this week's projection, shown "Name (QB - DAL)"; drop = Auto (from the willing-to-drop ranking), None, then the bench lowest projection first.
+
+**League-type waivers.** Dynasty: value, age, rookie flag, "Dynasty stashes". Redraft/keeper: rest-of-season points. Sort toggle.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -636,3 +650,10 @@ Collected here since they cut across multiple sections:
 78. **Roster card content (v3.6):** everything the old cards had plus implied team totals, live/final scores, prop lines and actual stat lines; projected and actual points side by side.
 79. **Pick'em card (v3.6):** tap a logo to pick; outlines only (app dashed + semi-transparent, yours solid; green favourite, yellow underdog); card border follows your pick, else the app's.
 80. **Page files (v3.6):** App.jsx split into ui/ and pages/ modules, no behaviour change.
+81. **FAAB database (v3.7):** own database of won AND lost bids; no outside source (FAAB Lab, FAABFAX, Faabtastic) has a usable API.
+82. **Opponent report (v3.7):** opponents' bids in their other leagues of the same type, never best ball; the whole feature can be switched off; collection per league 2 hours before its waivers.
+83. **Claims per user (v3.7):** tap a manager to see their actual claims.
+84. **Simulator (v3.7):** win % per claim with budget caps and opponents' habits (league bidding level), bids shown as % of budget.
+85. **Add / drop lists (v3.7):** add = top 10 per position, contains search, "Name (QB - DAL)", sorted by weekly projection; drop = Auto (default), None, then bench lowest projection first.
+86. **League-type waivers (v3.7):** dynasty value/age/stashes vs rest-of-season points.
+87. **Waiver time (v3.7):** read from league settings as an estimate, editable per league.

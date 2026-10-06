@@ -473,6 +473,12 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v3.7 additions
+- **FAAB database and Opponents tab** (Waivers → Opponents): the app stores every bid (won and lost) from your leagues and — unless you switch it off there — your opponents' other leagues of the same type, collected 2 hours before each league's waivers. Check the waiver day/time shown on the tab; it's read from Sleeper's settings and may need correcting with "Change".
+- **Waiver simulator** on the Claims page: win chance per claim, the likely top rival bid and how many teams could outbid you.
+- **Claims form**: searchable "player to add" (top 10 per position) and a drop list with Auto / None / bench.
+- The first collection for a league reads many of your opponents' leagues (one-off; later runs are mostly cached).
+
 ### v3.6 additions
 - **Roster page** has two tabs: *Current lineup* (every player with photo, position colours, matchup, implied team totals, live score, prop lines, projected and actual stat lines; suggested changes with tick boxes and **Accept all** at the bottom) and *Proposed lineup* (the lineup with your accepted changes, then **Push to Sleeper**). Flex timing swaps are suggested changes now.
 - **Pick'em**: tap a team's logo to pick it; dashed outline = app pick, solid = yours.
@@ -1002,6 +1008,7 @@ server/
   matching.js             Name-based cross-source player matching (FantasyPros ECR)
   buildLeague.js          Merges everything into the shape the UI renders
   values.js               Trade values: Roster Audit (dynasty) and FantasyCalc (redraft/keeper; dynasty fallback) (v3.5)
+  faabDb.js               FAAB database (won + lost bids), opponent bid report, waiver simulator, collection timing (v3.7)
   rosProjections.js       Rest-of-season points from Sleeper weekly projections (v3.5)
   tradeTools.js           Position strength, strengths/weaknesses, pick slots, value fairness (v3.5)
   nflverseStats.js        nflverse CSV downloads (weekly, season, team, snaps, PFR, NGS, players), disk-cached (v3.5)

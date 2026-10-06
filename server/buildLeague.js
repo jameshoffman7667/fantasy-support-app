@@ -155,6 +155,12 @@ function rankThreshold(pos, superflex) {
  * current-vs-optimal lineup comparison, persistent Injury Watch, and a
  * heuristic Trade Radar based on positional ECR depth.
  */
+/** Age with one decimal (rounded down) from Sleeper's birth_date, else Sleeper's whole-number age. */
+export function ageOf(meta) {
+  if (meta?.birth_date && Number.isFinite(Date.parse(meta.birth_date))) return Math.floor(((Date.now() - Date.parse(meta.birth_date)) / (365.25 * 86400000)) * 10) / 10;
+  return meta?.age ?? null;
+}
+
 /** v3.6: implied team totals from ESPN's listed odds (fallback when Tank01 has no line). */
 export function espnGameLines(weekSchedule) {
   const out = {};
@@ -415,7 +421,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       // v3.5: the injury detail on its own (Injury Watch shows "status — detail"; `note` already starts with the status).
       injuryDetail: meta?.injury_body_part || null,
       bye: byeOf(meta?.team), // v3.5: bye week for the card
-      age: meta?.birth_date ? Math.floor(((Date.now() - Date.parse(meta.birth_date)) / (365.25 * 86400000)) * 10) / 10 : meta?.age ?? null,
+      age: ageOf(meta),
       // Supplemental context from nflverse (last week's usage), not a
       // projection input — null fields mean no match/no data this week,
       // not zero usage.
@@ -461,6 +467,13 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       return false;
     }
     return true;
+  };
+  // v3.7: the same test without recording hidden players (used for the longer lists below).
+  const faFree = (sid) => {
+    const meta = sleeperPlayers[sid];
+    if (!meta || !posWanted(meta.position) || allRosteredIds.has(String(sid))) return false;
+    if (meta.position !== "DEF" && (meta.active === false || !meta.team)) return false;
+    return !waiverLocked(meta.team);
   };
   const projTop = new Map(); // pos -> [{id, proj}]
   if (projWeek?.all) {
@@ -679,6 +692,46 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     valuesError: valueTable.source ? null : valueTable.error || null,
     ros: ros ? { from: ros.weeks?.from ?? null, to: ros.weeks?.to ?? null, loaded: ros.weeks?.loaded ?? null } : null,
   };
+
+  // --- v3.7: waiver extras by league type ---
+  // Every listed free agent gets his trade value (dynasty: Roster Audit; redraft/keeper: FantasyCalc redraft), his
+  // rest-of-season points (redraft/keeper), age, bye and rookie flag. "addCandidates" = the top 10 per position by
+  // this week's projection (the Claims page's "player to add" list); "dynastyStash" = the best available players by
+  // dynasty value who aren't already listed (dynasty leagues only).
+  for (const fa of freeAgents) {
+    const m = sleeperPlayers[fa.id];
+    fa.value = valueTable.source ? valueTable.valueOf(fa.id) ?? null : null;
+    fa.ros = rosOf(fa.id);
+    fa.age = ageOf(m);
+    fa.bye = byeOf(m?.team);
+    fa.rookie = Number(m?.years_exp) === 0;
+  }
+  const ADD_TOP_N = 10;
+  const addCandidates = [];
+  for (const [pos, list] of projTop) {
+    for (const x of list.slice(0, ADD_TOP_N)) {
+      const m = sleeperPlayers[x.id];
+      addCandidates.push({ id: x.id, name: playerName(m, x.id), pos, team: m?.team || "FA", proj: x.proj });
+    }
+  }
+  let dynastyStash = [];
+  if (leagueType === "dynasty" && valueTable.source) {
+    const listed = new Set(freeAgents.map((f) => String(f.id)));
+    const pool = [];
+    for (const [id, meta] of Object.entries(sleeperPlayers)) {
+      if (!["QB", "RB", "WR", "TE"].includes(meta?.position) || listed.has(String(id)) || !faFree(id)) continue;
+      const v = valueTable.valueOf(id);
+      if (v != null) pool.push({ id: String(id), v });
+    }
+    pool.sort((a, b) => b.v - a.v);
+    dynastyStash = await Promise.all(
+      pool.slice(0, 10).map(async ({ id, v }) => {
+        const c = await enrich(id);
+        const m = sleeperPlayers[id];
+        return { ...c, value: v, age: ageOf(m), rookie: Number(m?.years_exp) === 0, origin: "waiver", stash: true };
+      })
+    );
+  }
 
   // --- Trade Radar: every team's strengths and weaknesses (rank at each position), mutual ideas per rival ---
   const rosterLabel = (r) => {
@@ -964,6 +1017,8 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     lineupComparison,
     optimalLineup,
     freeAgents,
+    addCandidates, // v3.7
+    dynastyStash, // v3.7
     injuryOpportunities,
     weekOver,
     irAllowed: [...irAllowed],

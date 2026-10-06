@@ -22,6 +22,8 @@ import {
   setRankingOrder,
   deleteSessionsForUser,
   deletePushSubscriptionsForUser,
+  cacheGet,
+  cacheSet,
 } from "./db.js";
 import { startScheduler } from "./scheduler.js";
 import { computeAccuracy } from "./accuracy.js";
@@ -38,6 +40,7 @@ import * as priv from "./sleeperPrivate.js";
 import * as privateData from "./privateData.js";
 import * as playerCard from "./playerCard.js"; // v3.5
 import * as waiverPlan from "./waiverPlan.js";
+import * as faabDb from "./faabDb.js"; // v3.7: FAAB database, opponent bid report, waiver simulator
 import * as gemini from "./gemini.js";
 import * as tank01 from "./tank01.js";
 import { getLastSummary } from "./projectionHub.js";
@@ -603,16 +606,97 @@ app.post("/api/faab", async (req, res) => {
       trackedIds.map((id) => sleeper.getLeague(id).catch(() => null))
     );
     const sleeperPlayers = await sleeper.getPlayers();
+    const thisLeagueRaw = fullLeagues.find((l) => l?.league_id === leagueId);
     const result = await getFaabSuggestions(
       targetLeague.freeAgents || [],
       fullLeagues.filter(Boolean),
       sleeperPlayers,
-      session.week
+      session.week,
+      { leagueType: thisLeagueRaw ? faabDb.leagueTypeOf(thisLeagueRaw) : null, season: Number(thisLeagueRaw?.season) || null } // v3.7: + the FAAB database
     );
     const thisLeague = fullLeagues.find((l) => l?.league_id === leagueId);
     res.json({ ...result, budget: thisLeague?.settings?.waiver_budget ?? null });
   } catch (err) {
     res.status(502).json({ error: err.message || "Couldn't compute FAAB suggestions." });
+  }
+});
+
+/* ---------------- v3.7: FAAB database, opponent bid report, waiver simulator ---------------- */
+const trackedLeague = (req, res, leagueId) => {
+  const ids = getUserState(req.user.username)?.leagueIds || [];
+  if (!leagueId || !ids.includes(String(leagueId))) {
+    res.status(404).json({ error: "That league isn't one of your tracked leagues." });
+    return false;
+  }
+  return true;
+};
+app.get("/api/faab/report", async (req, res) => {
+  const leagueId = String(req.query.leagueId || "");
+  if (!trackedLeague(req, res, leagueId)) return;
+  try {
+    const st = await sleeper.getState();
+    const [league, rosters, users, players, me] = await Promise.all([
+      sleeper.getLeague(leagueId),
+      sleeper.getRosters(leagueId),
+      sleeper.getLeagueUsers(leagueId),
+      sleeper.getPlayers(),
+      sleeper.getUser(req.user.username).catch(() => null),
+    ]);
+    if (!faabDb.isFaab(league)) return res.json({ faab: false });
+    res.json({ faab: true, ...faabDb.buildReport(req.user.username, { league, rosters, users, myUserId: me?.user_id, players, season: Number(st.season), week: Number(st.week) }) });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't build the bid report." });
+  }
+});
+app.get("/api/faab/claims", async (req, res) => {
+  const ownerId = String(req.query.ownerId || "");
+  if (!/^\d{1,25}$/.test(ownerId)) return res.status(400).json({ error: "ownerId is required." });
+  try {
+    res.json({ claims: faabDb.ownerClaims(ownerId, { players: await sleeper.getPlayers() }) });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+app.post("/api/faab/settings", (req, res) => {
+  const b = req.body || {};
+  if (b.waiverTime?.leagueId && !trackedLeague(req, res, String(b.waiverTime.leagueId))) return;
+  res.json(faabDb.saveSettings(req.user.username, { reportEnabled: typeof b.reportEnabled === "boolean" ? b.reportEnabled : undefined, waiverTime: b.waiverTime }));
+});
+app.post("/api/faab/collect", async (req, res) => {
+  const leagueId = String(req.body?.leagueId || "");
+  if (!trackedLeague(req, res, leagueId)) return;
+  const k = `faab:manual:${leagueId}`;
+  const last = cacheGet(k);
+  if (last) return res.status(429).json({ error: "Collected less than 10 minutes ago — try again shortly." });
+  cacheSet(k, Date.now(), 10 * 60 * 1000);
+  try {
+    res.json(await faabDb.collect(req.user.username, leagueId, { reason: "Collect now" }));
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Collection failed." });
+  }
+});
+app.post("/api/faab/simulate", async (req, res) => {
+  const b = req.body || {};
+  const leagueId = String(b.leagueId || "");
+  if (!trackedLeague(req, res, leagueId)) return;
+  const claims = (Array.isArray(b.claims) ? b.claims : []).slice(0, 60).map((c, i) => ({ key: String(c.key ?? i).slice(0, 100), addId: String(c.addId ?? ""), bid: Math.max(0, Math.round(Number(c.bid) || 0)), dropId: c.dropId != null && c.dropId !== "" ? String(c.dropId) : null })).filter((c) => c.addId);
+  try {
+    const st = await sleeper.getState();
+    const [league, rosters, players, me, trending] = await Promise.all([sleeper.getLeague(leagueId), sleeper.getRosters(leagueId), sleeper.getPlayers(), sleeper.getUser(req.user.username).catch(() => null), sleeper.getTrendingAdds(200, 24).catch(() => [])]);
+    if (!faabDb.isFaab(league)) return res.json({ faab: false });
+    const budget = Number(league.settings.waiver_budget) || 0;
+    const mine = rosters.find((r) => String(r.owner_id) === String(me?.user_id));
+    const remaining = Math.max(0, budget - (Number(mine?.settings?.waiver_budget_used) || 0));
+    const opponentsLeft = rosters.filter((r) => r !== mine).map((r) => Math.max(0, budget - (Number(r.settings?.waiver_budget_used) || 0)));
+    const leagueType = faabDb.leagueTypeOf(league);
+    const trendBy = new Map((trending || []).map((t) => [String(t.player_id), Number(t.count) || 0]));
+    const lf = faabDb.leagueFactor({ leagueId, leagueType, season: Number(st.season) });
+    const refFor = (pid) => faabDb.playerReference({ playerId: pid, pos: players?.[pid]?.position, leagueType, season: Number(st.season), week: Number(st.week), trendCount: trendBy.get(String(pid)) || 0, excludeLeagueId: leagueId });
+    const sim = faabDb.simulateClaims({ claims, budget, remaining, openSpots: Math.max(0, Number(b.openSpots) || 0), opponentsLeft, refFor, leagueFactor: lf.factor, trials: 2000 });
+    const threats = (bid) => rosters.filter((r) => r !== mine && budget - (Number(r.settings?.waiver_budget_used) || 0) >= bid).length;
+    res.json({ faab: true, budget, remaining, leagueFactor: lf, ...sim, results: sim.results.map((r) => ({ ...r, canOutbid: threats(claims.find((c) => c.key === r.key)?.bid ?? 0) })) });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Simulation failed." });
   }
 });
 
