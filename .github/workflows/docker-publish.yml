@@ -22,6 +22,11 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # v3.9: Android-only changes don't need new images (android-apk.yml builds the app).
+    paths-ignore:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+      - "ANDROID_APK.md"
   workflow_dispatch: {}
 
 jobs:

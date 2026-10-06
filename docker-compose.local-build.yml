@@ -38,6 +38,10 @@ services:
       - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
       - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
       - VAPID_SUBJECT=${VAPID_SUBJECT:-}
+      # v3.9 (optional): the Android app's signing-key fingerprint, from the "Build Android app"
+      # workflow's summary — lets the app open full screen (see ANDROID_APK.md).
+      - ANDROID_APP_SHA256=${ANDROID_APP_SHA256:-}
+      - ANDROID_APP_PACKAGE=${ANDROID_APP_PACKAGE:-}
     ports:
       - "${SERVER_PORT:-4000}:4000"
     volumes:

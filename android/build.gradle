@@ -1,0 +1,28 @@
+/*
+ * Fantasy Manager Android app (v3.9) — top-level build file.
+ *
+ * Based on the Android project template of Bubblewrap 1.25 (Google's official TWA generator,
+ * https://github.com/GoogleChromeLabs/bubblewrap, Apache License 2.0), with jcenter() replaced by
+ * mavenCentral().
+ */
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.9.1'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}

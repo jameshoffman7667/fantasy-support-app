@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,31 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.9 — Android app (APK)
+
+**Commit (short):** `v3.9: feat: Android app (TWA) + APK workflow`
+
+**Commit (extended):**
+v3.9 turns Fantasy Manager into a dedicated Android app. android/ is a complete Trusted Web Activity project based on Google's Bubblewrap template: the app opens the live site full screen in Chrome's engine, with its own launcher icon (adaptive, plus an Android 13 themed layer), splash screen, name and status-bar colours. Push alerts arrive as the app's own notifications, and links to the site open in the app. Web changes never need a new APK.
+
+A new GitHub workflow, Build Android app, builds and signs the APK with your own key (two repository secrets), publishes fantasy-manager.apk on an "Android app" release for installing from the phone, and prints the server settings Android needs.
+
+The server now answers /.well-known/assetlinks.json from ANDROID_APP_SHA256 (set in Portainer), so the app runs without an address bar; nginx forwards that path. Android-only pushes no longer rebuild the Docker images.
+
+ANDROID_APK.md is rewritten as a step-by-step guide: create the key, add the secrets, run the workflow, set the fingerprint, install and enable alerts, plus updating and troubleshooting.
+
+**Details**
+- Android project (`android/`, new): the Android template of Bubblewrap 1.25 (Google's official TWA generator) filled in for this app, with Google's `androidbrowserhelper` 2.6.2, Android Gradle plugin 8.9.1, Gradle 8.11.1 (wrapper included), compile/target SDK 36, min SDK 24 (Android 7+). Package `ca.hoffmanhouse.fantasymanager` (never change it once installed). `android/gradle.properties` holds the site (`twaHost=fantasymanager.hoffmanhouse.ca`), the app name "Fantasy Manager" and launcher label "Fantasy Mgr". Colours #10171A for the status bar, navigation bar and splash; portrait; notification delegation with Android 13's notification permission; verified App Link for the site; Custom Tab fallback when no TWA-capable browser is installed. Template changes: settings from properties, the app's asset-link statement generated from the host, release signing from environment variables, `mavenCentral()` instead of the retired JCenter, no launcher shortcuts.
+- Images (`android/tools/make-icons.py`, Pillow): legacy launcher icon from the web icon; adaptive icon with the logo redrawn inside the 66 dp safe zone on #10171A (bigger than the web app's maskable icon) and a monochrome layer for Android 13 themed icons; splash logo (300–1200 px); white notification silhouette (football with lace cut-outs, check badge) — all five densities.
+- Workflow (`.github/workflows/android-apk.yml`, new): runs on "Run workflow" and on pushes that change `android/`. Checks the secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`; optional `ANDROID_KEY_ALIAS`, default "fantasy", and `ANDROID_KEY_PASSWORD`) — a manual run without them fails with the reason, a push only warns; decodes and opens the keystore (clear error for a wrong password or alias); Java 17 with Gradle caching; `assembleRelease` with version code = run number, version name 1.0.<run>, optional `ANDROID_HOST` variable; `apksigner` check; summary with `ANDROID_APP_PACKAGE` / `ANDROID_APP_SHA256` and the link to check; `fantasy-manager.apk` as a 30-day artifact and on the "Android app" release (tag `android-latest`, not marked latest); keystore removed at the end.
+- Server (`server/androidApp.js`, new): `GET /.well-known/assetlinks.json` (public, 5-minute cache) built from `ANDROID_APP_SHA256` (one or more fingerprints; colons, spaces, lower case or keytool's whole "SHA256: …" line accepted) and `ANDROID_APP_PACKAGE` (default `ca.hoffmanhouse.fantasymanager`); 404 with a reason when unset. `/api/health` adds `androidAppLinks`. `client/nginx.conf` forwards exactly that path to the server; the old `client/public/.well-known` placeholder now just says so.
+- Config: `ANDROID_APP_SHA256` / `ANDROID_APP_PACKAGE` added (empty) to both compose files and both `.env.example` files. `docker-publish.yml` ignores pushes that only change `android/`, the Android workflow or `ANDROID_APK.md` (tags still build). Key files (`*.keystore`, `*.jks`, the base64 copy) are git-ignored at the repo root and in `android/`; `android/.gitattributes` keeps `gradlew` with Unix line endings even when committed from Windows.
+- Guide (`ANDROID_APK.md`, rewritten): what you get and how it works; 7 steps — signing key (one Docker command on the server, or keytool on Windows/Mac), GitHub secrets, push and redeploy, run the workflow, set `ANDROID_APP_SHA256` in Portainer and check the link (plus Google's checker), install from the release on the phone (unknown-apps and Play Protect prompts), first launch and Enable alerts; updating; troubleshooting; PWABuilder as plan B; a map of `android/`.
+- Tests: new asset-links suite (15 checks: fingerprint formats, several and duplicate fingerprints, bad values, package override and validation, server default = the app's package and namespace). The app's build script was executed against a recording stand-in for the Gradle DSL (every generated value, the asset-link statement's escaping, apostrophes in names, the host check, signing only with a keystore); all Gradle files parse (Groovy 3); the three Java classes compile against stubs matching `androidbrowserhelper` 2.6.2's API; every resource referenced by the manifest and XML resolves; the workflow's keystore, fingerprint and summary scripts were dry-run with a real test keystore (incl. a wrong password and alias); both workflows parse. Earlier suites unchanged: unit 97, integration 62 (55 with value sites down), client modules 12 + 22, server 4, FAAB 36, Commish 72.
+- Not verified: an actual Android build — Google's Maven repository and Gradle downloads are blocked in the build sandbox, so the first workflow run is the first real build; the GitHub runner's Android SDK details and the release step; Android/Chrome accepting the asset links; the app on a phone.
 
 ---
 

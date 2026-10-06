@@ -1,0 +1,4 @@
+// Android app for Fantasy Manager (v3.9): a Trusted Web Activity — a thin native wrapper that opens the
+// self-hosted web app full screen in Chrome. Built by .github/workflows/android-apk.yml; see ANDROID_APK.md.
+rootProject.name = 'fantasy-manager-android'
+include ':app'
