@@ -4,6 +4,9 @@ import { cacheGet, cacheSet } from "./db.js";
 /**
  * Trade Radar helper: for MY players in one league, how many of that
  * league's opponents ALSO roster them in their OTHER Sleeper leagues.
+ * v3.5: counted with and without best ball leagues, and as a percentage of
+ * each opponent's own (checked) leagues, so managers in many leagues don't
+ * dominate.
  * (A player many opponents hold elsewhere is one they are likely to value
  * highly / be reluctant to sell; it is a hint, not a verdict.)
  *
@@ -50,22 +53,22 @@ export async function computeOwnership({
   const owners = [...new Set((opponentOwnerIds || []).map(String))];
   let errors = 0;
 
-  // 1) each opponent's other leagues (cached 6h per user+season)
-  const pairs = []; // {ownerId, lid}
+  // 1) each opponent's other leagues (cached per user+season) — v3.5 also notes which are best ball
+  const pairs = []; // {ownerId, lid, bb}
   await mapLimit(owners, concurrency, async (ownerId) => {
-    const key = `xown:leagues:${ownerId}:${season}`;
-    let ids = cacheGet(key);
-    if (ids === null) {
+    const key = `xown:leagues2:${ownerId}:${season}`;
+    let list = cacheGet(key);
+    if (list === null) {
       try {
         const lg = await getUserLeagues(ownerId, season);
-        ids = (Array.isArray(lg) ? lg : []).map((l) => String(l.league_id)).filter(Boolean);
-        cacheSet(key, ids, SIX_HOURS);
+        list = (Array.isArray(lg) ? lg : []).filter((l) => l && l.league_id).map((l) => ({ id: String(l.league_id), bb: Number(l.settings?.best_ball) === 1 }));
+        cacheSet(key, list, SIX_HOURS);
       } catch {
         errors++;
         return;
       }
     }
-    for (const lid of ids) if (lid !== String(leagueId)) pairs.push({ ownerId, lid });
+    for (const l of list) if (l.id !== String(leagueId)) pairs.push({ ownerId, lid: l.id, bb: Boolean(l.bb) });
   });
 
   // 2) cap distinct league roster fetches (deterministic order)
@@ -89,32 +92,53 @@ export async function computeOwnership({
     rosterByLeague.set(lid, slim);
   });
 
-  // 3) tally: playerId -> ownerId -> number of their other leagues holding him
+  // 3) tally: playerId -> ownerId -> { all, noBB } leagues holding him; per owner the leagues actually checked
+  const totals = new Map(); // ownerId -> { all, noBB }
   const tally = new Map([...mine].map((id) => [id, new Map()]));
-  for (const { ownerId, lid } of pairs) {
+  for (const { ownerId, lid, bb } of pairs) {
     const rosters = rosterByLeague.get(lid);
     if (!rosters) continue;
     const roster = rosters.find((r) => r.owner_id === ownerId);
     if (!roster) continue;
+    const t = totals.get(ownerId) || { all: 0, noBB: 0 };
+    t.all += 1;
+    if (!bb) t.noBB += 1;
+    totals.set(ownerId, t);
     for (const pid of roster.players) {
       const m = tally.get(pid);
-      if (m) m.set(ownerId, (m.get(ownerId) || 0) + 1);
+      if (!m) continue;
+      const c = m.get(ownerId) || { all: 0, noBB: 0 };
+      c.all += 1;
+      if (!bb) c.noBB += 1;
+      m.set(ownerId, c);
     }
   }
+  const pct = (n, d) => (d > 0 ? Math.round((n / d) * 1000) / 10 : 0);
   const players = {};
   for (const [pid, m] of tally) {
-    const opponents = [...m].map(([ownerId, leagues]) => ({ ownerId, leagues }));
-    players[pid] = { opponents, opponentCount: opponents.length, leagueCount: opponents.reduce((s, o) => s + o.leagues, 0) };
+    const opponents = [...m].map(([ownerId, c]) => {
+      const t = totals.get(ownerId) || { all: 0, noBB: 0 };
+      return { ownerId, leagues: c.all, total: t.all, pct: pct(c.all, t.all), leaguesNoBB: c.noBB, totalNoBB: t.noBB, pctNoBB: pct(c.noBB, t.noBB) };
+    });
+    players[pid] = {
+      opponents,
+      opponentCount: opponents.filter((o) => o.leagues > 0).length,
+      opponentCountNoBB: opponents.filter((o) => o.leaguesNoBB > 0).length,
+      leagueCount: opponents.reduce((s, o) => s + o.leagues, 0),
+      leagueCountNoBB: opponents.reduce((s, o) => s + o.leaguesNoBB, 0),
+    };
   }
-  return { at: Date.now(), opponents: owners.length, leaguesChecked: rosterByLeague.size, errors, capped, players };
+  const ownerTotals = Object.fromEntries([...totals].map(([k, v]) => [k, v]));
+  return { at: Date.now(), opponents: owners.length, leaguesChecked: rosterByLeague.size, bestBallLeagues: [...new Set(pairs.filter((p) => p.bb && rosterByLeague.has(p.lid)).map((p) => p.lid))].length, errors, capped, players, ownerTotals };
 }
 
-/** Player ids held elsewhere by >= minOpponents opponents AND >= minPct of all opponents. */
-export function highOwnership(result, { minOpponents = MIN_OPPONENTS, minPct = MIN_PCT, opponentsTotal } = {}) {
+/** Player ids held elsewhere by >= minOpponents opponents AND >= minPct of all opponents (v3.5: best ball counted or not). */
+export function highOwnership(result, { minOpponents = MIN_OPPONENTS, minPct = MIN_PCT, opponentsTotal, includeBestBall = false } = {}) {
   const total = opponentsTotal ?? result?.opponents ?? 0;
   if (!total) return [];
+  const count = (p) => (includeBestBall ? p.opponentCount : p.opponentCountNoBB ?? p.opponentCount);
   return Object.entries(result?.players || {})
-    .filter(([, p]) => p.opponentCount >= minOpponents && p.opponentCount / total >= minPct)
+    .filter(([, p]) => count(p) >= minOpponents && count(p) / total >= minPct)
     .map(([id]) => id);
 }
 

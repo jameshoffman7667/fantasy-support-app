@@ -8,9 +8,18 @@ import * as gemini from "./gemini.js";
  *
  * When a player at a relevant depth-chart slot (QB1, or QB1-2 in superflex; RB1-2; WR1-3; TE1) is Out /
  * IR / PUP / Suspended / Doubtful — or Questionable AND the news check or the backup's trending rank says
- * he's likely to miss — the next two players at his position on the team's depth chart become pickup
+ * he's likely to miss — the next two players BELOW him at his position on the team's depth chart become pickup
  * (or, if you already own one, play) opportunities. For WR and TE injuries a third suggestion is added:
- * the best available player at the other of those two positions. K and DST are not covered.
+ * the same team's top player at the other of those two positions. K and DST are not covered.
+ *
+ * v3.5 changes (James):
+ *  - Depth charts keep ESPN's separate WR1 / WR2 / WR3 slots. Ranks are starters first (WR1, WR2, WR3), then
+ *    the backups by depth, and a hurt WR3 never makes the WR2 an "opportunity". The injured player's own slot
+ *    backups come first.
+ *  - Replacements come from the SAME NFL team (2 same position + 1 opposite WR/TE). Players from other teams
+ *    are only added when the injured player is on your active roster and the team can't fill the 2+1 with
+ *    available players (often Sunday/Monday night, when few unplayed options are left).
+ *  - Only injuries to players projected for at least 5 points before the injury count.
  *
  * Depth chart: ESPN's team depth chart (UNVERIFIED from the build sandbox — the response shape below is
  * parsed defensively and anything that doesn't parse falls back, per team, to Sleeper's own
@@ -39,7 +48,10 @@ function sleeperIndex(sleeperPlayers) {
   return byNameTeam;
 }
 
-/** Parses an ESPN depth chart response into { QB:[names], RB:[], WR:[], TE:[] } (offence). Defensive; null if nothing usable. */
+/**
+ * Parses an ESPN depth chart response into { QB: [[names]], RB: [[names]], WR: [[slot 1 names], [slot 2], [slot 3]], TE: [[names]] }
+ * (offence; one inner list per depth-chart slot, starter first). Defensive; null if nothing usable.
+ */
 export function parseEspnDepth(json) {
   const charts = Array.isArray(json?.depthchart) ? json.depthchart : Array.isArray(json?.depthCharts) ? json.depthCharts : Array.isArray(json?.items) ? json.items : [];
   const out = {};
@@ -47,27 +59,47 @@ export function parseEspnDepth(json) {
     const positions = chart?.positions;
     if (!positions || typeof positions !== "object") continue;
     for (const [key, val] of Object.entries(positions)) {
-      const pos = String(val?.position?.abbreviation || key).toUpperCase();
+      const pos = String(val?.position?.abbreviation || key).toUpperCase().replace(/\d+$/, "");
       if (!POSITIONS.includes(pos)) continue;
       const names = (val?.athletes || []).map((a) => a?.athlete?.displayName || a?.athlete?.fullName || a?.displayName || a?.fullName || null).filter(Boolean);
-      if (names.length) out[pos] = [...(out[pos] || []), ...names.filter((n) => !(out[pos] || []).includes(n))];
+      if (names.length) (out[pos] ||= []).push(names);
     }
     if (Object.keys(out).length) break; // first chart with offence is the one we want
   }
   return Object.keys(out).length ? out : null;
 }
 
+/** Ranked list from depth slots: every slot's starter first (slot order), then every slot's 2nd, and so on. */
+export function interleaveSlots(slots) {
+  const out = [];
+  const depth = Math.max(0, ...slots.map((x) => x.length));
+  for (let d = 0; d < depth; d++) for (const slot of slots) if (slot[d] != null && !out.includes(slot[d])) out.push(slot[d]);
+  return out;
+}
+
 function sleeperDepth(sleeperPlayers) {
+  // Sleeper's depth_chart_order is per depth_chart_position (LWR / RWR / SWR ...), so group by that first.
   const byTeam = {};
   for (const [id, m] of Object.entries(sleeperPlayers || {})) {
     if (!m || !POSITIONS.includes(m.position) || !m.team || m.active === false) continue;
     const order = Number(m.depth_chart_order);
     if (!Number.isFinite(order) || order < 1) continue;
     const t = schedule.normalizeTeam(m.team);
-    ((byTeam[t] ||= {})[m.position] ||= []).push({ id: String(id), order });
+    const slot = m.depth_chart_position || m.position;
+    (((byTeam[t] ||= {})[m.position] ||= {})[slot] ||= []).push({ id: String(id), order });
   }
-  for (const t of Object.values(byTeam)) for (const pos of Object.keys(t)) t[pos] = t[pos].sort((a, b) => a.order - b.order).slice(0, 6).map((x) => x.id);
-  return byTeam;
+  const out = {};
+  for (const [t, byPos] of Object.entries(byTeam)) {
+    out[t] = { slots: {} };
+    for (const [pos, bySlot] of Object.entries(byPos)) {
+      const slots = Object.values(bySlot)
+        .map((list) => list.sort((a, b) => a.order - b.order).map((x) => x.id))
+        .sort((a, b) => Number(sleeperPlayers[a[0]]?.depth_chart_order || 9) - Number(sleeperPlayers[b[0]]?.depth_chart_order || 9));
+      out[t].slots[pos] = slots;
+      out[t][pos] = interleaveSlots(slots).slice(0, 8);
+    }
+  }
+  return out;
 }
 
 async function fetchEspnTeam(team, espnId) {
@@ -86,7 +118,7 @@ async function fetchEspnTeam(team, espnId) {
 }
 
 export async function getDepth(season, sleeperPlayers) {
-  const key = `injopps:depth:v1:${season}`;
+  const key = `injopps:depth:v2:${season}`;
   const cached = cacheGet(key);
   if (cached) return cached;
   const idx = sleeperIndex(sleeperPlayers);
@@ -100,14 +132,22 @@ export async function getDepth(season, sleeperPlayers) {
       const team = teams[i++];
       const parsed = await fetchEspnTeam(team, ESPN_TEAM_IDS[team]);
       if (parsed) {
-        const mapped = {};
-        for (const pos of POSITIONS) mapped[pos] = (parsed[pos] || []).map((n) => idx.get(`${normalizeName(n)}|${team}`)).filter(Boolean);
+        const mapped = { slots: {} };
+        for (const pos of POSITIONS) {
+          const slots = (parsed[pos] || []).map((names) => names.map((n) => idx.get(`${normalizeName(n)}|${team}`)).filter(Boolean)).filter((x) => x.length);
+          mapped.slots[pos] = slots;
+          mapped[pos] = interleaveSlots(slots);
+        }
         // ESPN gave a chart but nothing matched for a position → use Sleeper for that position
-        for (const pos of POSITIONS) if (!mapped[pos].length) mapped[pos] = fallback[team]?.[pos] || [];
+        for (const pos of POSITIONS)
+          if (!mapped[pos].length) {
+            mapped[pos] = fallback[team]?.[pos] || [];
+            mapped.slots[pos] = fallback[team]?.slots?.[pos] || [];
+          }
         byTeam[team] = mapped;
         source[team] = "espn";
       } else {
-        byTeam[team] = { QB: [], RB: [], WR: [], TE: [], ...(fallback[team] || {}) };
+        byTeam[team] = { QB: [], RB: [], WR: [], TE: [], slots: {}, ...(fallback[team] || {}) };
         source[team] = "sleeper";
       }
     }
@@ -120,22 +160,33 @@ export async function getDepth(season, sleeperPlayers) {
   return out;
 }
 
-/** Pure: events from a depth chart + statuses. `trendingIds` is the set of Sleeper ids on the 24h trending-adds list. */
+/**
+ * Pure: events from a depth chart + statuses. `trendingIds` is the set of Sleeper ids on the 24h trending-adds list.
+ * Backups are always ranked BELOW the injured player: his own slot's backups first, then the next players down the
+ * position's ranked list (never a starter ranked above him).
+ */
 export function buildEvents({ depth, sleeperPlayers, trendingIds = new Set() }) {
   const events = [];
   for (const [team, chart] of Object.entries(depth.byTeam || {})) {
     for (const pos of POSITIONS) {
       const list = chart?.[pos] || [];
+      const slots = chart?.slots?.[pos] || [];
       for (let i = 0; i < Math.min(LIMIT[pos], list.length); i++) {
         const m = sleeperPlayers[list[i]];
         const status = m?.injury_status;
         if (!m || !(DEFINITE.has(status) || status === "Questionable")) continue;
         const backups = [];
-        for (let j = i + 1; j < list.length && backups.length < 2; j++) {
-          const bm = sleeperPlayers[list[j]];
-          if (!bm || GONE.has(bm.injury_status) || bm.active === false) continue;
-          backups.push({ id: list[j], rank: j + 1 });
-        }
+        const take = (id) => {
+          if (backups.length >= 2 || id === list[i] || backups.some((b) => b.id === id)) return;
+          const j = list.indexOf(id);
+          if (j !== -1 && j <= i) return; // never someone ranked above (or level with) the injured player
+          const bm = sleeperPlayers[id];
+          if (!bm || GONE.has(bm.injury_status) || bm.active === false) return;
+          backups.push({ id, rank: j === -1 ? list.length + 1 : j + 1 });
+        };
+        const ownSlot = slots.find((sl) => sl[0] === list[i]);
+        for (const id of (ownSlot || []).slice(1)) take(id);
+        for (let j = i + 1; j < list.length && backups.length < 2; j++) take(list[j]);
         events.push({ key: `${list[i]}|${status}`, id: list[i], pos, team, rank: i + 1, status, backups, backupTrending: backups.some((b) => trendingIds.has(b.id)), questionable: status === "Questionable" });
       }
     }
@@ -144,7 +195,7 @@ export function buildEvents({ depth, sleeperPlayers, trendingIds = new Set() }) 
 }
 
 export async function compute({ season, week, sleeperPlayers, trending = [] }) {
-  const key = `injopps:events:v1:${season}:${week}`;
+  const key = `injopps:events:v2:${season}:${week}`;
   const cached = cacheGet(key);
   if (cached) return cached;
   const depth = await getDepth(season, sleeperPlayers);
@@ -171,7 +222,7 @@ export async function compute({ season, week, sleeperPlayers, trending = [] }) {
     e.flagged = signals.length > 0;
     e.news = s ? { flag: s.flag, practice: s.practice, note: s.note } : null;
   }
-  const out = { at: Date.now(), depthSource: { espnTeams: depth.espnTeams, source: depth.source }, events, newsConfigured: gemini.isConfigured(), newsError: sentimentError, newsAt: sentiment?.at ?? null };
+  const out = { at: Date.now(), depthSource: { espnTeams: depth.espnTeams, source: depth.source }, depth: depth.byTeam, events, newsConfigured: gemini.isConfigured(), newsError: sentimentError, newsAt: sentiment?.at ?? null };
   cacheSet(key, out, EVENTS_TTL);
   return out;
 }
@@ -179,38 +230,90 @@ export async function compute({ season, week, sleeperPlayers, trending = [] }) {
 /**
  * Annotates the global events for one league.
  * ctx: { superflex, sleeperPlayers, allRosteredIds:Set, mine:{active:Set, stashed:Set}, waiverLocked(team), projOf(id)->number|null,
- *        topFree(pos)->{id}|null, cardOf(id)->{...} }
+ *        preInjuryProj(id)->number|null, topFreeList(pos, n, excludeIds:Set)->[{id, proj}], cardOf(id)->{...} }
  */
+export const MIN_PRE_INJURY_PROJ = 5;
 export function forLeague(global, ctx) {
   if (!global) return null;
   const out = [];
+  const owner = (id) => (ctx.mine.active.has(id) || ctx.mine.stashed.has(id) ? "mine" : ctx.allRosteredIds.has(id) ? "other" : "free");
+  const card = (id, extra = {}) => {
+    const o = owner(id);
+    const locked = o === "free" && ctx.waiverLocked(ctx.sleeperPlayers[id]?.team);
+    return { ...ctx.cardOf(id), owner: o, locked, proj: ctx.projOf(id), ...extra };
+  };
   for (const e of global.events || []) {
     if (e.pos === "QB" && e.rank === 2 && !ctx.superflex) continue;
     if (e.questionable && !e.flagged) continue; // Questionable with no sign of a miss: nothing to do
+    // v3.5: only injuries to players who mattered (projected 5+ points before the injury).
+    const pre = ctx.preInjuryProj ? ctx.preInjuryProj(e.id) : null;
+    if (ctx.preInjuryProj && (pre == null || pre < MIN_PRE_INJURY_PROJ)) continue;
     const meta = ctx.sleeperPlayers[e.id];
-    const owner = (id) => (ctx.mine.active.has(id) || ctx.mine.stashed.has(id) ? "mine" : ctx.allRosteredIds.has(id) ? "other" : "free");
-    const backups = e.backups.map((b) => {
-      const o = owner(b.id);
-      const locked = o === "free" && ctx.waiverLocked(ctx.sleeperPlayers[b.id]?.team);
-      return { ...ctx.cardOf(b.id), rank: b.rank, owner: o, locked, proj: ctx.projOf(b.id) };
-    });
-    const freeBackups = backups.filter((b) => b.owner === "free" && !b.locked);
+    const backups = e.backups.map((b) => card(b.id, { rank: b.rank }));
+    // Opposite position (WR injury → the team's TE, TE injury → the team's WR): same NFL team, best projection
+    // among the top three on that position's depth chart, healthy, not the injured player.
     let opposite = null;
+    let oppCards = [];
     const opp = OPPOSITE[e.pos];
+    const healthy = (id) => id && !GONE.has(ctx.sleeperPlayers[id]?.injury_status) && ctx.sleeperPlayers[id]?.active !== false;
     if (opp) {
-      const t = ctx.topFree(opp);
-      if (t) opposite = { ...ctx.cardOf(t.id), proj: t.proj ?? ctx.projOf(t.id), owner: "free", locked: false };
+      const chart = global.depth?.[e.team]?.[opp] || [];
+      const cands = chart.slice(0, 3).filter((id) => id !== e.id && healthy(id));
+      cands.sort((a, b) => (ctx.projOf(b) ?? -1) - (ctx.projOf(a) ?? -1));
+      oppCards = cands.map((id) => card(id, { rank: chart.indexOf(id) + 1, opposite: true }));
+      opposite = oppCards[0] || null; // the note names the best one, owned or not
     }
     const mineState = ctx.mine.active.has(e.id) ? "active" : ctx.mine.stashed.has(e.id) ? "stashed" : null;
+    const available = (c) => c && c.owner === "free" && !c.locked;
+    // Pickups: up to 2 available same-team players at his position ranked below him (his slot's backups first, then
+    // down the depth chart — deeper than the two "moves up" backups when those are owned) and the best available of
+    // the team's top three at the opposite position (WR <-> TE).
+    const freeSame = backups.filter(available);
+    {
+      const chartSame = global.depth?.[e.team]?.[e.pos] || [];
+      const ownSlot = (global.depth?.[e.team]?.slots?.[e.pos] || []).find((sl) => sl[0] === e.id) || [];
+      const seen = new Set([e.id, ...backups.map((b) => b.id)]);
+      for (const id of [...ownSlot.slice(1), ...chartSame.slice(e.rank)]) {
+        if (freeSame.length >= 2) break;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const j = chartSame.indexOf(id);
+        if ((j !== -1 && j < e.rank) || !healthy(id)) continue; // never someone ranked above (or level with) him
+        const c = card(id, { rank: j === -1 ? chartSame.length + 1 : j + 1 });
+        if (available(c)) freeSame.push(c);
+      }
+    }
+    const freeOpp = oppCards.filter(available).slice(0, 1);
+    // Your own injured active player and the team can't fill 2 same-position (+1 opposite) adds: top up with the
+    // best available players from other teams whose games haven't started.
+    let otherTeam = [];
+    if (mineState === "active" && ctx.topFreeList) {
+      const exclude = new Set([e.id, ...backups.map((b) => b.id), ...freeSame.map((b) => b.id), ...oppCards.map((c) => c.id)]);
+      const needSame = Math.max(0, 2 - freeSame.length);
+      const needOpp = opp ? Math.max(0, 1 - freeOpp.length) : 0;
+      const fill = (pos, n) => {
+        const got = [];
+        for (const t of ctx.topFreeList(pos, n + exclude.size, exclude) || []) {
+          if (got.length >= n) break;
+          if (exclude.has(String(t.id))) continue;
+          const c = card(String(t.id), { otherTeam: true });
+          if (!available(c)) continue;
+          exclude.add(String(t.id));
+          got.push({ ...c, proj: t.proj ?? c.proj });
+        }
+        return got;
+      };
+      otherTeam = [...fill(e.pos, needSame), ...(needOpp ? fill(opp, needOpp) : [])];
+    }
     out.push({
       key: e.key,
-      injured: { id: e.id, name: fullName(meta), pos: e.pos, team: e.team, status: e.status, note: meta?.injury_body_part || null, rank: e.rank, slot: `${e.pos}${e.rank}` },
+      injured: { id: e.id, name: fullName(meta), pos: e.pos, team: e.team, status: e.status, note: meta?.injury_body_part || null, rank: e.rank, slot: `${e.pos}${e.rank}`, preProj: pre != null ? Math.round(pre * 10) / 10 : null },
       mine: mineState,
       questionable: e.questionable,
       signals: e.signals || [],
       news: e.news || null,
       backups,
-      freeAdds: [...freeBackups, ...(opposite ? [opposite] : [])],
+      freeAdds: [...freeSame, ...freeOpp, ...otherTeam],
       opposite,
     });
   }

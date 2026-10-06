@@ -36,6 +36,7 @@ import { getImage } from "./images.js";
 import * as varianceAcks from "./varianceAcks.js";
 import * as priv from "./sleeperPrivate.js";
 import * as privateData from "./privateData.js";
+import * as playerCard from "./playerCard.js"; // v3.5
 import * as waiverPlan from "./waiverPlan.js";
 import * as gemini from "./gemini.js";
 import * as tank01 from "./tank01.js";
@@ -341,6 +342,7 @@ app.use("/api/variances", requireAuth);
 app.use("/api/waiver-plan", requireAuth);
 app.use("/api/private", requireAuth);
 app.use("/api/trade", requireAuth);
+app.use("/api/player-card", requireAuth); // v3.5
 
 // Step 1: the logged-in user's Sleeper account -> their leagues for the
 // current season. (v2.1: the username comes from the login, not from a form
@@ -393,7 +395,7 @@ app.get("/api/leagues/cached", (req, res) => {
 // list to remember (defaults to leagueIds). Results are merged into the
 // session, not replaced.
 app.post("/api/leagues/build", async (req, res) => {
-  const { sessionId, leagueIds, week, trackedIds } = req.body || {};
+  const { sessionId, leagueIds, week, trackedIds, manual } = req.body || {};
   const session = ownSession(req, res, sessionId);
   if (!session) return;
   if (!Array.isArray(leagueIds) || leagueIds.length === 0) {
@@ -438,7 +440,8 @@ app.post("/api/leagues/build", async (req, res) => {
     // league (it's per user, so it's attached here, not stored in the shared build cache).
     const withRankings = built.map((l) => (l.error ? l : { ...l, customRanking: getRankingOrder(req.user.username, l.id) }));
     // v3.0: per-user private data (trade offers, pending claims, settings log) — only when a token is set up.
-    const withPrivate = await privateData.attach(req.user.username, withRankings, { live: true }).catch((e) => {
+    // v3.5: a manual refresh (the refresh button) re-reads trade offers and pending claims even within the 6-hour snapshot.
+    const withPrivate = await privateData.attach(req.user.username, withRankings, { live: true, force: manual === true }).catch((e) => {
       console.warn(`[private] attach failed: ${e.message}`);
       return withRankings;
     });
@@ -722,6 +725,21 @@ app.post("/api/pickem/choice", async (req, res) => {
 });
 
 /* ---------------- My performance (v3.3) ---------------- */
+/* ---------------- Player card (v3.5) ---------------- */
+app.get("/api/player-card", async (req, res) => {
+  const id = String(req.query.id || "");
+  if (!/^[A-Za-z0-9_]{1,20}$/.test(id)) return res.status(400).json({ error: "A player id is required." });
+  const leagueId = req.query.leagueId ? String(req.query.leagueId) : null;
+  // Only one of the caller's own tracked leagues may be used as context.
+  const tracked = getUserState(req.user.username)?.leagueIds || [];
+  try {
+    res.json(await playerCard.getPlayerCard(req.user.username, id, { leagueId: leagueId && tracked.includes(leagueId) ? leagueId : null }));
+  } catch (err) {
+    console.error("[player-card] failed:", err);
+    res.status(err.status || 502).json({ error: err.message || "Couldn't load the player card." });
+  }
+});
+
 app.get("/api/performance", requireAuth, async (req, res) => {
   try {
     const st = await sleeper.getState();

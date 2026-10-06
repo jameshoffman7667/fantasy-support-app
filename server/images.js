@@ -54,9 +54,15 @@ async function fetchFirst(urls) {
   return null;
 }
 
+/** v3.5: Sleeper avatars (user photos and league pictures) by avatar id. */
+export function avatarUrls(avatarId) {
+  const a = String(avatarId || "");
+  return /^[A-Za-z0-9]{4,64}$/.test(a) ? [`https://sleepercdn.com/avatars/thumbs/${a}`, `https://sleepercdn.com/avatars/${a}`] : [];
+}
+
 /** Returns { buf, type } or null. Cached on disk (hits 30 days, misses 1 day). */
 export async function getImage(kind, id) {
-  if (!["player", "team"].includes(kind) || !id) return null;
+  if (!["player", "team", "avatar"].includes(kind) || !id) return null;
   const p = filePaths(kind, id);
   try {
     const meta = JSON.parse(fs.readFileSync(p.meta, "utf8"));
@@ -67,7 +73,8 @@ export async function getImage(kind, id) {
     /* not cached */
   }
   let urls;
-  if (kind === "team") urls = logoUrls(id);
+  if (kind === "avatar") urls = avatarUrls(id);
+  else if (kind === "team") urls = logoUrls(id);
   else if (!/^\d+$/.test(String(id))) urls = logoUrls(id); // DEF "players" are team abbreviations
   else {
     const ext = store.externalIds(id);

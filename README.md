@@ -206,9 +206,9 @@ variables → Actions**, add two repository secrets:
   → New Access Token, **Read & Write** scope, then paste it here)
 
 **3. Push to `main`.** `.github/workflows/docker-publish.yml` picks it
-up automatically and builds + pushes both images, multi-arch
-(`linux/amd64` + `linux/arm64`, covering both typical VPS/desktop hosts
-and Raspberry-Pi-class home servers). Watch the **Actions** tab for
+up automatically and builds + pushes both images for `linux/amd64`
+(v3.5: arm64 dropped — the server is a Linux Intel PC, and the arm64
+images were built under slow emulation). Watch the **Actions** tab for
 progress — a few minutes later,
 `docker.io/mybadreligon/fantasy-manager-server:latest` and
 `fantasy-manager-client:latest` exist and are ready to pull.
@@ -227,9 +227,9 @@ docker push mybadreligon/fantasy-manager-server:latest
 docker build -t mybadreligon/fantasy-manager-client:latest ./client
 docker push mybadreligon/fantasy-manager-client:latest
 ```
-For multi-arch manually, use `docker buildx build --platform
-linux/amd64,linux/arm64 -t ... --push ./server` (and same for `./client`)
-instead of the plain `docker build`/`docker push` pair.
+If you ever need an ARM image again, use `docker buildx build --platform
+linux/arm64 -t ... --push ./server` (and same for `./client`) instead of
+the plain `docker build`/`docker push` pair.
 
 ---
 
@@ -429,7 +429,7 @@ unlocks that too, if you want a side-loadable APK later.
 | Roster Optimization | Fully real, including flex lock-order and bye-week checks, IR/taxi sections, and kickoff times on every card. Kickoff/bye accuracy depends on the ESPN schedule endpoint behaving — see the caveat below, since this round found (and partially fixed) a real bug there. |
 | Lineup Advice | Real side-by-side current-vs-optimal comparison. A player is only flagged as changed if they're actually entering or leaving the lineup — an earlier version could flag a meaningless reshuffle between two equal-projection players at the same position, which is fixed now. Kickoff-passed players lock to their actual score and can't be re-suggested away. |
 | Waiver Management | Real. Sleeper trending-adds, filtered against every roster in the league (not just yours) and against each league's actual starting positions (no K/DST suggestions for leagues that don't start them), cross-referenced with real FantasyPros ECR. Includes on-demand FAAB bid suggestions — see the caveats section for what those numbers actually mean statistically. |
-| Trade Radar | Rebuilt this round: shows every team's strengths/weaknesses (not just yours), with suggested trades grouped under each opposing team. Uses average ECR by position as the "team strength" signal — a rest-of-season-oriented signal by nature, but not literal rest-of-season point totals, which aren't fetched anywhere in this app yet. |
+| Trade Radar | Shows every team's strengths/weaknesses (not just yours), with suggested trades grouped under each opposing team. v3.5: strength = Roster Audit values in dynasty, rest-of-season projected points in redraft/keeper (ECR only as a fallback); offers and Trade Finder use Roster Audit / FantasyCalc trade values. |
 | Injury Watch | Persists: a currently-injured player shows up every refresh (not just when the status first changed), Minor once you've seen that exact status before, Major the first time — tracked in SQLite, survives restarts. |
 
 ### Login, cross-device persistence, and a week selector
@@ -437,8 +437,8 @@ unlocks that too, if you want a side-loadable APK later.
 - **Login (v2.1)**: per-user — Sleeper username + password, owner/guest roles, owner-managed users (Account → Manage users) — see the security note above. Logging in sets an HttpOnly session cookie backed by a SQLite-stored token, valid for 30 days. Push alerts and background refresh are per user.
 - **Player Rankings (v2.1)**: Lineup tab → Player Rankings lists every roster player (starters, bench, IR, taxi — labelled) by projected points, free agents in a separate section below. Drag the handle (or use arrow keys) to reorder; your order replaces the suggested lineup for that league. Yellow = a better projected lineup exists; red = projected for exactly 0.
 - **Persistence**: which leagues you're tracking is saved **server-side** per user, tied to being logged in rather than to one browser. Log in from any device and it reconnects automatically to the same leagues, right where you left off — no re-entering anything, and no per-device setup.
-- **Log out** (on the dashboard) revokes the session cookie server-side and returns you to the login screen.
-- **Edit tracked leagues** (also on the dashboard) re-pulls your current Sleeper league list and lets you change your selection without logging out — handles the case where the server restarted and forgot your in-memory session, transparently.
+- **Log out** (user menu, top left — on the dashboard before v3.5) revokes the session cookie server-side and returns you to the login screen.
+- **League management** (user menu; "Edit tracked leagues" before v3.5) re-pulls your current Sleeper league list and lets you change your selection without logging out — handles the case where the server restarted and forgot your in-memory session, transparently.
 - **Week dropdown** in the header, available on the dashboard, league overview, and every tab — changing it rebuilds every tracked league for that week (fresh Sleeper roster-for-week + Sleeper/ESPN projections and FantasyPros ECR for that week).
 
 ### ESPN schedule integration (kickoff times + bye weeks)
@@ -472,6 +472,13 @@ requested, logged loudly if they don't match. **If kickoff times still
 look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
+
+### v3.5 additions
+- **Trade values.** Dynasty leagues use Roster Audit's public values (FantasyCalc if Roster Audit doesn't answer); redraft and keeper leagues use FantasyCalc's redraft values. Offers show the value change; an incoming offer losing 10%+ is a yellow variance. Team strengths: Roster Audit (dynasty) or rest-of-season projections (redraft/keeper). Neither site could be reached from the build sandbox, so check the Trades page's first line after deploying: it says which source was used, or that values were unavailable. Optional env vars: `VALUES_USER_AGENT` (some sites reject requests without a browser-like user agent), `ROSTER_AUDIT_BASE`, `FANTASYCALC_BASE`.
+- **Player card.** Tap any player's photo or name. Stats come from nflverse's public GitHub releases (downloaded on first use and cached in `DATA_DIR/nflverse`, roughly 30–50 MB including career seasons; optional `NFLVERSE_BASE` to point elsewhere) and ESPN's news feed. The first card after a restart takes a second or two while the files load.
+- **Header menu.** Your Sleeper photo/name at the top left opens My leagues, League management (the old "Edit tracked leagues"), Enable alerts, Account settings and Log out.
+- **Images are amd64 only** from v3.5. For an ARM image, see the `docker buildx` note under "Publishing images to Docker Hub".
+- Injury opportunities, Game Day and trade-page changes: see CHANGELOG v3.5.
 
 ### v3.3 additions
 CBS auto mode now signs in and saves picks directly (no recipe needed; see CBS-CAPTURE.md), switches itself off if you change a pick on CBS, and asks before a manual pick turns it off. Analytics has a new "My performance" tab. Sleeper/other API calls are cached much more (details in the changelog). The GitHub image build is faster.
@@ -851,6 +858,8 @@ too, not just this README.
 
 ### Trade Radar: what "team strength" actually means here
 
+**v3.5 update:** the ECR description below is now only the fallback. Strength is the sum of each team's starters at a position (its slots plus each flex it can fill) by Roster Audit value in dynasty leagues, or by rest-of-season projected points (Sleeper's weekly projections summed to the end of the fantasy playoffs, league scoring) in redraft and keeper leagues. The page's first line says which was used.
+
 Rebuilt this round to show every team's strengths/weaknesses, not just
 yours, with suggestions grouped under each opposing team — matching the
 requested design of "identify weaknesses per team, then suggest a swap
@@ -960,7 +969,7 @@ not just restarts.
 
 ```
 .github/workflows/
-  docker-publish.yml    Builds + pushes both images to Docker Hub (multi-arch) on push to main
+  docker-publish.yml    Builds + pushes both images to Docker Hub (linux/amd64) on push to main
 docker-compose.yml      PRIMARY: pulls prebuilt Docker Hub images, no build context — Portainer just pulls. Requires an external `caddy_net` Docker network to already exist (see Caddy section).
 docker-compose.local-build.yml  Builds from source instead — local dev, or build-on-host if preferred
 .env.example           Template for local `docker compose up` (skip if using Portainer)
@@ -987,6 +996,12 @@ server/
   playerIdMap.js          ffb_ids ID crosswalk (Sleeper/ESPN/FantasyPros/etc)
   matching.js             Name-based cross-source player matching (FantasyPros ECR)
   buildLeague.js          Merges everything into the shape the UI renders
+  values.js               Trade values: Roster Audit (dynasty) and FantasyCalc (redraft/keeper; dynasty fallback) (v3.5)
+  rosProjections.js       Rest-of-season points from Sleeper weekly projections (v3.5)
+  tradeTools.js           Position strength, strengths/weaknesses, pick slots, value fairness (v3.5)
+  nflverseStats.js        nflverse CSV downloads (weekly, season, team, snaps, PFR, NGS, players), disk-cached (v3.5)
+  advancedStats.js        Player-card advanced stats and their colours (v3.5)
+  playerCard.js           The player card: bio, ranks, game log, team, history, news, values (v3.5)
   db.js                   SQLite: generic cache, persistent injury tracking, session/build cache
   scheduler.js             Hourly background refresh for the last-active user's leagues
   faab.js                  FAAB bid-percentile suggestions (tracked leagues only — see caveats)

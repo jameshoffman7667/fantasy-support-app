@@ -105,7 +105,7 @@ function cleanStats(raw) {
  *   { byId: { sleeperPlayerId: { pos, stats } }, count, withProjection }
  * Throws if Sleeper can't be reached — the caller falls back to ESPN.
  */
-export async function getWeekProjections(season, week, { force = false } = {}) {
+export async function getWeekProjections(season, week, { force = false, ttlMs = null } = {}) {
   const cacheKey = `sleeper:proj:${season}:${week}`;
   // force: the pre-kickoff refresh (scheduler.js) skips the hourly cache.
   const cached = force ? null : cacheGet(cacheKey);
@@ -130,7 +130,7 @@ export async function getWeekProjections(season, week, { force = false } = {}) {
   }
   const data = { byId, count: rows.length, withProjection };
   console.log(`[sleeperProjections] ${season} week ${week}: ${rows.length} rows from Sleeper, ${withProjection} with a usable projection.`);
-  cacheSet(cacheKey, data, CACHE_TTL_MS);
+  cacheSet(cacheKey, data, ttlMs || CACHE_TTL_MS); // v3.5: future weeks (rest of season) are kept a day
   return data;
 }
 

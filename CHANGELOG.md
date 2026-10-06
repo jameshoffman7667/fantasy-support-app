@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,34 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.5 — trade values, player card, injury rules, Game Day, header menu
+
+**Commit (short):** `v3.5: feat: trade values, player card, Game Day`
+
+**Commit (extended):**
+v3.5 adds trade values. Dynasty leagues use Roster Audit (FantasyCalc as fallback); redraft and keeper leagues use FantasyCalc redraft values. Incoming offers show the value change and get a yellow variance when they lose more than 10%; a 10%+ gain shows green. Team strengths come from Roster Audit in dynasty and rest-of-season projections otherwise, and Trade Finder keeps swaps within 10% in value. Opponent ownership leaves best ball out unless switched on and shows each opponent's share of his leagues. The deadline is the end of the week's last game, teams show real names, and a manual refresh re-reads offers.
+
+Tapping a player opens a Sleeper-style card: decimal age, number and bye, ranks, projections, news, game log, team ranks and depth chart, league history, career, and nflverse advanced stats coloured by percentile or fixed thresholds.
+
+Injury opportunities need 5+ projected points before the injury, only promote players below him, and fill two same-position and one WR/TE pickup from his own team first. Game Day has two-wide cards with win %, a first-kickoff baseline and grouped game slots. New header menu and icons; images are amd64 only.
+
+**Details**
+- Trade values (`server/values.js`, new): Roster Audit public API (`/rankings/values?format_key=` with sf_ppr / 1qb_ppr / sf_half / 1qb_half / sf_ppr_tep chosen from the league's QB slots, PPR and TE premium; `/picks`; `/players/{id}`; `/trade/calculate`) and FantasyCalc (`/values/current?isDynasty&numQbs&numTeams&ppr`). Dynasty (`settings.type` 2): Roster Audit, FantasyCalc dynasty if Roster Audit doesn't answer. Redraft and keeper: FantasyCalc `redraftValue`. Tables are cached 24 h; the last good copy is used for up to 7 days when a site fails ("yesterday's values" note); a failure is retried after 10 minutes. No Roster Audit credit in the UI (personal app). Optional env: `VALUES_USER_AGENT`, `ROSTER_AUDIT_BASE`, `FANTASYCALC_BASE`.
+- Offers (`privateData.js decorateOffers`): both sides valued (players + picks; dynasty picks by year/round and early/mid/late slot from the original owner's strength; redraft ignores picks and says so). Verdict: win at +10% or more (green note), loss at −10% or worse, otherwise about even. New yellow variance "Offer loses trade value" for incoming losses. Dynasty offers also get Roster Audit's own calculator result (we send what you get as side A); the calculator is limited to about 35 calls an hour and cached 6 h, and the saved copy shown while the app starts never calls it.
+- Strengths and weaknesses (`tradeTools.js`, new): each position's starting slots plus every flex it can fill; dynasty sums Roster Audit values, redraft/keeper sums rest-of-season points (`rosProjections.js`, new: Sleeper weekly projections from this week to the last fantasy playoff week, league scoring, cached 6 h). Shown as ranks ("2nd of 12"). Old ECR/projection ranking stays as the fallback. Trade Finder: different positions, within 10% in value, ranked by lineup gain; shows both values.
+- Trades page: "Owned by opponents elsewhere" leaves best ball leagues out unless the new box is ticked, and shows each opponent's share of his own leagues plus the average. Deadline = end of the deadline week's last game (last kickoff + 3.5 h, or when that game is final), no explanation note. Withdraw warning removed. Roster labels use team names. The refresh button rebuilds with `manual: true`, which re-reads trade offers and claims live (the 30-minute auto refresh doesn't).
+- Player card (`playerCard.js`, `nflverseStats.js`, `advancedStats.js`, new; `GET /api/player-card?id=&leagueId=`, league must be tracked): tap a player's photo or name anywhere (Roster, rankings, lineup rows, Waivers, Claims, drops, Injury, Trades, offers, Game Day). Header in team colours: age with one decimal, height, weight, experience, position, team, number, bye. Availability in your leagues. Tabs: Summary (position/overall rank, points per game in the league's scoring, Sleeper trending adds, this week's matchup, last game, 4-week projections, advanced stats, dynasty/trade value with 7/30-day trend, ESPN news), Game log (this and last season, with snap % and weekly rank), Team (6 offence ranks, depth chart with ages, rookies and injury marks), History (league transactions and drafts across previous seasons, career by season with half-PPR/PPR ranks). nflverse files are cached on disk (12 h current season, 30 days older).
+- Advanced stats: QB snap share, CPOE, EPA per dropback, pressure rate, bad throw % (+ air yards, time to throw as context); RB snap share, carry share, target share, YPC, rush yards over expected, yards after contact, broken tackles, drop rate (+ stacked boxes); WR/TE snap share, target share, air yards share, targets and yards per route (est.), separation, YAC over expected, drop rate (+ aDOT, cushion). Toggle Percentile (top/bottom third among qualifying players at the position) or Fixed (2025 top/bottom-third cut-offs, recalibrated from real data — several earlier proposed numbers were off); remembered on the device. Routes = offensive snaps × team dropback rate, WR/TE only.
+- Bye weeks on roster ranking and waiver cards (`schedule.getSeasonSchedule`).
+- Injury opportunities (`injuryOpps.js`): ESPN WR1/WR2/WR3 slots kept; backups are his own slot's backups then players ranked below him (a hurt WR3 never promotes the WR2). Only players projected 5+ points before the injury count (that week's projection if any, else the latest of the previous 3 weeks' stored projections, else season points per game). Pickups: two available same-position players from his team and the best available of the team's top-three WR/TE; other teams only top up when he is on your active roster and his team can't fill it. Injury rows no longer show the status twice.
+- Game Day: league cards two wide, "my score (proj) – their score (proj)"; title green/red when your expected final leads/trails by 5% or more of the points both teams still have to score, yellow in between; projections red when below the baseline; live win % (normal approximation, SD 2.3 × √remaining points). Baseline = projected totals at the week's first kickoff (kept up to date until then; the scheduler snapshots 60 minutes before). Players grouped by kickoff slot → game → team, slots collapsible, finished games in a collapsed "Complete" section at the top.
+- Header and navigation: Sleeper photo and name top left open a menu (My leagues, League management = the old Edit tracked leagues, Enable alerts, Account settings, Log out); league pictures beside league names; League Management icon = football player outline, Game Day icon = uprights; sync status moved to the bottom of the page.
+- Build: Docker images are `linux/amd64` only (QEMU step removed).
+- Tests: unit 97 checks (values parsing, verdicts, strength ranks, deadline, injury rules incl. same-team fill and other-team top-ups, win %, advanced-stat colours and CSV parsing), integration 53 checks with mocked Sleeper/ESPN/value sites and real nflverse files (48 with the value sites down), client modules 12 checks (v3.4 lock rules still hold; the new offer variance), Playwright harness over the real client (dashboard, menu, trades, Game Day, card tabs and toggle, waivers, injury, lineup rows: no page errors), eslint no-undef. Not run: vite build, Docker build, anything live.
+- Unverified (sites unreachable from the build sandbox): Roster Audit and FantasyCalc responses (parsed defensively; the app falls back to projection ranks), Roster Audit calculator verdict wording, ESPN depth chart and news shapes beyond what was checked, 2.3 win % spread.
 
 ---
 

@@ -123,6 +123,11 @@ export function getMatchupsLive(leagueId, week, maxAgeMs = 45 * 1000) {
   return p;
 }
 
+// v3.5: a draft's picks (player card history). A finished draft never changes, so it is kept a season.
+export function getDraftPicks(draftId, opts = {}) {
+  return cached(`sl:draftpicks:${draftId}`, TTL.season, () => sleeperFetch(`/draft/${draftId}/picks`), opts);
+}
+
 // ~5MB dictionary of every NFL player. Sleeper's own docs ask integrators
 // not to poll this more than once a day. R21: daily in season, weekly in the offseason.
 export async function getPlayers() {

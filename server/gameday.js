@@ -68,6 +68,60 @@ export function categorize(F, A, ratio) {
 const name = (p, id) => (p ? `${p.first_name || ""} ${p.last_name || ""}`.trim() : `Player ${id}`);
 const r2 = (x) => Math.round(x * 100) / 100;
 
+function erf(x) {
+  // Abramowitz-Stegun 7.1.26
+  const sgn = Math.sign(x);
+  x = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * x);
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return sgn * y;
+}
+const normCdf = (z) => 0.5 * (1 + erf(z / Math.SQRT2));
+
+/**
+ * v3.5 — one matchup's outlook from live points and expected finals.
+ *  remaining = points still expected for BOTH teams (expected final minus points so far)
+ *  threshold = 5% of remaining; colour: green when your expected final leads by at least the threshold, red when
+ *              it trails by at least that much, yellow in between (at the end, remaining is 0: green = won).
+ *  win %     = normal approximation: margin / (2.3 × √remaining) — about a 25-point spread for one team's full
+ *              week. A rough estimate, not a model of each player's distribution.
+ */
+export const WIN_SD_PER_ROOT_POINT = 2.3;
+export function matchupOutlook({ myPoints = 0, oppPoints = 0, myProjected = 0, oppProjected = 0 }) {
+  const myRem = Math.max(0, myProjected - myPoints);
+  const oppRem = Math.max(0, oppProjected - oppPoints);
+  const remaining = myRem + oppRem;
+  const diff = myProjected - oppProjected;
+  const threshold = 0.05 * remaining;
+  const color = diff > 0 && diff >= threshold ? "green" : diff < 0 && -diff >= threshold ? "red" : "yellow";
+  const winProb = remaining <= 0.01 ? (diff > 0 ? 1 : diff < 0 ? 0 : 0.5) : normCdf(diff / Math.max(0.5, WIN_SD_PER_ROOT_POINT * Math.sqrt(remaining)));
+  return { myRemaining: r2(myRem), oppRemaining: r2(oppRem), threshold: r2(threshold), color, winProb: Math.round(winProb * 1000) / 1000 };
+}
+
+/**
+ * v3.5 — each matchup's projected totals at the week's first kickoff (the baseline that projections are compared
+ * with: a projection below it shows red). Updated on every Game Day load before that kickoff, then frozen; the
+ * scheduler also takes one about an hour before the first kickoff so it exists even if Game Day wasn't opened.
+ */
+const baselineKey = (u, season, week) => `gameday_baseline:${u}:${season}:${week}`;
+export function getBaselines(username, season, week) {
+  return store.getState(baselineKey(username, season, week), {}) || {};
+}
+function updateBaselines(username, season, week, leagues, firstKickoff, now = Date.now()) {
+  const cur = getBaselines(username, season, week);
+  let changed = false;
+  for (const l of leagues) {
+    if (l.myProjected == null || l.oppProjected == null) continue;
+    const before = firstKickoff == null || now < firstKickoff;
+    if (before || !cur[l.id]) {
+      cur[l.id] = { my: l.myProjected, opp: l.oppProjected, at: now, late: !before };
+      changed = true;
+    }
+  }
+  if (changed) store.setState(baselineKey(username, season, week), cur);
+  return cur;
+}
+
 export async function getGameDay(username, { week: weekParam } = {}) {
   const state = getUserState(username);
   const leagueIds = state?.leagueIds || [];
@@ -102,6 +156,7 @@ export async function getGameDay(username, { week: weekParam } = {}) {
         const u = users.find((x) => x.user_id === roster.owner_id);
         return roster.metadata?.team_name || u?.metadata?.team_name || u?.display_name || `Roster ${roster.roster_id}`;
       };
+      const avatarOf = (roster) => users.find((x) => x.user_id === roster?.owner_id)?.avatar || null;
       const myM = mine ? (matchups || []).find((m) => m.roster_id === mine.roster_id) : null;
       const oppM = myM && myM.matchup_id != null ? matchups.find((m) => m.matchup_id === myM.matchup_id && m.roster_id !== myM.roster_id) : null;
       const summary = {
@@ -111,6 +166,8 @@ export async function getGameDay(username, { week: weekParam } = {}) {
         include: ls.include,
         myTeam: teamName(mine),
         oppTeam: oppM ? teamName(rosters.find((r) => r.roster_id === oppM.roster_id)) : null,
+        avatar: league.avatar || null, // v3.5: league picture
+        oppAvatar: oppM ? avatarOf(rosters.find((r) => r.roster_id === oppM.roster_id)) : null,
         note: !mine ? "Your roster wasn't found" : !myM ? "No matchup this week" : !oppM ? "No opponent this week (bye/median)" : null,
       };
       leagues.push(summary);
@@ -145,6 +202,7 @@ export async function getGameDay(username, { week: weekParam } = {}) {
         oppProjected: r2(opp.final),
         marginPct: r2(close.marginPct),
         closeFactor: r2(close.factor),
+        ...matchupOutlook({ myPoints: me.points, oppPoints: opp.points, myProjected: me.final, oppProjected: opp.final }),
       });
       if (!ls.include || !(ls.importance > 0)) continue;
       const weight = ls.importance * (settings.closeWeighting ? close.factor : 1);
@@ -156,6 +214,9 @@ export async function getGameDay(username, { week: weekParam } = {}) {
           const g = gameFor(team);
           byPlayer.set(entry.id, {
             id: entry.id,
+            // v3.5: the game this player is in ("AWAY@HOME"), for grouping by game then team
+            gameKey: g?.opponent && team ? (g.homeAway === "home" ? `${schedule.normalizeTeam(g.opponent)}@${schedule.normalizeTeam(team)}` : `${schedule.normalizeTeam(team)}@${schedule.normalizeTeam(g.opponent)}`) : null,
+            home: g ? g.homeAway === "home" : null,
             name: p?.position === "DEF" ? `${p?.first_name || entry.id} ${p?.last_name || "D/ST"}`.trim() : name(p, entry.id),
             pos: p?.position || null,
             team,
@@ -185,10 +246,33 @@ export async function getGameDay(username, { week: weekParam } = {}) {
     }
   }
 
+  // v3.5: baselines (projected totals at the week's first kickoff) and each league's projection vs that baseline.
+  const kickoffs = Object.values(sched0?.byTeam || {}).map((g) => g.kickoffMillis).filter((k) => Number.isFinite(k));
+  const firstKickoff = kickoffs.length ? Math.min(...kickoffs) : null;
+  const baselines = updateBaselines(username, season, week, leagues, firstKickoff);
+  for (const l of leagues) {
+    const b = baselines[l.id];
+    if (!b) continue;
+    l.baseline = { my: b.my, opp: b.opp, late: Boolean(b.late), at: b.at };
+    l.myBelowBaseline = l.myProjected != null && l.myProjected < b.my - 0.05;
+    l.oppBelowBaseline = l.oppProjected != null && l.oppProjected < b.opp - 0.05;
+  }
+
   const list = [...byPlayer.values()].map((p) => {
     const stake = p.F + p.A;
     return { ...p, F: r2(p.F), A: r2(p.A), stake: r2(stake), lean: stake > 0 ? r2(p.F / stake) : 0.5, category: categorize(p.F, p.A, settings.ratio) };
   });
   list.sort((a, b) => b.stake - a.stake || b.lean - a.lean);
-  return { season, week, settings, leagues, players: list, updatedAt: Date.now() };
+  return { season, week, settings, leagues, players: list, firstKickoff, updatedAt: Date.now() };
+}
+
+/** v3.5: scheduler hook — refresh every active user's baselines shortly before the week's first kickoff. */
+export async function snapshotBaselines(usernames) {
+  for (const u of usernames) {
+    try {
+      await getGameDay(u);
+    } catch (err) {
+      console.warn(`[gameday] baseline snapshot failed for ${u}: ${err.message}`);
+    }
+  }
 }

@@ -225,13 +225,16 @@ function StatusBadge({ status, label, onClick, compact }) {
     <Tag
       onClick={onClick}
       style={{ background: s.bg, color: s.color, border: `1px solid ${s.color}33` }}
-      className={`flex items-center gap-1 rounded-md ${compact ? "px-1.5 py-1" : "px-2.5 py-1.5"} shrink-0`}
+      className={`flex items-center ${compact ? "gap-0.5 px-1 py-1" : "gap-1 px-2.5 py-1.5"} rounded-md shrink-0`}
     >
-      <Icon size={14} strokeWidth={2.3} />
-      {label && <span className="text-xs font-medium" style={{ fontFamily: "Inter, sans-serif" }}>{label}</span>}
+      <Icon size={compact ? 12 : 14} strokeWidth={2.3} />
+      {label && <span className={`${compact ? "text-[11px]" : "text-xs"} font-medium`} style={{ fontFamily: "Inter, sans-serif" }}>{label}</span>}
     </Tag>
   );
 }
+
+// v3.5: position colours in the style of Sleeper's app (QB pink-red, RB green, WR blue, TE orange, K purple, DEF brown).
+const POS_COLOR = { QB: "#FC2B6D", RB: "#20CEB8", WR: "#56C9F8", TE: "#FEAE58", K: "#C96CFF", DEF: "#BF755D", FLEX: "#B6C2CF", SFLX: "#B6C2CF" };
 
 // Projection source codes from the server (v2.4): V = Vegas props, T = Tank01,
 // S = Sleeper, E = ESPN.
@@ -440,6 +443,548 @@ function Modal({ title, onClose, children }) {
         {children}
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  v3.5 PLAYER CARD POP-UP (benchmarked on Sleeper's player card)      */
+/* ------------------------------------------------------------------ */
+// Anything that shows a player can open his card: PlayerCardCtx.open(player). The app supplies the league
+// that's on screen (if any) as context for scoring, ownership and trade values.
+const PlayerCardCtx = React.createContext({ open: () => {} });
+function PlayerLink({ player, leagueId, children, className = "", style = {}, ...rest }) {
+  const ctx = React.useContext(PlayerCardCtx);
+  if (!player?.id) return <div className={className} style={style} {...rest}>{children}</div>;
+  return (
+    <button
+      {...rest}
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        ctx.open(player, { leagueId });
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      className={`text-left ${className}`}
+      style={style}
+      data-player-link={player.id}
+      aria-label={`Open ${player.name || "player"} card`}
+    >
+      {children}
+    </button>
+  );
+}
+
+const ADV_COLOR = { good: C.ok, ok: C.minor, bad: C.major };
+function fmtAdv(v, fmt) {
+  if (v == null) return "—";
+  const n = Number(v);
+  switch (fmt) {
+    case "pct0": return `${Math.round(n)}%`;
+    case "pct1": return `${n.toFixed(1)}%`;
+    case "dec1": return n.toFixed(1);
+    case "dec2": return n.toFixed(2);
+    case "dec3": return n.toFixed(3);
+    case "sgn1": return `${n > 0 ? "+" : ""}${n.toFixed(1)}`;
+    case "sgn2": return `${n > 0 ? "+" : ""}${n.toFixed(2)}`;
+    default: return String(Math.round(n * 100) / 100);
+  }
+}
+const ordinalN = (n) => {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+function readPref(key, fallback) {
+  try {
+    return window.localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writePref(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* private mode: the choice just isn't remembered */
+  }
+}
+const rankColor = (rank) => (rank == null ? C.textFaint : rank <= 12 ? C.ok : rank <= 24 ? C.minor : C.major);
+const teamRankColor = (rank, of = 32) => (rank == null ? C.textFaint : rank <= Math.round(of * 0.32) ? C.ok : rank <= Math.round(of * 0.69) ? C.minor : C.major);
+const timeAgo = (iso) => {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 60) return `${Math.max(1, m)}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+};
+
+function AdvancedStats({ adv }) {
+  const [mode, setMode] = useState(() => readPref("fm-adv-colour", "percentile"));
+  if (!adv) return null;
+  if (adv.error) return <div style={{ color: C.textFaint }} className="text-xs">Advanced stats unavailable: {adv.error}</div>;
+  if (!adv.rows?.length) return <div style={{ color: C.textFaint }} className="text-xs">No advanced stats yet this season.</div>;
+  const setM = (m) => {
+    setMode(m);
+    writePref("fm-adv-colour", m);
+  };
+  return (
+    <div data-advanced>
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Advanced · season to date{adv.throughWeek ? ` (through week ${adv.throughWeek})` : ""}</div>
+        <div className="flex rounded-md overflow-hidden text-[10px]" style={{ border: `1px solid ${C.border}` }} role="group" aria-label="Colouring">
+          {["percentile", "fixed"].map((m) => (
+            <button key={m} type="button" onClick={() => setM(m)} style={{ background: mode === m ? C.brand : "transparent", color: mode === m ? "#fff" : C.textMuted }} className="px-2 py-0.5" data-adv-mode={m} aria-pressed={mode === m}>
+              {m === "percentile" ? "Percentile" : "Fixed"}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-1">
+        {adv.rows.map((r) => {
+          const c = mode === "fixed" ? r.fixedColor : r.pctColor;
+          const color = r.context ? C.textMuted : ADV_COLOR[c] || C.textMuted;
+          const sub = r.context
+            ? "context"
+            : !r.enough
+            ? "small sample"
+            : mode === "fixed"
+            ? r.fixed ? `good ${r.better === "low" ? "≤" : "≥"} ${fmtAdv(r.fixed[0], r.fmt)}, poor ${r.better === "low" ? ">" : "<"} ${fmtAdv(r.fixed[1], r.fmt)}` : ""
+            : r.percentile != null ? `${ordinalN(r.percentile)} percentile of ${r.poolSize}` : "";
+          return (
+            <div key={r.key} className="flex items-center justify-between gap-2 text-xs" data-adv-row={r.key} data-adv-color={r.context ? "context" : c || "none"}>
+              <div className="min-w-0">
+                <div style={{ color: C.text }} className="truncate">{r.label}</div>
+                <div style={{ color: C.textFaint }} className="text-[10px]">{sub}</div>
+              </div>
+              <span style={{ color, background: r.context || !c ? "transparent" : `${color}22`, border: `1px solid ${r.context || !c ? C.border : `${color}66`}`, fontVariantNumeric: "tabular-nums" }} className="rounded px-1.5 py-0.5 font-semibold shrink-0">
+                {fmtAdv(r.value, r.fmt)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ color: C.textFaint }} className="text-[10px] mt-1.5">
+        Percentile: among {adv.pos}s with enough playing time this season (top third green, bottom third red). Fixed: last season's top-third / bottom-third cut-offs. "est." routes = offensive snaps × the team's dropback rate.
+      </div>
+    </div>
+  );
+}
+
+function PlayerCardModal({ target, onClose }) {
+  const [card, setCard] = useState(null);
+  const [error, setError] = useState(null);
+  const [tab, setTab] = useState("summary");
+  const [logSeason, setLogSeason] = useState(0);
+  const [availOpen, setAvailOpen] = useState(false);
+  const p = target.player || {};
+  useEffect(() => {
+    let alive = true;
+    setCard(null);
+    setError(null);
+    api.getPlayerCard(p.id, target.leagueId).then((c) => alive && setCard(c)).catch((e) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [p.id, target.leagueId]);
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const team = card?.team || p.team;
+  const tc = TEAM_COLORS[normTeam(team)] || ["#2A3A3F", "#5E7570"];
+  const name = card?.name || p.name || "Player";
+  const first = card?.firstName || name.split(" ")[0];
+  const last = card?.lastName || name.split(" ").slice(1).join(" ");
+  const pos = card?.pos || p.pos;
+  const posColor = POS_COLOR[pos] || C.textMuted;
+  const owner = card?.availability?.find((a) => a.current);
+  const stat = (label, value) => (
+    <div className="text-center min-w-0">
+      <div style={{ color: "#ffffffaa" }} className="text-[10px] tracking-wide">{label}</div>
+      <div style={{ color: "#fff", fontFamily: "Oswald, sans-serif" }} className="text-xl font-semibold leading-tight">{value ?? "—"}</div>
+    </div>
+  );
+  return (
+    <div role="dialog" aria-modal="true" aria-label={`${name} player card`} onClick={onClose} style={{ background: "rgba(0,0,0,0.65)" }} className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" data-player-card={p.id}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, border: `1px solid ${C.border}` }} className="w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-t-xl sm:rounded-xl">
+        {/* header */}
+        <div className="relative px-4 pt-4 pb-3" style={{ background: `linear-gradient(120deg, ${tc[0]} 0%, ${tc[0]}cc 55%, ${tc[1]}88 100%)` }}>
+          <button onClick={onClose} aria-label="Close" className="absolute top-2 right-2 p-1.5 rounded-full" style={{ color: "#fff", background: "#00000044" }} data-card-close>
+            <X size={18} />
+          </button>
+          <div className="flex items-start gap-3">
+            <Headshot player={{ id: p.id, pos, name }} size={76} />
+            <div className="min-w-0 flex-1">
+              {owner && <div style={{ color: "#ffffffcc" }} className="text-[11px]">{owner.status === "yours" ? "On your team" : owner.status === "rostered" ? `→ ${owner.owner || "another team"}` : "Available in this league"}</div>}
+              <div style={{ color: "#fff", fontFamily: "Oswald, sans-serif" }} className="text-lg font-semibold leading-tight uppercase">{first}</div>
+              <div style={{ color: "#fff", fontFamily: "Oswald, sans-serif" }} className="text-2xl font-bold leading-tight uppercase truncate">{last}</div>
+              <div className="text-xs mt-0.5" style={{ color: "#ffffffdd" }}>
+                <span style={{ color: posColor, background: "#00000055" }} className="font-bold rounded px-1">{pos}</span> · {team || "FA"}{card?.number != null ? ` · #${card.number}` : ""}
+                {card?.bye != null || p.bye != null ? ` · Bye ${card?.bye ?? p.bye}` : ""}
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-4 gap-1 mt-3">
+            {stat("AGE", card?.age != null ? card.age.toFixed(1) : p.age != null ? Number(p.age).toFixed(1) : null)}
+            {stat("HEIGHT", card?.height)}
+            {stat("WEIGHT", card?.weight ? `${card.weight}` : null)}
+            {stat("EXP", card?.exp)}
+          </div>
+          {card?.injury && (
+            <div className="mt-2 text-xs rounded px-2 py-1" style={{ background: "#00000055", color: C.minor }}>
+              {card.injury.status}{card.injury.detail ? ` — ${card.injury.detail}` : ""}{card.injury.notes ? ` · ${card.injury.notes}` : ""}
+            </div>
+          )}
+        </div>
+        {/* availability */}
+        {card?.availability?.length > 0 && (
+          <div className="px-4 py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <button type="button" onClick={() => setAvailOpen((o) => !o)} className="w-full flex items-center justify-between text-xs" style={{ color: C.text }} aria-expanded={availOpen} data-card-availability>
+              <span className="font-semibold tracking-wide">AVAILABILITY IN YOUR LEAGUES</span>
+              <ChevronRight size={14} style={{ transform: availOpen ? "rotate(90deg)" : "none", color: C.textMuted }} />
+            </button>
+            {availOpen && (
+              <div className="mt-1.5 space-y-1">
+                {card.availability.map((a) => (
+                  <div key={a.leagueId} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="flex items-center gap-1.5 min-w-0" style={{ color: C.textMuted }}>
+                      <Avatar avatar={a.avatar} name={a.league} size={16} square />
+                      <span className="truncate">{a.league}</span>
+                    </span>
+                    <span style={{ color: a.status === "available" ? C.ok : a.status === "yours" ? C.brand : C.textFaint }} className="shrink-0">
+                      {a.status === "available" ? "Available" : a.status === "yours" ? "Yours" : a.owner || "Rostered"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {/* tabs */}
+        <div className="flex sticky top-0 z-10" style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+          {[["summary", "SUMMARY"], ["log", "GAME LOG"], ["team", "TEAM"], ["history", "HISTORY"]].map(([k, label]) => (
+            <button key={k} type="button" onClick={() => setTab(k)} className="flex-1 py-2.5 text-[11px] font-semibold tracking-wide" style={{ color: tab === k ? C.text : C.textMuted, borderBottom: `2px solid ${tab === k ? C.text : "transparent"}` }} data-card-tab={k}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="px-4 py-3 space-y-4">
+          {error && <div style={{ color: C.major }} className="text-xs">Couldn't load the card: {error}</div>}
+          {!card && !error && <div className="flex items-center gap-2 text-xs" style={{ color: C.textMuted }}><Loader2 size={14} className="animate-spin" /> Loading…</div>}
+          {card && tab === "summary" && <CardSummary card={card} preview={p} />}
+          {card && tab === "log" && <CardGameLog card={card} index={logSeason} setIndex={setLogSeason} />}
+          {card && tab === "team" && <CardTeam card={card} />}
+          {card && tab === "history" && <CardHistory card={card} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CardSection({ title, children, right }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">{title}</div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function CardSummary({ card, preview }) {
+  const s = card.summary || {};
+  const v = card.value;
+  const lg = card.gameLog?.[0];
+  const colLabel = (k) => lg?.columns?.find((c) => c.key === k)?.label || k;
+  return (
+    <>
+      <div className="grid grid-cols-3 gap-2" data-card-ranks>
+        <div>
+          <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Player rank</div>
+          <div className="flex gap-3 mt-0.5">
+            <div><div style={{ color: C.text, fontFamily: "Oswald, sans-serif" }} className="text-lg font-semibold">{s.posRank ? `#${s.posRank}` : "—"}</div><div style={{ color: C.textFaint }} className="text-[10px]">{card.pos}</div></div>
+            <div><div style={{ color: C.text, fontFamily: "Oswald, sans-serif" }} className="text-lg font-semibold">{s.overallRank ? `#${s.overallRank}` : "—"}</div><div style={{ color: C.textFaint }} className="text-[10px]">OVERALL</div></div>
+          </div>
+        </div>
+        <div>
+          <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Fpts / game</div>
+          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif" }} className="text-lg font-semibold mt-0.5">{s.fptsPerGame != null ? s.fptsPerGame.toFixed(2) : "—"}</div>
+          <div style={{ color: C.textFaint }} className="text-[10px]">{card.league?.scoring || "PPR"} · {s.games ?? 0} games</div>
+        </div>
+        <div>
+          <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Trending</div>
+          <div style={{ color: s.trendingAdds ? C.ok : C.textMuted, fontFamily: "Oswald, sans-serif" }} className="text-lg font-semibold mt-0.5">{s.trendingAdds ? `+${fmtInt(s.trendingAdds)}` : "—"}</div>
+          <div style={{ color: C.textFaint }} className="text-[10px]">Sleeper adds (24h)</div>
+        </div>
+      </div>
+
+      {(preview?.matchup || preview?.opponent || preview?.proj != null) && (
+        // League pages pass the full player (matchup chip, weather, projection source); Game Day rows pass the
+        // game (opponent, live status, points so far).
+        <CardSection title={`This week${card.asOf?.week ? ` · week ${card.asOf.week}` : ""}`}>
+          <div className="rounded-md px-3 py-2 space-y-1" style={{ background: C.surface, border: `1px solid ${C.border}` }} data-card-thisweek>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1 flex-wrap">
+                {preview.matchup ? (
+                  <MatchupChip player={preview} profile={preview.profile} />
+                ) : preview.opponent ? (
+                  <span style={{ color: C.textMuted }} className="text-[11px] font-semibold">{preview.team} {preview.home ? "vs" : "@"} {preview.opponent}</span>
+                ) : null}
+                {(() => {
+                  const when = preview.state === "in" || preview.state === "post" ? preview.statusDetail : preview.matchup?.kickoffLabel || preview.kickoffLabel;
+                  return when ? <span style={{ color: preview.state === "in" ? C.brand : C.textFaint }} className="text-[10px]">{when}</span> : null;
+                })()}
+                <WeatherChip player={preview} />
+              </div>
+              {preview.points != null ? (
+                <div className="text-right shrink-0">
+                  <div style={{ color: C.text, fontFamily: "Oswald, sans-serif" }} className="text-base font-semibold">{preview.points.toFixed(1)}</div>
+                  <div style={{ color: preview.state === "in" ? C.brand : C.textFaint }} className="text-[10px]">{preview.state === "post" ? "FINAL" : "LIVE"}{preview.proj != null ? ` · proj ${preview.proj.toFixed(1)}` : ""}</div>
+                </div>
+              ) : preview.proj != null ? (
+                <div className="text-right shrink-0">
+                  <div style={{ color: C.text, fontFamily: "Oswald, sans-serif" }} className="text-base font-semibold">{preview.proj.toFixed(1)}</div>
+                  <div style={{ color: preview.projSource === "actual" ? C.brand : SRC_COLOR[preview.projSource] || C.textFaint }} className="text-[10px]">{preview.projSource === "actual" ? "FINAL" : SOURCE_TAG[preview.projSource] || "proj"}</div>
+                </div>
+              ) : null}
+            </div>
+            <StatLine player={preview} />
+          </div>
+        </CardSection>
+      )}
+
+      {s.lastGame && (
+        <CardSection title="Performance">
+          <div className="rounded-md px-3 py-2" style={{ background: C.surface, border: `1px solid ${C.border}` }} data-card-lastgame>
+            <div className="flex items-center justify-between text-xs">
+              <span style={{ color: C.textMuted }}>Week {s.lastGame.week} · {s.lastGame.home === false ? "@" : "vs"} {s.lastGame.opp}{s.lastGame.result ? ` · ${s.lastGame.result} ${s.lastGame.teamScore}-${s.lastGame.oppScore}` : ""}</span>
+              <span style={{ color: C.text }} className="font-semibold">{s.lastGame.fpts != null ? `${s.lastGame.fpts.toFixed(1)} fpts` : ""}</span>
+            </div>
+            <div style={{ color: C.textMuted }} className="text-[11px] mt-1">
+              {Object.entries(s.lastGame.stats || {}).filter(([, v]) => v).map(([k, v]) => `${v} ${colLabel(k).toLowerCase()}`).join(" · ") || "No stats"}
+            </div>
+          </div>
+        </CardSection>
+      )}
+
+      {s.projections?.length > 0 && (
+        <CardSection title="Projections">
+          <div className="grid grid-cols-4 gap-1.5" data-card-projections>
+            {s.projections.map((pr) => (
+              <div key={pr.week} className="rounded-md px-1.5 py-1.5 text-center" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                <div style={{ color: C.textFaint }} className="text-[10px]">WK {pr.week}{pr.opp ? ` ${pr.home === false ? "@" : "vs"} ${pr.opp}` : ""}</div>
+                {pr.bye ? (
+                  <div style={{ color: C.textMuted }} className="text-xs font-semibold py-1">BYE</div>
+                ) : (
+                  <>
+                    <div className="text-[11px]" style={{ color: C.textMuted }}>PROJ <b style={{ color: C.text }}>{pr.proj != null ? pr.proj.toFixed(1) : "—"}</b></div>
+                    <div className="text-[11px]" style={{ color: C.textMuted }}>FINAL <b style={{ color: pr.final != null ? C.text : C.textFaint }}>{pr.final != null ? pr.final.toFixed(1) : "—"}</b></div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </CardSection>
+      )}
+
+      <AdvancedStats adv={card.advanced} />
+
+      {v && (v.value != null || v.error) && (
+        <CardSection title={v.kind === "dynasty" ? "Dynasty value" : "Trade value"}>
+          {v.value == null ? (
+            <div style={{ color: C.textFaint }} className="text-xs">{v.source ? `Not listed by ${v.source}.` : `Values unavailable${v.error ? `: ${v.error}` : ""}.`}</div>
+          ) : (
+            <div className="flex items-center gap-4 text-xs" data-card-value>
+              <div><div style={{ color: C.text, fontFamily: "Oswald, sans-serif" }} className="text-lg font-semibold">{fmtInt(v.value)}</div><div style={{ color: C.textFaint }} className="text-[10px]">{v.source}</div></div>
+              {v.posRank && <div><div style={{ color: C.text }} className="font-semibold">#{v.posRank} {card.pos}</div><div style={{ color: C.textFaint }} className="text-[10px]">#{v.overall} overall</div></div>}
+              {(v.trend7 != null || v.trend30 != null) && (
+                <div>
+                  {v.trend7 != null && <div style={{ color: v.trend7 >= 0 ? C.ok : C.major }}>{v.trend7 >= 0 ? "▲" : "▼"} {fmtInt(Math.abs(v.trend7))} <span style={{ color: C.textFaint }}>7d</span></div>}
+                  {v.trend30 != null && <div style={{ color: v.trend30 >= 0 ? C.ok : C.major }}>{v.trend30 >= 0 ? "▲" : "▼"} {fmtInt(Math.abs(v.trend30))} <span style={{ color: C.textFaint }}>30d</span></div>}
+                </div>
+              )}
+            </div>
+          )}
+        </CardSection>
+      )}
+
+      <CardSection title="Recent news">
+        {card.news?.items?.length ? (
+          <div className="space-y-2" data-card-news>
+            {card.news.items.map((n, i) => (
+              <div key={i} className="rounded-md px-3 py-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+                <div style={{ color: C.text }} className="text-sm font-semibold leading-snug">{n.headline}</div>
+                {n.story && <div style={{ color: C.textMuted }} className="text-xs mt-1 leading-snug">{n.story}</div>}
+                <div style={{ color: C.textFaint }} className="text-[10px] mt-1">{n.source}{n.published ? ` · ${timeAgo(n.published)} ago` : ""}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ color: C.textFaint }} className="text-xs">{card.news?.error ? `News unavailable (${card.news.error}).` : "No recent news."}</div>
+        )}
+      </CardSection>
+    </>
+  );
+}
+
+function CardGameLog({ card, index, setIndex }) {
+  const logs = card.gameLog || [];
+  const lg = logs[index] || logs[0];
+  if (!lg) return <div style={{ color: C.textFaint }} className="text-xs">No game log.</div>;
+  const th = "px-1.5 py-1 text-[10px] font-semibold text-center whitespace-nowrap";
+  const td = "px-1.5 py-1 text-[11px] text-center whitespace-nowrap";
+  return (
+    <div data-card-gamelog>
+      <div className="flex gap-1.5 mb-2">
+        {logs.map((l, i) => (
+          <button key={l.season} type="button" onClick={() => setIndex(i)} className="rounded-full px-2.5 py-0.5 text-xs" style={{ background: i === index ? C.brand : "transparent", color: i === index ? "#fff" : C.textMuted, border: `1px solid ${C.border}` }} data-log-season={l.season}>
+            {l.season}
+          </button>
+        ))}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full" style={{ color: C.text, borderCollapse: "separate", borderSpacing: "2px" }}>
+          <thead>
+            <tr style={{ color: C.textFaint }}>
+              <th className={th}>WK</th><th className={th}>OPP</th><th className={th}>FPTS</th><th className={th}>SNP%</th><th className={th}>RANK</th>
+              {lg.columns.map((c) => <th key={c.key} className={th}>{c.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {lg.rows.map((r) => (
+              <tr key={r.week} data-log-week={r.week}>
+                <td className={td} style={{ color: C.textMuted }}>{r.week}</td>
+                <td className={td} style={{ color: r.home ? C.ok : r.home === false ? C.minor : C.textMuted }}>{r.bye ? "BYE" : r.opp ? `${r.home === false ? "@" : ""}${r.opp}` : "—"}</td>
+                {r.bye ? (
+                  <td colSpan={3 + lg.columns.length} className={td} style={{ background: C.surfaceRaised }} />
+                ) : (
+                  <>
+                    <td className={td} style={{ background: r.played ? C.surfaceRaised : "transparent", color: r.played ? C.text : C.textFaint, fontVariantNumeric: "tabular-nums" }}>{r.fpts != null ? r.fpts.toFixed(2) : "-"}</td>
+                    <td className={td} style={{ color: r.snapPct == null ? C.textFaint : r.snapPct >= 70 ? C.ok : r.snapPct >= 45 ? C.minor : C.major }}>{r.snapPct ?? "-"}</td>
+                    <td className={td} style={{ color: rankColor(r.rank) }}>{r.rank ?? "-"}</td>
+                    {lg.columns.map((c) => <td key={c.key} className={td} style={{ color: r.played ? C.text : C.textFaint }}>{r.stats?.[c.key] ?? "-"}</td>)}
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ color: C.textFaint }} className="text-[10px] mt-1.5">Fantasy points in this league's scoring (nflverse half/PPR points where Sleeper's stat line isn't stored). Home games green, away amber.</div>
+    </div>
+  );
+}
+
+function CardTeam({ card }) {
+  const ranks = card.teamTab?.ranks;
+  const depth = card.teamTab?.depth;
+  const markOf = (st) => (!st ? null : st === "Questionable" ? "Q" : st === "Doubtful" ? "D" : st === "Out" ? "O" : st === "IR" ? "IR" : st === "PUP" ? "PUP" : st.slice(0, 3).toUpperCase());
+  return (
+    <>
+      <CardSection title="Team rank (season to date)">
+        {ranks?.length ? (
+          <div className="grid grid-cols-3 gap-1.5" data-card-teamranks>
+            {ranks.map((r) => (
+              <div key={r.key} className="rounded-md px-2 py-1.5" style={{ background: `${teamRankColor(r.rank, r.of)}22`, border: `1px solid ${teamRankColor(r.rank, r.of)}55` }}>
+                <div style={{ color: C.textMuted }} className="text-[10px] truncate">{r.label}</div>
+                <div style={{ color: teamRankColor(r.rank, r.of) }} className="text-sm font-semibold">{ordinalN(r.rank)} <span style={{ color: C.textFaint }} className="text-[10px] font-normal">{r.value}</span></div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ color: C.textFaint }} className="text-xs">No team stats yet.</div>
+        )}
+      </CardSection>
+      <CardSection title={`Depth chart${depth?.source ? ` (${depth.source === "espn" ? "ESPN" : "Sleeper"})` : ""}`}>
+        {depth?.rows?.length ? (
+          <div className="space-y-1" data-card-depth>
+            {depth.rows.map((row) => (
+              <div key={row.label} className="grid grid-cols-[3rem_1fr_1fr_1fr] gap-1 items-center rounded-md px-1.5 py-1" style={{ background: C.surface }}>
+                <div style={{ color: POS_COLOR[row.label.replace(/\d+$/, "")] || C.textMuted }} className="text-xs font-bold">{row.label}</div>
+                {[0, 1, 2].map((i) => {
+                  const pl = row.players[i];
+                  return (
+                    <div key={i} className="min-w-0">
+                      {pl && (
+                        <>
+                          <div style={{ color: C.text }} className="text-[11px] truncate font-medium">
+                            {pl.name.split(" ").slice(1).join(" ") || pl.name}
+                            {pl.rookie && <span style={{ color: "#A08BE0" }} className="ml-1 text-[9px] font-bold">R</span>}
+                            {markOf(pl.status) && <span style={{ color: pl.status === "Questionable" ? C.minor : C.major }} className="ml-1 text-[9px] font-bold">{markOf(pl.status)}</span>}
+                          </div>
+                          <div style={{ color: C.textFaint }} className="text-[9px]">{pl.age != null ? `${Number(pl.age).toFixed(1)} y/o` : ""}</div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ color: C.textFaint }} className="text-xs">No depth chart.</div>
+        )}
+      </CardSection>
+    </>
+  );
+}
+
+function CardHistory({ card }) {
+  const h = card.history || {};
+  const th = "px-1.5 py-1 text-[10px] font-semibold text-center whitespace-nowrap";
+  const td = "px-1.5 py-1 text-[11px] text-center whitespace-nowrap";
+  const statKeys = [...new Set((h.career || []).flatMap((r) => Object.keys(r.stats || {})))];
+  return (
+    <>
+      <CardSection title={`In ${card.league?.name || "this league"}`}>
+        {(h.drafts?.length || 0) + (h.moves?.length || 0) === 0 ? (
+          <div style={{ color: C.textFaint }} className="text-xs">{card.league ? "No transactions involving him this season." : "Open the card from a league page to see its transactions."}</div>
+        ) : (
+          <div className="space-y-1" data-card-moves>
+            {(h.drafts || []).map((d, i) => (
+              <div key={`d${i}`} className="text-xs flex justify-between gap-2"><span style={{ color: C.text }}>{d.text}</span><span style={{ color: C.textFaint }}>{d.season}</span></div>
+            ))}
+            {(h.moves || []).map((m, i) => (
+              <div key={`m${i}`} className="text-xs flex justify-between gap-2"><span style={{ color: C.text }}>{m.text}</span><span style={{ color: C.textFaint }}>{m.at ? new Date(m.at).toLocaleDateString([], { month: "short", day: "numeric" }) : ""}</span></div>
+            ))}
+          </div>
+        )}
+      </CardSection>
+      <CardSection title="Career">
+        {h.career?.length ? (
+          <div className="overflow-x-auto" data-card-career>
+            <table className="min-w-full" style={{ color: C.text, borderCollapse: "separate", borderSpacing: "2px" }}>
+              <thead>
+                <tr style={{ color: C.textFaint }}>
+                  <th className={th}>SEASON</th><th className={th}>TM</th><th className={th}>GM</th><th className={th}>FPTS</th><th className={th}>HALF</th><th className={th}>PPR</th>
+                  {statKeys.map((k) => <th key={k} className={th}>{k.toUpperCase()}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {h.career.map((r) => (
+                  <tr key={r.season}>
+                    <td className={td}>{r.season}</td>
+                    <td className={td} style={{ color: C.textMuted }}>{r.team || ""}</td>
+                    <td className={td}>{r.games ?? "-"}</td>
+                    <td className={td} style={{ background: C.surfaceRaised }}>{r.fpts != null ? r.fpts.toFixed(1) : "-"}</td>
+                    <td className={td} style={{ color: rankColor(r.rankHalf) }}>{r.rankHalf || "-"}</td>
+                    <td className={td} style={{ color: rankColor(r.rankPpr) }}>{r.rankPpr || "-"}</td>
+                    {statKeys.map((k) => <td key={k} className={td}>{r.stats?.[k] ?? "-"}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div style={{ color: C.textFaint }} className="text-xs">No career stats.</div>
+        )}
+      </CardSection>
+    </>
   );
 }
 
@@ -779,11 +1324,69 @@ function Breadcrumb({ crumbs }) {
   );
 }
 
-function TopBar({ crumbs, onRefresh, refreshing, syncedLabel, week, onWeekChange, showWeek }) {
+// v3.5: Sleeper avatar (user photo or league picture) with an initials fallback.
+function Avatar({ avatar, name, size = 28, square = false }) {
+  const [failed, setFailed] = useState(false);
+  const src = api.avatarUrl(avatar);
+  useEffect(() => setFailed(false), [src]);
+  const shape = square ? "rounded-md" : "rounded-full";
+  if (!src || failed) {
+    return (
+      <span style={{ width: size, height: size, background: C.surfaceRaised, color: C.textMuted, fontSize: Math.max(9, size * 0.38) }} className={`${shape} inline-flex items-center justify-center shrink-0 font-semibold`} aria-hidden="true">
+        {initials(name)}
+      </span>
+    );
+  }
+  return <img src={src} alt="" width={size} height={size} onError={() => setFailed(true)} style={{ width: size, height: size, objectFit: "cover", background: C.surfaceRaised }} className={`${shape} shrink-0`} />;
+}
+
+// v3.5: tapping your name or photo (top left) opens League management, alerts, Account settings and Log out.
+function UserMenu({ name, avatar, onEditLeagues, onOpenAccount, onLogout, onHome, compact = false }) {
+  const [open, setOpen] = useState(false);
+  const item = (Icon, label, onClick, sub) => (
+    <button type="button" role="menuitem" onClick={() => { setOpen(false); onClick?.(); }} className="w-full text-left px-3 py-2 flex items-start gap-2.5" style={{ color: C.text }} data-menu-item={label}>
+      <Icon size={15} className="mt-0.5 shrink-0" style={{ color: C.textMuted }} />
+      <span className="min-w-0">
+        <span className="block text-sm">{label}</span>
+        {sub && <span className="block text-[11px]" style={{ color: C.textFaint }}>{sub}</span>}
+      </span>
+    </button>
+  );
+  return (
+    <div className="relative shrink-0 min-w-0">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} className="flex items-center gap-2 min-w-0" data-user-menu>
+        <Avatar avatar={avatar} name={name} size={28} />
+        {!compact && <span style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-[15px] truncate max-w-[8.5rem]">{name}</span>}
+        {!compact && <ChevronRight size={14} style={{ color: C.textFaint, transform: open ? "rotate(270deg)" : "rotate(90deg)" }} className="shrink-0" />}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div role="menu" className="absolute left-0 top-full mt-2 z-30 rounded-lg w-64 py-1 shadow-lg" style={{ background: C.surfaceRaised, border: `1px solid ${C.border}` }} data-user-menu-panel>
+            {onHome && item(ListChecks, "My leagues", onHome, "The League Management dashboard")}
+            {item(Settings2, "League management", onEditLeagues, "Choose which leagues are tracked")}
+            <div className="px-3 py-2" style={{ borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
+              <PushToggle align="start" />
+            </div>
+            {item(UserCog, "Account settings", onOpenAccount, "Password, Sleeper access, CBS pick'em")}
+            {item(LogOut, "Log out", onLogout)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TopBar({ crumbs, onRefresh, refreshing, week, onWeekChange, showWeek, userMenu }) {
+  const rest = userMenu ? crumbs.filter((c) => !c.root) : crumbs;
   return (
     <div className="sticky top-0 z-10" style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
       <div className="flex items-center justify-between gap-2 px-4 py-3">
-        <Breadcrumb crumbs={crumbs} />
+        <div className="flex items-center gap-1.5 min-w-0">
+          {userMenu && <UserMenu {...userMenu} compact={rest.length > 0} />}
+          {userMenu && rest.length > 0 && <ChevronRight size={13} style={{ color: C.textFaint }} className="shrink-0" />}
+          {rest.length > 0 && <Breadcrumb crumbs={rest} />}
+        </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {showWeek && <WeekPicker week={week} onChange={onWeekChange} disabled={refreshing} />}
           <button
@@ -796,7 +1399,6 @@ function TopBar({ crumbs, onRefresh, refreshing, syncedLabel, week, onWeekChange
           </button>
         </div>
       </div>
-      {syncedLabel && <div className="px-4 pb-2 text-[11px]" style={{ color: C.textFaint }}>{syncedLabel}</div>}
     </div>
   );
 }
@@ -830,7 +1432,7 @@ function urlBase64ToUint8Array(base64String) {
 // scoping decision (see README/CHANGELOG): a true native wrapper needs
 // packaging, signing and Play Store review that's out of scope here, while
 // Web Push is real, works on this app today, and needs no app-store step.
-function PushToggle() {
+function PushToggle({ align = "end" } = {}) {
   const [state, setState] = useState({ supported: true, subscribed: false, busy: false, error: null, configured: true });
 
   useEffect(() => {
@@ -882,9 +1484,9 @@ function PushToggle() {
     }
   };
 
-  if (!state.supported) return null;
+  if (!state.supported) return <div style={{ color: C.textFaint }} className="text-xs">Alerts aren't supported in this browser.</div>;
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className={`flex flex-col ${align === "start" ? "items-start" : "items-end"} gap-1`}>
       <button onClick={toggle} disabled={state.busy} style={{ color: state.subscribed ? C.ok : C.textMuted }} className="text-xs font-medium flex items-center gap-1">
         {state.busy ? <Loader2 size={13} className="animate-spin" /> : state.subscribed ? <Bell size={13} /> : <BellOff size={13} />}
         {state.subscribed ? "Alerts on" : "Enable alerts"}
@@ -904,34 +1506,20 @@ function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues,
       <div className="flex justify-end pb-2">
         <VarianceButton variances={allVariances} onOpen={() => onOpenVariances({})} label="Variance report — all leagues" />
       </div>
-      <div className="flex items-center justify-between flex-wrap gap-y-2 pb-3">
-        <PushToggle />
-        <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={onOpenAccount} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
-            <UserCog size={13} />
-            Account
-          </button>
-          <button onClick={onEditLeagues} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
-            <Settings2 size={13} />
-            Edit tracked leagues
-          </button>
-          <button onClick={onLogout} style={{ color: C.textMuted }} className="text-xs font-medium flex items-center gap-1">
-            <LogOut size={13} />
-            Log out
-          </button>
-        </div>
-      </div>
       <div className="space-y-3">
         {computed.map((lg) => (
           <div key={lg.id} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg overflow-hidden">
             <div className="flex items-center justify-between gap-2 px-4 py-3">
-              <button onClick={() => onOpenLeague(lg.id)} className="text-left min-w-0 flex-1" data-league-open={lg.id}>
+              <button onClick={() => onOpenLeague(lg.id)} className="text-left min-w-0 flex-1 flex items-center gap-2.5" data-league-open={lg.id}>
+                <Avatar avatar={lg.avatar} name={lg.name} size={34} square />
+                <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1 min-w-0">
                   <span style={{ fontFamily: "Oswald, sans-serif", fontWeight: 600, color: C.text }} className="text-[15px] truncate">{lg.name}</span>
                   <ChevronRight size={16} style={{ color: C.textFaint }} className="shrink-0" />
                 </div>
                 <div className="text-xs truncate" style={{ color: C.textMuted }}>
                   {lg.error ? "Failed to load" : lg.teamName || "—"}
+                </div>
                 </div>
               </button>
               {!lg.error && (
@@ -1087,13 +1675,17 @@ function RosterTab({ league }) {
   }
   const starterRows = league.roster.rows.filter((r) => r.slot !== "BN");
   const benchRows = league.roster.rows.filter((r) => r.slot === "BN");
+  const byName = new Map();
+  [...(league.starters || []).map((x) => x.player), ...(league.bench || []), ...(league.ir || []), ...(league.taxi || [])].forEach((p) => p && !byName.has(p.name) && byName.set(p.name, p));
   const Row = ({ r }) => {
     const s = STATUS[r.severity];
     return (
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-3 py-2.5 flex items-start gap-3">
         <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs w-14 pt-0.5 shrink-0">{r.slot}</div>
         <div className="min-w-0 flex-1">
-          <div style={{ color: C.text }} className="text-sm font-medium truncate">{r.label}</div>
+          <PlayerLink player={byName.get(r.label)} className="block max-w-full truncate" style={{ color: C.text }}>
+            <span className="text-sm font-medium">{r.label}</span>
+          </PlayerLink>
           {r.kickoffLabel && <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{r.kickoffLabel}</div>}
           {r.reason && <div style={{ color: s.color }} className="text-xs mt-0.5">{r.reason}</div>}
           {r.note && !r.reason && <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{r.note}</div>}
@@ -1184,11 +1776,15 @@ function RankingCard({ entry, rank, startsAt, yellowNote, draggable, dragging, o
           {rank}
         </div>
       )}
-      <Headshot player={p} size={36} />
+      <PlayerLink player={p} className="shrink-0 rounded-full">
+        <Headshot player={p} size={36} />
+      </PlayerLink>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5 min-w-0">
-          <span style={{ color: C.text }} className="text-sm font-medium truncate">{p.name}</span>
-          <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{p.pos}{p.team ? ` · ${p.team}` : ""}</span>
+          <PlayerLink player={p} className="min-w-0 truncate">
+            <span style={{ color: C.text }} className="text-sm font-medium">{p.name}</span>
+          </PlayerLink>
+          <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.bye ? ` · Bye ${p.bye}` : ""}</span>
         </div>
         <div className="flex items-center gap-1 flex-wrap mt-1">
           <span style={{ color: g.color, border: `1px solid ${g.color}55` }} className="text-[10px] rounded px-1.5 py-0.5">{GROUP_LABEL[entry.group]}</span>
@@ -1560,10 +2156,10 @@ function LineupTab({ league, onSaveRanking, hideWeather = false }) {
                   style={{ background: curZero ? C.majorBg : c.changed ? C.majorBg : "transparent", borderRight: `1px solid ${C.border}` }}
                   className="relative px-3 py-2.5 pb-4"
                 >
-                  <div className="flex items-center gap-1.5 min-w-0">
+                  <PlayerLink player={c.current ? byName.get(c.current.name) || c.current : null} className="flex items-center gap-1.5 min-w-0 max-w-full">
                     {c.current && <Headshot player={byName.get(c.current.name) || c.current} size={22} />}
                     <div style={{ color: curZero || c.changed ? C.major : C.text }} className="text-sm font-medium truncate">{c.current?.name ?? "(empty)"}</div>
-                  </div>
+                  </PlayerLink>
                   <div style={{ color: curZero ? C.major : C.textMuted }} className="text-xs mt-0.5">
                     {c.current?.proj != null ? c.current.proj.toFixed(1) : "—"}{curZero ? " · projected 0" : ""}
                   </div>
@@ -1571,10 +2167,10 @@ function LineupTab({ league, onSaveRanking, hideWeather = false }) {
                   <SourceTag source={c.current?.projSource} factor={c.current?.projFactor} />
                 </div>
                 <div style={{ background: optZero ? C.majorBg : c.changed ? C.okBg : "transparent" }} className="relative px-3 py-2.5 pb-4">
-                  <div className="flex items-center gap-1.5 min-w-0">
+                  <PlayerLink player={c.optimal ? byName.get(c.optimal.name) || c.optimal : null} className="flex items-center gap-1.5 min-w-0 max-w-full">
                     {c.optimal && <Headshot player={byName.get(c.optimal.name) || c.optimal} size={22} />}
                     <div style={{ color: optZero ? C.major : c.changed ? C.ok : C.text }} className="text-sm font-medium truncate">{c.optimal?.name ?? "(none available)"}</div>
-                  </div>
+                  </PlayerLink>
                   <div style={{ color: optZero ? C.major : C.textMuted }} className="text-xs mt-0.5">
                     {c.optimal?.proj != null ? c.optimal.proj.toFixed(1) : "—"}{optZero ? " · projected 0" : ""}
                   </div>
@@ -1828,7 +2424,7 @@ function DropSummary({ league }) {
           {d.items.map((x, i) => (
             <div key={i} className="flex items-start justify-between gap-2 text-xs">
               <div className="min-w-0">
-                <span style={{ color: C.text }}>{x.name}</span> <span style={{ color: C.textFaint }}>({x.pos}{x.team ? ` · ${x.team}` : ""})</span>
+                <PlayerLink player={{ id: x.playerId, name: x.name, pos: x.pos, team: x.team }} className="inline" style={{ color: C.text }}>{x.name}</PlayerLink> <span style={{ color: C.textFaint }}>({x.pos}{x.team ? ` · ${x.team}` : ""})</span>
                 <div style={{ color: C.textFaint }} className="text-[10px]">dropped by {x.teamLabel || "a team"} · {fmtWhen(x.at)}</div>
               </div>
               <div className="text-right shrink-0">
@@ -1849,11 +2445,15 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="relative rounded-md px-3 py-2.5 pb-4" data-fa={p.id}>
       <div className="flex items-start gap-2.5">
-        <Headshot player={p} size={34} />
+        <PlayerLink player={p} className="shrink-0 rounded-full">
+          <Headshot player={p} size={34} />
+        </PlayerLink>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5 min-w-0">
-            <span style={{ color: C.text }} className="text-sm font-medium truncate">{p.name}</span>
-            <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{p.pos}{p.team ? ` · ${p.team}` : ""}</span>
+            <PlayerLink player={p} className="min-w-0 truncate">
+              <span style={{ color: C.text }} className="text-sm font-medium">{p.name}</span>
+            </PlayerLink>
+            <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.bye ? ` · Bye ${p.bye}` : ""}</span>
           </div>
           <div style={{ color: C.textMuted }} className="text-xs mt-0.5">
             {p.proj != null ? `Proj ${p.proj.toFixed(1)}` : "No projection"}
@@ -1915,7 +2515,7 @@ function InjuryAddsSection({ league, plan, mode, budget, isFaab, onBid }) {
             <div key={e.key} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-2.5 py-2.5 space-y-1.5" data-injury-event={e.key}>
               <div style={{ color: C.text }} className="text-sm">
                 <span style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs mr-1.5">{e.injured.team} {e.injured.slot}</span>
-                {e.injured.name} <span style={{ color: s.color }} className="text-xs">{e.injured.status}{e.injured.note ? ` — ${e.injured.note}` : ""}</span>
+                <PlayerLink player={e.injured} className="inline">{e.injured.name}</PlayerLink> <span style={{ color: s.color }} className="text-xs">{e.injured.status}{e.injured.note ? ` — ${e.injured.note}` : ""}</span>
                 {e.mine === "active" && <span style={{ color: C.major }} className="text-[10px] ml-1.5">On your roster</span>}
               </div>
               {e.questionable && <div style={{ color: C.minor }} className="text-[11px]">News check: {(e.signals || []).join("; ")}{e.news?.note ? ` — ${e.news.note}` : ""}</div>}
@@ -1979,7 +2579,7 @@ function ClaimRow({ c, result, mode, budget, isFaab, bench, handle, dragging, on
       {handle}
       <div className="min-w-0 flex-1">
         <div style={{ color: C.text }} className="text-sm font-medium truncate">
-          {c.addName} <span style={{ color: C.textFaint }} className="text-[11px]">{c.pos}{c.source === "custom" ? " · custom" : c.edited ? " · edited" : ""}</span>
+          <PlayerLink player={{ id: c.addId, name: c.addName, pos: c.pos }} className="inline">{c.addName}</PlayerLink> <span style={{ color: C.textFaint }} className="text-[11px]">{c.pos}{c.source === "custom" ? " · custom" : c.edited ? " · edited" : ""}</span>
         </div>
         <label className="flex items-center gap-1 mt-1 text-[11px]" style={{ color: C.textMuted }}>
           Drop
@@ -2392,7 +2992,7 @@ function StrengthWeaknessRow({ label, items, color }) {
       <span style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">{label}:</span>
       {items.map((it, i) => (
         <span key={i} style={{ background: `${color}22`, color }} className="text-[11px] rounded px-1.5 py-0.5">
-          {it.pos} <span style={{ opacity: 0.7 }}>(~{it.avgEcr})</span>
+          {it.pos} <span style={{ opacity: 0.75 }}>{it.label ? it.label : it.avgEcr != null ? `(~${it.avgEcr})` : ""}</span>
         </span>
       ))}
     </div>
@@ -2430,7 +3030,7 @@ function DeadlineBanner({ info }) {
         <Clock size={13} />
         {passed ? "Trade deadline has passed" : `Trade deadline: ${left || info.label}`}
       </div>
-      {info.label && !passed && left && <div style={{ color: C.textMuted }} className="mt-0.5">{info.label}</div>}
+      {info.when ? <div style={{ color: C.textMuted }} className="mt-0.5" data-deadline-when>{info.when}</div> : info.label && !passed && left ? <div style={{ color: C.textMuted }} className="mt-0.5">{info.label}</div> : null}
       {info.note && <div style={{ color: C.textFaint }} className="text-[10px] mt-0.5">{info.note}</div>}
     </div>
   );
@@ -2440,6 +3040,8 @@ const NEWS_COLOR = { ok: C.ok, caution: C.minor, avoid: C.major };
 const NEWS_LABEL = { ok: "No red flags", caution: "Caution", avoid: "Avoid" };
 
 function OwnershipSection({ ownership }) {
+  // v3.5: best ball leagues are left out unless switched on; shares are a % of each opponent's own leagues.
+  const [withBB, setWithBB] = useState(false);
   if (!ownership) return null;
   if (ownership.pending) {
     return (
@@ -2448,27 +3050,40 @@ function OwnershipSection({ ownership }) {
       </div>
     );
   }
-  const list = ownership.players || [];
-  const high = list.filter((p) => p.high);
-  const rest = list.filter((p) => !p.high);
+  const k = withBB ? { pct: "pct", leagues: "leagues", total: "total", count: "opponentCount", avg: "avgPct", high: "highBB" } : { pct: "pctNoBB", leagues: "leaguesNoBB", total: "totalNoBB", count: "opponentCountNoBB", avg: "avgPctNoBB", high: "high" };
+  const list = (ownership.players || [])
+    .map((p) => ({ ...p, _count: p[k.count] ?? p.opponentCount, _avg: p[k.avg] ?? null, _high: Boolean(p[k.high] ?? p.high) }))
+    .filter((p) => p._count > 0)
+    .sort((a, b) => Number(b._high) - Number(a._high) || (b._avg ?? 0) - (a._avg ?? 0));
+  const high = list.filter((p) => p._high);
+  const rest = list.filter((p) => !p._high);
   return (
     <div className="mb-3" data-ownership>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Players on your roster that opponents in this league also roster in their other Sleeper leagues. A rival who owns the same player elsewhere may value him differently when you offer him. Based on {ownership.leaguesChecked ?? 0} league(s) checked across {ownership.opponents ?? 0} opponents
+        Players on your roster that opponents in this league also roster in their other Sleeper leagues, as a share of each opponent's leagues (so managers in many leagues don't dominate). Based on {ownership.leaguesChecked ?? 0} league(s) checked across {ownership.opponents ?? 0} opponents
         {ownership.capped ? " (capped — not every league was checked)" : ""}.
       </div>
+      <label className="flex items-center gap-1.5 text-[11px] px-1 pb-2" style={{ color: C.textMuted }}>
+        <input type="checkbox" checked={withBB} onChange={(e) => setWithBB(e.target.checked)} data-ownership-bb />
+        Include best ball leagues{ownership.bestBallLeagues != null ? ` (${ownership.bestBallLeagues})` : ""}
+      </label>
       {list.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1">None found.</div>
       ) : (
         <div className="space-y-1.5">
           {[...high, ...rest.slice(0, 8)].map((p) => (
-            <div key={p.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${p.high ? C.brand : C.border}` }} className="rounded-md px-3 py-2">
+            <div key={p.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${p._high ? C.brand : C.border}` }} className="rounded-md px-3 py-2" data-ownership-player={p.id}>
               <div style={{ color: C.text }} className="text-sm">
-                {p.name} <span style={{ color: C.textFaint }} className="text-[11px]">{p.pos}</span>
-                {p.high && <span style={{ color: C.brand }} className="text-[10px] ml-1.5">High ownership</span>}
+                <PlayerLink player={p} className="inline">{p.name}</PlayerLink> <span style={{ color: C.textFaint }} className="text-[11px]">{p.pos}</span>
+                {p._high && <span style={{ color: C.brand }} className="text-[10px] ml-1.5">High ownership</span>}
+                {p._avg != null && <span style={{ color: C.textMuted }} className="text-[11px] ml-1.5" data-ownership-avg>{p._avg}% of opponents' leagues on average</span>}
               </div>
               <div style={{ color: C.textMuted }} className="text-[11px]">
-                {p.opponentCount} of {ownership.opponents} opponents · {(p.opponents || []).map((o) => `${o.team} (${o.leagues} league${o.leagues === 1 ? "" : "s"})`).join(", ")}
+                {p._count} of {ownership.opponents} opponents ·{" "}
+                {(p.opponents || [])
+                  .filter((o) => (o[k.leagues] ?? o.leagues) > 0)
+                  .map((o) => `${o.team} ${o[k.pct] ?? "?"}% (${o[k.leagues] ?? o.leagues} of ${o[k.total] ?? "?"})`)
+                  .join(", ")}
               </div>
             </div>
           ))}
@@ -2511,10 +3126,8 @@ function TradeTab({ league, sessionId, onRefresh, onOpenAccount }) {
     <div className="px-4 py-3">
       <DeadlineBanner info={league.tradeDeadline} />
       <TradeOffers league={league} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />
-      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        {league.tradeBasis === "projection"
-          ? "FantasyPros rankings weren't available for enough of your league, so trade value here is each player's rank by projected points among rostered players at his position — a single-week signal, not a dedicated trade-value model."
-          : "Based on average ECR by position across every roster in the league (a rest-of-season-oriented signal, not a single week's projection) — not a dedicated trade-value model."}
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2" data-trade-basis>
+        {tradeBasisText(league.tradeBasis)}
       </div>
 
       {me && (
@@ -2551,11 +3164,16 @@ function TradeTab({ league, sessionId, onRefresh, onOpenAccount }) {
             return (
               <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${nc || C.ok}` }} className="rounded-md px-3.5 py-2.5" data-finder={i}>
                 <div style={{ color: C.text }} className="text-xs">
-                  <span style={{ color: C.textMuted }}>Give </span>{t.give.name} <span style={{ color: C.textFaint }}>({t.give.pos})</span>
-                  <span style={{ color: C.textMuted }}> · Get </span>{t.get.name} <span style={{ color: C.textFaint }}>({t.get.pos})</span>
+                  <span style={{ color: C.textMuted }}>Give </span><PlayerLink player={t.give} className="inline">{t.give.name}</PlayerLink> <span style={{ color: C.textFaint }}>({t.give.pos})</span>
+                  <span style={{ color: C.textMuted }}> · Get </span><PlayerLink player={t.get} className="inline">{t.get.name}</PlayerLink> <span style={{ color: C.textFaint }}>({t.get.pos})</span>
                   <span style={{ color: C.textMuted }}> from </span>{t.theirTeam}
                   {t.mutual && <span style={{ color: C.brand }} className="text-[10px] ml-1.5">They're weak at {t.give.pos} too</span>}
                 </div>
+                {t.give.value != null && t.get.value != null && (
+                  <div style={{ color: C.textFaint }} className="text-[10px] mt-0.5" data-finder-values>
+                    Trade value {fmtInt(t.give.value)} → {fmtInt(t.get.value)}
+                  </div>
+                )}
                 <div style={{ color: C.ok }} className="text-[11px] mt-0.5">
                   {t.gain >= 0 ? "+" : ""}{t.gain.toFixed(1)} projected pts to your starting lineup
                   {t.gainParts ? <span style={{ color: C.textFaint }}> ({t.get.name} adds {t.gainParts.add.toFixed(1)}{t.gainParts.loss > 0 ? `, losing ${t.give.name} costs ${t.gainParts.loss.toFixed(1)}` : ""})</span> : null}
@@ -2636,7 +3254,9 @@ function InjuryTab({ league }) {
               <div key={e.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-3.5 py-3 flex items-center gap-3">
                 <s.Icon size={16} style={{ color: s.color }} className="shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div style={{ color: C.text }} className="text-sm font-medium">{e.player}</div>
+                  <PlayerLink player={{ id: e.playerId, name: e.player }} className="block" style={{ color: C.text }}>
+                    <span className="text-sm font-medium">{e.player}</span>
+                  </PlayerLink>
                   <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{e.status}{e.note ? ` — ${e.note}` : ""}</div>
                   {mineByName.get(e.player) && (
                     <div style={{ color: C.minor }} className="text-[11px] mt-0.5" data-injury-note>
@@ -2665,7 +3285,7 @@ function InjuryTab({ league }) {
             <div key={e.key} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-2.5 space-y-1" data-injury-opp={e.key}>
               <div style={{ color: C.text }} className="text-sm font-medium">
                 <span style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs mr-1.5">{e.injured.team} {e.injured.slot}</span>
-                {e.injured.name} <span style={{ color: C.minor }} className="text-xs font-normal">{e.injured.status}{e.injured.note ? ` — ${e.injured.note}` : ""}</span>
+                <PlayerLink player={e.injured} className="inline">{e.injured.name}</PlayerLink> <span style={{ color: C.minor }} className="text-xs font-normal">{e.injured.status}{e.injured.note ? ` — ${e.injured.note}` : ""}</span>
                 {e.mine && <span style={{ color: C.brand }} className="text-[10px] ml-1.5">{e.mine === "active" ? "On your roster" : "On your IR/taxi"}</span>}
               </div>
               {e.questionable && <div style={{ color: C.minor }} className="text-[11px]">News check: {(e.signals || []).join("; ")}{e.news?.practice ? ` · practice: ${e.news.practice}` : ""}{e.news?.note ? ` — ${e.news.note}` : ""}</div>}
@@ -3014,6 +3634,61 @@ const leagueLogKey = (league, it) => varianceKey(league.id, league.week, "league
 /* ------------------------------------------------------------------ */
 /*  v3.0 — Trade offers (inbox + your own outstanding offers)           */
 /* ------------------------------------------------------------------ */
+const fmtInt = (n) => (n == null ? "—" : Math.round(n).toLocaleString());
+
+// v3.5: what each trade value source means for this league.
+function tradeBasisText(tb) {
+  if (!tb) return "";
+  if (typeof tb === "string") return tb === "projection" ? "Trade value here is each player's rank by this week's projection among rostered players at his position." : "Trade value here is FantasyPros ECR by position.";
+  const type = tb.leagueType === "dynasty" ? "Dynasty league" : "Redraft / keeper league";
+  const ros = tb.ros && String(tb.strength).startsWith("rest") ? ` (weeks ${tb.ros.from}–${tb.ros.to})` : "";
+  const stale = tb.valuesStale ? " — the value site didn't answer, so yesterday's values are used" : tb.valuesError ? ` — trade values unavailable (${tb.valuesError})` : "";
+  return `${type}: strengths and weaknesses are each team's rank at a position by ${tb.strength}${ros}; trade fairness uses ${tb.value} values${stale}.`;
+}
+
+// v3.5: an offer's two sides valued with the league's trade-value table, plus Roster Audit's own verdict (dynasty).
+function OfferValue({ v, ra }) {
+  if (!v || v.verdict === "unknown") return null;
+  const color = v.verdict === "win" ? C.ok : v.verdict === "loss" ? C.minor : C.textMuted;
+  const what = v.verdict === "win" ? "good for you" : v.verdict === "loss" ? "you'd lose value" : "about even";
+  return (
+    <div className="text-[11px] space-y-0.5" data-offer-value={v.verdict}>
+      <div style={{ color }}>
+        <span className="font-medium">{v.pct > 0 ? "+" : ""}{v.pct}% value — {what}</span>
+        <span style={{ color: C.textFaint }}> · you get {fmtInt(v.getValue)}, you give {fmtInt(v.giveValue)} ({v.source}{v.picksIgnored ? `; ${v.picksIgnored} pick(s) not valued in redraft` : ""})</span>
+      </div>
+      {v.missing?.length > 0 && <div style={{ color: C.textFaint }}>No value found for: {v.missing.join(", ")}</div>}
+      {ra && !ra.error && !ra.skipped && (ra.verdict || (ra.totalA != null && ra.totalB != null)) && (
+        // We send "what you get" as side A and "what you give" as side B, so RA's verdict text is shown with that key.
+        <div style={{ color: C.textMuted }} data-offer-ra>
+          Roster Audit calculator
+          {ra.totalA != null && ra.totalB != null ? `: you get ${fmtInt(ra.totalA)}, you give ${fmtInt(ra.totalB)}` : ""}
+          {ra.verdict ? ` · "${ra.verdict}" (side A = what you get)` : ""}
+          {ra.cliffWarnings?.length ? ` · age warnings: ${ra.cliffWarnings.join("; ")}` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OfferSide({ players, picks }) {
+  const items = [
+    ...(players || []).map((p) => (
+      <PlayerLink key={`p${p.id}`} player={p} className="inline font-bold">
+        {p.name || p.id}{p.pos ? ` (${p.pos})` : ""}
+      </PlayerLink>
+    )),
+    ...(picks || []).map((pk, i) => <b key={`k${i}`}>{pk}</b>),
+  ];
+  if (!items.length) return <b>nothing</b>;
+  return items.map((el, i) => (
+    <React.Fragment key={i}>
+      {i > 0 ? ", " : ""}
+      {el}
+    </React.Fragment>
+  ));
+}
+
 function OfferCard({ o, kind, league, onRefresh, onOpenAccount }) {
   const [state, setState] = useState({ confirming: false, busy: false, result: null });
   const side = (players, picks) => [...(players || []).map((p) => `${p.name || p.id}${p.pos ? ` (${p.pos})` : ""}`), ...(picks || [])].join(", ") || "nothing";
@@ -3041,8 +3716,9 @@ function OfferCard({ o, kind, league, onRefresh, onOpenAccount }) {
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${color}` }} className="rounded-md px-3 py-2.5 space-y-1.5" data-offer={o.id} data-offer-kind={kind}>
       <div style={{ color: C.textFaint }} className="text-[11px]">{kind === "incoming" ? "From" : "To"} {o.partner || "another team"}{o.ageDays != null ? ` · ${o.ageDays} day${o.ageDays === 1 ? "" : "s"} ago` : ""}</div>
-      <div style={{ color: C.text }} className="text-sm">You get: <b>{side(o.get, o.getPicks)}</b></div>
-      <div style={{ color: C.text }} className="text-sm">You give: <b>{side(o.give, o.givePicks)}</b></div>
+      <div style={{ color: C.text }} className="text-sm">You get: <OfferSide players={o.get} picks={o.getPicks} /></div>
+      <div style={{ color: C.text }} className="text-sm">You give: <OfferSide players={o.give} picks={o.givePicks} /></div>
+      <OfferValue v={o.value} ra={o.ra} />
       {kind === "outgoing" && o.stale && <div style={{ color: C.major }} className="text-xs">Stale — {o.stale}</div>}
       {kind === "outgoing" && (
         <PrivateGate league={league} group="trades" onOpenAccount={onOpenAccount}>
@@ -3051,7 +3727,7 @@ function OfferCard({ o, kind, league, onRefresh, onOpenAccount }) {
               Withdraw this offer
             </button>
           )}
-          {state.confirming && <ConfirmPush title="Withdraw this trade offer in Sleeper?" lines={[`Withdraw your offer to ${o.partner || "the other team"}: you give ${side(o.give, o.givePicks)}; you get ${side(o.get, o.getPicks)}`]} buttonLabel="Yes, withdraw it" busy={state.busy} onConfirm={withdraw} onCancel={() => setState((s) => ({ ...s, confirming: false }))} note="Withdrawing through Sleeper's private API is untested. The offer is read back afterwards, and this says so if it is still open." />}
+          {state.confirming && <ConfirmPush title="Withdraw this trade offer in Sleeper?" lines={[`Withdraw your offer to ${o.partner || "the other team"}: you give ${side(o.give, o.givePicks)}; you get ${side(o.get, o.getPicks)}`]} buttonLabel="Yes, withdraw it" busy={state.busy} onConfirm={withdraw} onCancel={() => setState((s) => ({ ...s, confirming: false }))} />}
           {state.result && <PushResults results={[{ label: "Withdraw offer", ...state.result }]} />}
         </PrivateGate>
       )}
@@ -4591,16 +5267,20 @@ function CheerRow({ p, ratio }) {
         <div className="absolute inset-y-0 left-0 rounded-l" style={{ width: `${forEdge}%`, background: C.okBg }} />
         <div className="absolute inset-y-0 right-0 rounded-r" style={{ width: `${forEdge}%`, background: C.majorBg }} />
         <div className="absolute inset-y-0" style={{ left: "50%", width: 1, background: C.border }} />
-        <div
+        <PlayerLink
+          player={p}
+          leagueId={(p.leagues.find((l) => l.side === "for") || p.leagues[0])?.leagueId}
           className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px]"
           style={{ left: `${x}%`, background: C.bg, border: `1px solid ${color}`, color: C.text, fontWeight: p.stake >= 2 ? 600 : 400, opacity: 0.55 + Math.min(0.45, p.stake / 10) }}
           title={`For ${p.F} · Against ${p.A}`}
         >
           {p.name}
-        </div>
+        </PlayerLink>
       </div>
       <div className="flex items-center gap-2 flex-wrap mt-1 px-0.5">
-        <Headshot player={p} size={20} />
+        <PlayerLink player={p} leagueId={(p.leagues.find((l) => l.side === "for") || p.leagues[0])?.leagueId} className="shrink-0 rounded-full">
+          <Headshot player={p} size={20} />
+        </PlayerLink>
         <span style={{ color: C.textFaint }} className="text-[10px]">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.opponent ? ` vs ${p.opponent}` : ""}</span>
         <span style={{ color: live ? C.brand : C.textFaint }} className="text-[10px]">{p.statusDetail || p.kickoffLabel || ""}</span>
         <span style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-[11px] font-medium">
@@ -4626,6 +5306,99 @@ function CheerRow({ p, ratio }) {
   );
 }
 
+// v3.5: Game Day league card colours. `color` comes from the server: green when your expected final leads by at
+// least 5% of the points both teams still have to score, red when it trails by that much, yellow in between.
+const OUTLOOK = { green: C.ok, red: C.major, yellow: C.minor };
+function GameDayLeagueCard({ l, selected, onToggle }) {
+  const title = OUTLOOK[l.color] || C.text;
+  const myColor = l.color === "green" ? C.ok : l.color === "red" ? C.major : C.minor;
+  const oppColor = l.color === "green" ? C.major : l.color === "red" ? C.ok : C.minor;
+  const f1 = (x) => (x == null ? "—" : Number(x).toFixed(1));
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={selected}
+      data-gd-league={l.id}
+      data-gd-color={l.color || ""}
+      style={{ background: selected ? C.surfaceRaised : C.surface, border: `1px solid ${selected ? C.brand : C.border}`, opacity: l.include === false ? 0.5 : 1 }}
+      className="rounded-md px-2.5 py-2 w-full text-left min-w-0"
+    >
+      <div className="flex items-center gap-1.5 min-w-0">
+        <Avatar avatar={l.avatar} name={l.name} size={18} square />
+        <span style={{ color: l.note ? C.text : title }} className="text-xs font-semibold truncate" data-gd-title>{l.name}</span>
+      </div>
+      {l.note ? (
+        <div style={{ color: C.textFaint }} className="text-[11px] mt-0.5">{l.note}</div>
+      ) : (
+        <>
+          <div style={{ fontVariantNumeric: "tabular-nums" }} className="text-[12px] mt-1 whitespace-nowrap" data-gd-score>
+            <span style={{ color: myColor }} className="font-semibold">{f1(l.myPoints)}</span>{" "}
+            <span style={{ color: l.myBelowBaseline ? C.major : C.textMuted }} data-gd-myproj>({f1(l.myProjected)})</span>
+            <span style={{ color: C.textFaint }}> – </span>
+            <span style={{ color: oppColor }} className="font-semibold">{f1(l.oppPoints)}</span>{" "}
+            <span style={{ color: l.oppBelowBaseline ? C.major : C.textMuted }} data-gd-oppproj>({f1(l.oppProjected)})</span>
+          </div>
+          {l.winProb != null && <div style={{ color: C.textFaint }} className="text-[10px] mt-0.5">Win {Math.round(l.winProb * 100)}%{l.importance && l.importance !== 1 ? ` · ×${l.importance}` : ""}</div>}
+        </>
+      )}
+    </button>
+  );
+}
+
+/** time slot → game → team groups, earliest slot first. */
+function groupGameDay(list) {
+  const slots = [];
+  [...list]
+    .sort((a, b) => (a.kickoff ?? Infinity) - (b.kickoff ?? Infinity))
+    .forEach((p) => {
+      const label = p.kickoffLabel || "Time TBD";
+      let slot = slots.find((x) => x.label === label);
+      if (!slot) slots.push((slot = { label, kickoff: p.kickoff ?? null, games: [] }));
+      const gk = p.gameKey || `${p.team || "?"}`;
+      let game = slot.games.find((g) => g.key === gk);
+      if (!game) slot.games.push((game = { key: gk, label: p.gameKey ? p.gameKey.replace("@", " @ ") : p.team || "?", statusDetail: p.statusDetail || null, state: p.state || null, teams: [] }));
+      let team = game.teams.find((t) => t.team === p.team);
+      if (!team) game.teams.push((team = { team: p.team, players: [] }));
+      team.players.push(p);
+    });
+  return slots;
+}
+
+function GameDayGroups({ slots, ratio, collapsed, toggle, prefix = "" }) {
+  return slots.map((g) => {
+    const id = `${prefix}${g.label}`;
+    const isOpen = !collapsed.has(id);
+    const count = g.games.reduce((n, gm) => n + gm.teams.reduce((m, t) => m + t.players.length, 0), 0);
+    return (
+      <div key={id} data-slot-group={g.label}>
+        <button type="button" onClick={() => toggle(id)} className="w-full flex items-center justify-between pt-3 pb-1" style={{ borderBottom: `1px solid ${C.border}` }} aria-expanded={isOpen} data-slot-toggle={g.label}>
+          <span style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-[11px] tracking-wide flex items-center gap-1">
+            <ChevronRight size={12} style={{ transform: isOpen ? "rotate(90deg)" : "none" }} />
+            {g.label}
+          </span>
+          <span style={{ color: C.textFaint }} className="text-[10px]">{count} player{count === 1 ? "" : "s"}</span>
+        </button>
+        {isOpen &&
+          g.games.map((gm) => (
+            <div key={gm.key} className="pl-1" data-game-group={gm.key}>
+              <div className="flex items-center justify-between pt-2" style={{ color: C.textMuted }}>
+                <span className="text-[11px] font-semibold">{gm.label}</span>
+                {gm.statusDetail && <span style={{ color: gm.state === "in" ? C.brand : C.textFaint }} className="text-[10px]">{gm.statusDetail}</span>}
+              </div>
+              {gm.teams.map((t) => (
+                <div key={t.team || "?"} className="pl-1" data-team-group={t.team}>
+                  <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide pt-1">{t.team}</div>
+                  {t.players.map((p) => <CheerRow key={p.id} p={p} ratio={ratio} />)}
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
+    );
+  });
+}
+
 function GameDayScreen() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -4634,6 +5407,15 @@ function GameDayScreen() {
   const [cat, setCat] = useState("all");
   // v2.9: tap league cards to show only those leagues' starters (yours + your opponents'); none selected = all.
   const [leagueSel, setLeagueSel] = useState(() => new Set());
+  // v3.5: collapsible time slots; the Complete section starts collapsed.
+  const [collapsed, setCollapsed] = useState(() => new Set(["__complete"]));
+  const toggleCollapsed = (id) =>
+    setCollapsed((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
   const toggleLeague = (id) =>
     setLeagueSel((prev) => {
       const n = new Set(prev);
@@ -4663,16 +5445,9 @@ function GameDayScreen() {
   const shown = data.players.filter((p) => inLeagues(p) && (slot === "all" || p.kickoffLabel === slot) && (cat === "all" || p.category === cat));
   const counts = { for: 0, balanced: 0, against: 0 };
   data.players.filter(inLeagues).forEach((p) => counts[p.category]++);
-  // Group by game time slot, earliest first, with a header between groups.
-  const slotGroups = [];
-  [...shown]
-    .sort((a, b) => (a.kickoff ?? Infinity) - (b.kickoff ?? Infinity))
-    .forEach((p) => {
-      const label = p.kickoffLabel || "Time TBD";
-      let g = slotGroups.find((x) => x.label === label);
-      if (!g) slotGroups.push((g = { label, players: [] }));
-      g.players.push(p);
-    });
+  const complete = shown.filter((p) => p.state === "post");
+  const upcoming = shown.filter((p) => p.state !== "post");
+  const completeOpen = !collapsed.has("__complete");
 
   return (
     <div className="px-4 py-3 space-y-3">
@@ -4691,30 +5466,13 @@ function GameDayScreen() {
           }}
         />
       )}
-      <div className="space-y-1.5">
+      <div className="grid grid-cols-2 gap-1.5" data-gd-cards>
         {data.leagues.map((l) => (
-          <button
-            type="button"
-            key={l.id}
-            onClick={() => toggleLeague(l.id)}
-            aria-pressed={leagueSel.has(l.id)}
-            data-gd-league={l.id}
-            style={{ background: leagueSel.has(l.id) ? C.surfaceRaised : C.surface, border: `1px solid ${leagueSel.has(l.id) ? C.brand : C.border}`, opacity: l.include === false ? 0.5 : 1 }}
-            className="rounded-md px-3 py-2 w-full text-left"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span style={{ color: C.text }} className="text-xs font-medium truncate">{l.name}</span>
-              <span style={{ color: C.textFaint }} className="text-[10px] shrink-0">×{l.importance ?? 1}{data.settings.closeWeighting && l.closeFactor != null ? ` · close ×${l.closeFactor}` : ""}</span>
-            </div>
-            {l.note ? (
-              <div style={{ color: C.textFaint }} className="text-[11px]">{l.note}</div>
-            ) : (
-              <div style={{ color: C.textMuted, fontVariantNumeric: "tabular-nums" }} className="text-[11px]">
-                {l.myTeam} {l.myPoints?.toFixed(1)} – {l.oppPoints?.toFixed(1)} {l.oppTeam} · proj {l.myProjected?.toFixed(1)} – {l.oppProjected?.toFixed(1)}
-              </div>
-            )}
-          </button>
+          <GameDayLeagueCard key={l.id} l={l} selected={leagueSel.has(l.id)} onToggle={() => toggleLeague(l.id)} />
         ))}
+      </div>
+      <div style={{ color: C.textFaint }} className="text-[10px] px-0.5">
+        Your score (expected final) – opponent's. Green: you lead by at least 5% of the points both teams still have to score; red: you trail by that much. A projection in red has dropped since the week's first kickoff.
       </div>
       <div className="flex flex-wrap gap-2 items-center">
         <Select label="Game slot" value={slot} onChange={setSlot} options={[{ value: "all", label: "All games" }, ...slots.map((s) => ({ value: s, label: s }))]} />
@@ -4735,12 +5493,19 @@ function GameDayScreen() {
         <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No players for these filters.</div>
       ) : (
         <div>
-          {slotGroups.map((g) => (
-            <div key={g.label} data-slot-group={g.label}>
-              <div style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif", borderBottom: `1px solid ${C.border}` }} className="text-[11px] tracking-wide pt-3 pb-1">{g.label}</div>
-              {g.players.map((p) => <CheerRow key={p.id} p={p} ratio={data.settings.ratio} />)}
+          {complete.length > 0 && (
+            <div className="mb-2 rounded-md px-2" style={{ background: C.surface, border: `1px solid ${C.border}` }} data-complete-section>
+              <button type="button" onClick={() => toggleCollapsed("__complete")} className="w-full flex items-center justify-between py-2" aria-expanded={completeOpen} data-complete-toggle>
+                <span style={{ color: C.textMuted, fontFamily: "Oswald, sans-serif" }} className="text-xs tracking-wide flex items-center gap-1">
+                  <ChevronRight size={12} style={{ transform: completeOpen ? "rotate(90deg)" : "none" }} />
+                  Complete
+                </span>
+                <span style={{ color: C.textFaint }} className="text-[10px]">{complete.length} player{complete.length === 1 ? "" : "s"}</span>
+              </button>
+              {completeOpen && <div className="pb-2"><GameDayGroups slots={groupGameDay(complete)} ratio={data.settings.ratio} collapsed={collapsed} toggle={toggleCollapsed} prefix="done:" /></div>}
             </div>
-          ))}
+          )}
+          <GameDayGroups slots={groupGameDay(upcoming)} ratio={data.settings.ratio} collapsed={collapsed} toggle={toggleCollapsed} />
         </div>
       )}
     </div>
@@ -5194,13 +5959,36 @@ function PickemScreen({ onChangedCount }) {
 /* ------------------------------------------------------------------ */
 /*  TABS (v2.6)                                                         */
 /* ------------------------------------------------------------------ */
+// v3.5: League Management = a football player outline, Game Day = goal-post uprights.
+function FootballPlayerIcon({ size = 16, className = "", style = {} }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className} style={style} aria-hidden="true" data-icon="football-player">
+      <path d="M9 10V7.2a3.2 3.2 0 0 1 6.4 0v1.6h-1.6" />
+      <path d="M13.8 8.8h3v2.2h-3" />
+      <path d="M15.6 11v1" />
+      <path d="M4 21v-3.2A4.8 4.8 0 0 1 8.8 13h6.4a4.8 4.8 0 0 1 4.8 4.8V21" />
+      <path d="M9.5 13l2.5 2.6 2.5-2.6" />
+    </svg>
+  );
+}
+function UprightsIcon({ size = 16, className = "", style = {} }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className} style={style} aria-hidden="true" data-icon="uprights">
+      <path d="M5 3v9h14V3" />
+      <path d="M12 12v9" />
+      <path d="M9 21h6" />
+    </svg>
+  );
+}
+
 const TABS = [
-  { key: "leagues", label: "League Management", Icon: ListChecks },
-  { key: "gameday", label: "Game Day", Icon: Trophy },
+  { key: "leagues", label: "League Management", Icon: FootballPlayerIcon },
+  { key: "gameday", label: "Game Day", Icon: UprightsIcon },
   { key: "pickem", label: "Pick'em", Icon: CheckCircle2 },
   { key: "analytics", label: "Analytics", Icon: TrendingUp },
 ];
 function TabBar({ active, onSelect, dots = {} }) {
+  // v3.5: icon above a short label so every tab fits on a phone (and a fifth tab can be added).
   return (
     <div className="flex" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }}>
       {TABS.map(({ key, label, Icon }) => (
@@ -5208,12 +5996,15 @@ function TabBar({ active, onSelect, dots = {} }) {
           key={key}
           onClick={() => onSelect(key)}
           style={{ color: active === key ? C.text : C.textMuted, borderBottom: `2px solid ${active === key ? C.brand : "transparent"}` }}
-          className="flex-1 py-2 text-xs font-medium flex items-center justify-center gap-1.5"
+          className="flex-1 min-w-0 pt-2 pb-1.5 px-0.5 flex flex-col items-center justify-center gap-0.5"
           aria-current={active === key ? "page" : undefined}
+          data-tab={key}
         >
-          <Icon size={13} />
-          {label}
-          {dots[key] ? <span className="inline-block w-2 h-2 rounded-full" style={{ background: C.major }} aria-label="Changed picks" /> : null}
+          <span className="relative">
+            <Icon size={18} />
+            {dots[key] ? <span className="absolute -top-0.5 -right-1.5 inline-block w-2 h-2 rounded-full" style={{ background: C.major }} aria-label="Changed picks" /> : null}
+          </span>
+          <span className="text-[10.5px] font-medium leading-tight text-center">{label}</span>
         </button>
       ))}
     </div>
@@ -5371,7 +6162,7 @@ export default function App() {
   // last saved copy is already on screen, so nothing blocks on this). A newer
   // build supersedes an older one. Returns { week, superseded }; throws only if
   // not a single league could be built.
-  const buildAll = useCallback(async (sid, ids, wk) => {
+  const buildAll = useCallback(async (sid, ids, wk, { manual = false } = {}) => {
     const seq = ++buildSeq.current;
     let builtWeek = wk;
     let ok = 0;
@@ -5381,7 +6172,7 @@ export default function App() {
       while (queue.length) {
         const id = queue.shift();
         try {
-          const r = await api.buildLeagues(sid, [id], wk, ids);
+          const r = await api.buildLeagues(sid, [id], wk, ids, { manual });
           if (seq !== buildSeq.current) return;
           builtWeek = r.week ?? builtWeek;
           if (r.leagues.some((l) => !l.error)) ok += 1;
@@ -5561,11 +6352,13 @@ export default function App() {
     }
   }, [sessionId, selectedIds, week, navigate, buildAll]);
 
-  const handleRefresh = useCallback(async () => {
+  // v3.5: the refresh button passes { manual: true } so trade offers and pending claims are re-read live;
+  // the 30-minute auto refresh doesn't.
+  const handleRefresh = useCallback(async ({ manual = false } = {}) => {
     if (!sessionId || selectedIds.length === 0) return;
     setRefreshing(true);
     try {
-      const { week: builtWeek } = await buildAll(sessionId, selectedIds, week);
+      const { week: builtWeek } = await buildAll(sessionId, selectedIds, week, { manual });
       setWeek(builtWeek);
       setSyncedAt("just now");
     } catch (err) {
@@ -5746,10 +6539,28 @@ export default function App() {
   );
   const closeModal = useCallback(() => setModal(null), []);
 
+  // v3.5: player card pop-up. Opened from any player (PlayerLink); the league on screen — or the one the caller
+  // names, e.g. a Game Day row — is the context for scoring, ownership, transactions and trade values.
+  const [cardTarget, setCardTarget] = useState(null);
+  const activeLeagueRef = useRef(activeLeague);
+  activeLeagueRef.current = activeLeague;
+  const playerCardCtx = useMemo(
+    () => ({
+      open: (player, opts = {}) => {
+        const lg = (opts.leagueId && computedRef.current.find((l) => l.id === opts.leagueId)) || activeLeagueRef.current || null;
+        setCardTarget({ player: { ...player, profile: player.profile || lg?.scoringProfile || null }, leagueId: lg?.id || opts.leagueId || null });
+      },
+    }),
+    []
+  );
+  const closeCard = useCallback(() => setCardTarget(null), []);
+  // Moving to another page closes the card.
+  useEffect(() => setCardTarget(null), [view]);
+
   // Breadcrumb trail: username > League Name > Sub tab name. Every level
   // but the current one is clickable.
   const crumbs = useMemo(() => {
-    const root = { label: sleeperUser?.display_name || "Fantasy Manager", onClick: liveLeagues.length ? () => navigate({ screen: "dashboard" }) : undefined };
+    const root = { label: sleeperUser?.display_name || "Fantasy Manager", onClick: liveLeagues.length ? () => navigate({ screen: "dashboard" }) : undefined, root: true };
     if (view.screen === "bootstrapping") return [{ label: "Fantasy Manager" }];
     if (view.screen === "login") return [{ label: "Fantasy Manager" }];
     if (view.screen === "forceChange") return [{ label: "Change password" }];
@@ -5759,7 +6570,7 @@ export default function App() {
     if (view.screen === "pickem") return [{ label: "Pick'em" }];
     if (view.screen === "admin") return [root, { label: "Account", onClick: () => navigate({ screen: "account" }) }, { label: "Manage users" }];
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
-    if (view.screen === "dashboard") return [{ label: root.label }];
+    if (view.screen === "dashboard") return [{ label: root.label, root: true }];
     if (view.screen === "league" && activeLeague) return [root, { label: activeLeague.name }];
     if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, onClick: () => navigate({ screen: "league", leagueId: activeLeague.id }) }, { label: (TAB_META[view.tab] || TAB_META.roster).label }];
     return [root];
@@ -5770,7 +6581,9 @@ export default function App() {
 
   return (
     <CardCtx.Provider value={cardCtx}>
+    <PlayerCardCtx.Provider value={playerCardCtx}>
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="max-w-lg mx-auto">
+      {cardTarget && <PlayerCardModal target={cardTarget} onClose={closeCard} />}
       {modal?.type === "dvp" && <DvpDetailModal params={modal.params} onClose={closeModal} />}
       {modal?.type === "weather" && <WeatherModal gameKey={modal.key} week={modal.week} onClose={closeModal} />}
       {modal?.type === "variances" && (() => {
@@ -5782,12 +6595,23 @@ export default function App() {
       })()}
       <TopBar
         crumbs={crumbs}
-        onRefresh={showRefresh ? handleRefresh : undefined}
+        onRefresh={showRefresh ? () => handleRefresh({ manual: true }) : undefined}
         refreshing={refreshing}
-        syncedLabel={showRefresh ? `${computed.some((l) => l.fromCache) ? "Showing your last saved data — updating live… · " : ""}Synced ${syncedAt} · ${sourceStatusLabel(sourceStatus)}` : null}
         week={week}
         onWeekChange={handleWeekChange}
         showWeek={showWeek}
+        userMenu={
+          authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange"].includes(view.screen)
+            ? {
+                name: sleeperUser?.display_name || authUser.username,
+                avatar: sleeperUser?.avatar || null,
+                onEditLeagues: handleEditLeagues,
+                onOpenAccount: () => navigate({ screen: "account" }),
+                onLogout: handleLogout,
+                onHome: liveLeagues.length ? () => navigate({ screen: "dashboard" }) : undefined,
+              }
+            : null
+        }
       />
       {authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange"].includes(view.screen) && (
         <TabBar
@@ -5841,11 +6665,18 @@ export default function App() {
                 <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: tabKey })} label="Variance report — this page" />
               </div>
             )}
-            <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={handleRefresh} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
+            <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={() => handleRefresh({ manual: true })} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
           </>
         );
       })()}
+      {showRefresh && (
+        // v3.5: sync status lives at the bottom of the page instead of under the header
+        <div className="px-4 pt-2 pb-6 text-[11px]" style={{ color: C.textFaint }} data-sync-status>
+          {`${computed.some((l) => l.fromCache) ? "Showing your last saved data — updating live… · " : ""}Synced ${syncedAt} · ${sourceStatusLabel(sourceStatus)}`}
+        </div>
+      )}
     </div>
+    </PlayerCardCtx.Provider>
     </CardCtx.Provider>
   );
 }

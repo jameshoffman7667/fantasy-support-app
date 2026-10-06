@@ -2,6 +2,7 @@ import * as priv from "./sleeperPrivate.js";
 import * as sleeper from "./sleeper.js";
 import * as schedule from "./schedule.js";
 import * as store from "./projectionStore.js";
+import * as values from "./values.js"; // v3.5: value of each side of an offer
 
 /**
  * v3.0 — the per-user "private" data riding along with each built league:
@@ -55,8 +56,11 @@ export function classifyTrades(rows, { myRosterId, myUserId, seasonType, now = D
     const getIds = side(mine, "adds");
     const giveIds = side(mine, "drops");
     const pick = (p) => `${p.season} round ${p.round}`;
-    const getPicks = (t.draft_picks || []).filter((p) => Number(p.owner_id) === mine).map(pick);
-    const givePicks = (t.draft_picks || []).filter((p) => Number(p.previous_owner_id) === mine).map(pick);
+    const pickDetail = (p) => ({ season: Number(p.season), round: Number(p.round), originalRosterId: p.roster_id != null ? Number(p.roster_id) : null });
+    const getPickRows = (t.draft_picks || []).filter((p) => Number(p.owner_id) === mine);
+    const givePickRows = (t.draft_picks || []).filter((p) => Number(p.previous_owner_id) === mine);
+    const getPicks = getPickRows.map(pick);
+    const givePicks = givePickRows.map(pick);
     const partnerId = (t.roster_ids || []).map(Number).find((r) => r !== mine) ?? null;
     const card = (pid) => ({ id: String(pid), ...playerInfo(pid) });
     const out = {
@@ -70,6 +74,8 @@ export function classifyTrades(rows, { myRosterId, myUserId, seasonType, now = D
       give: giveIds.map(card),
       getPicks,
       givePicks,
+      getPicksDetail: getPickRows.map(pickDetail), // v3.5: for pick values (season, round, original owner)
+      givePicksDetail: givePickRows.map(pickDetail),
       direction: String(t.creator) === String(myUserId) ? "outgoing" : "incoming",
     };
     if (out.direction === "outgoing") {
@@ -104,11 +110,12 @@ const TX_SNAPSHOT_MS = 6 * 3600 * 1000; // R24: trade offers + pending claims ar
 const LOG_SNAPSHOT_MS = WEEK_MS; // R25: the league change log weekly
 export const dirtyKey = (username, leagueId) => `priv_dirty:${username}:${leagueId}`;
 
-async function fetchLeague(username, lg, ctx, prev = null) {
+async function fetchLeague(username, lg, ctx, prev = null, { force = false } = {}) {
   const now = Date.now();
   const info = { at: now };
   const tasks = [];
-  const roster = (lg.leagueTeams || []).reduce((m, t) => ((m[t.rosterId] = t.label), m), {});
+  // v3.5: real team names (the v3.0-v3.4 lookup read fields leagueTeams didn't have, so offers said "Team 3").
+  const roster = { ...(lg.leagueTeams || []).reduce((m, t) => (t.rosterId != null ? ((m[t.rosterId] = t.label || t.team), m) : m), {}), ...(lg.rosterLabels || {}) };
   const players = ctx.players || {};
   const playerInfo = (pid) => {
     const m = players[pid];
@@ -117,7 +124,8 @@ async function fetchLeague(username, lg, ctx, prev = null) {
   const leg = lg.week;
   const classify = (rows) => ({ ...classifyTrades(rows, { myRosterId: lg.myRosterId, myUserId: lg.ownerId, seasonType: ctx.seasonType, teamKickoff: ctx.teamKickoff, playerInfo, rosterLabel: (r) => roster[r] || (r != null ? `Team ${r}` : null) }), legChecked: leg });
   const dirty = store.getState(dirtyKey(username, lg.id), 0) || 0; // a push of yours makes the snapshot out of date
-  const txFresh = prev && prev.rawTrades && prev.claims && !prev.claims.error && prev.legChecked === leg && prev.txAt && now - prev.txAt < TX_SNAPSHOT_MS && dirty <= prev.txAt;
+  // v3.5: a manual refresh (force) always re-reads trade offers and pending claims.
+  const txFresh = !force && prev && prev.rawTrades && prev.claims && !prev.claims.error && prev.legChecked === leg && prev.txAt && now - prev.txAt < TX_SNAPSHOT_MS && dirty <= prev.txAt;
   if (txFresh) {
     // Snapshot reused; the red "stale" flag depends on today's date and kickoffs, so it is recomputed on every page load.
     info.rawTrades = prev.rawTrades;
@@ -155,7 +163,40 @@ async function fetchLeague(username, lg, ctx, prev = null) {
   return info;
 }
 
-export async function attach(username, leagues, { live = false } = {}) {
+/**
+ * v3.5: each offer gets `value` — the two sides valued with the league's trade-value table (dynasty: Roster Audit,
+ * redraft/keeper: FantasyCalc), verdict win/fair/loss at ±10%. In dynasty leagues a live refresh also asks Roster
+ * Audit's calculator for its own verdict and age warnings (`ra`, at most ~35 calls an hour, cached 6 hours).
+ */
+async function decorateOffers(lg, trades, { live }) {
+  if (!trades || trades.error) return trades;
+  const all = [...(trades.incoming || []), ...(trades.outgoing || [])];
+  if (!all.length) return trades;
+  const vp = lg.valueParams || {};
+  let vals = null;
+  try {
+    vals = await values.leagueValues({ dynasty: lg.leagueType === "dynasty", superflex: Boolean(lg.superflex), ppr: vp.ppr ?? 1, tep: Boolean(vp.tep), teams: vp.teams ?? 12 });
+  } catch {
+    vals = null;
+  }
+  const decorate = async (o) => {
+    const value = vals ? values.valueOffer(o, vals, { superflex: Boolean(lg.superflex), pickSlotOf: (rid) => lg.pickSlots?.[rid] || "mid" }) : null;
+    let ra = null;
+    if (vals?.source === "Roster Audit") {
+      const side = (players, picks) => [
+        ...(players || []).map((p) => ({ type: "player", id: String(p.id) })),
+        ...(picks || []).map((pk) => ({ type: "pick", season: pk.season, round: pk.round, slot: lg.pickSlots?.[pk.originalRosterId] || "mid" })),
+      ];
+      ra = await values.raCalc({ sideA: side(o.get, o.getPicksDetail), sideB: side(o.give, o.givePicksDetail), superflex: Boolean(lg.superflex) }, { cacheOnly: !live }).catch(() => null);
+    }
+    return { ...o, value, ra };
+  };
+  return { ...trades, incoming: await Promise.all((trades.incoming || []).map(decorate)), outgoing: await Promise.all((trades.outgoing || []).map(decorate)) };
+}
+
+export const _decorateOffersForTests = decorateOffers;
+
+export async function attach(username, leagues, { live = false, force = false } = {}) {
   const st = priv.status(username);
   if (!st.configured) return leagues.map((l) => (l.error ? l : { ...l, privateInfo: { configured: false } }));
   // v3.1: reads switched off → no private data at all (and no calls); the client hides the private-only parts.
@@ -172,11 +213,12 @@ export async function attach(username, leagues, { live = false } = {}) {
       if (l.error) return l;
       let info;
       if (live) {
-        info = await fetchLeague(username, l, ctx, store.getState(snapKey(username, l.id), null));
+        info = await fetchLeague(username, l, ctx, store.getState(snapKey(username, l.id), null), { force });
         store.setState(snapKey(username, l.id), info);
       } else {
         info = store.getState(snapKey(username, l.id), null) || { empty: true };
       }
+      if (info?.trades) info = { ...info, trades: await decorateOffers(l, info.trades, { live }).catch(() => info.trades) };
       return { ...l, pushMarks: getMarks(username, l.id), privateInfo: { configured: true, perms: st.perms, writesEnabled: st.writesEnabled, ...info } };
     })
   );

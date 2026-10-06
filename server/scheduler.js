@@ -10,6 +10,7 @@ import * as backfill from "./backfill.js";
 import * as pickem from "./pickem.js";
 import * as cbs from "./cbs.js";
 import * as performance from "./performance.js";
+import * as gameday from "./gameday.js"; // v3.5: Game Day baselines before the week's first kickoff
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -189,6 +190,12 @@ async function preKickoffCheck() {
         hub.clearCache(); // recompute (and re-record) every source with the fresh numbers
         await refreshAllUsers();
         if (!early) await pickem.updateAllUsers(); // final pre-kickoff recommendations (flags/pushes any change)
+        // v3.5: an hour before the week's FIRST kickoff, record each Game Day matchup's projected totals (the
+        // baseline that later projections are compared with), in case Game Day isn't opened before then.
+        if (!early && kickoff === Math.min(...slots.keys())) {
+          const users = getAllUserStates().filter((st) => getUser(st.username)?.active && st.leagueIds?.length && !isInactive(getUser(st.username), st)).map((st) => st.username);
+          await gameday.snapshotBaselines(users);
+        }
       }
     }
   } catch (err) {

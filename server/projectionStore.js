@@ -269,6 +269,22 @@ export function recordedWeeks() {
   return db.prepare("SELECT season, week, profile, COUNT(*) AS n, MAX(backfill) AS backfill FROM proj_records GROUP BY season, week, profile ORDER BY season, week").all();
 }
 
+/** v3.5: one player's recorded projections for the given weeks (all sources), newest week first. */
+export function playerProjHistory({ profile, season, playerId, weeks }) {
+  if (!weeks?.length) return [];
+  return db
+    .prepare(`SELECT week, source, proj, adj_proj FROM proj_records WHERE profile = ? AND season = ? AND player_id = ? AND week IN (${weeks.map(Number).join(",")}) ORDER BY week DESC`)
+    .all(profile, Number(season), String(playerId));
+}
+
+/** v3.5: one player's actual stat lines for a season: [{ week, stats }]. */
+export function playerActuals(season, playerId) {
+  return db
+    .prepare("SELECT week, stats_json FROM actual_stats WHERE season = ? AND player_id = ? ORDER BY week")
+    .all(Number(season), String(playerId))
+    .map((r) => ({ week: r.week, stats: JSON.parse(r.stats_json) }));
+}
+
 /* ---------------- actuals ---------------- */
 export function saveActuals(season, week, statsById) {
   const stmt = db.prepare("INSERT INTO actual_stats (season, week, player_id, stats_json) VALUES (?, ?, ?, ?) ON CONFLICT(season, week, player_id) DO UPDATE SET stats_json = excluded.stats_json");

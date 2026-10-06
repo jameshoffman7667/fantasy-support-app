@@ -12,6 +12,10 @@ import { deadlineInfo } from "./tradeDeadline.js"; // v2.9
 import * as ownership from "./crossOwnership.js"; // v2.9
 import * as injuryOpps from "./injuryOpps.js"; // v3.1
 import { getSnapShareForWeek, getUsageStatsForWeek, lookupUsage } from "./nflverseUsage.js";
+import * as values from "./values.js"; // v3.5: trade values (Roster Audit / FantasyCalc)
+import * as rosProjections from "./rosProjections.js"; // v3.5
+import * as tradeTools from "./tradeTools.js"; // v3.5
+import * as slp from "./sleeperProjections.js"; // v3.5: scores past stat lines (injury rule)
 
 // Slot labels as they appear AFTER slotLabel() (SUPER_FLEX -> "SFLX"). Before
 // v2.1 this map was keyed "SUPERFLEX", which never matched the "SFLX" label the
@@ -88,8 +92,10 @@ function buildInjuryRows(leagueId, league) {
     return {
       id: `${p.name}-${p.status}`,
       player: p.name,
+      playerId: p.id,
       status: p.status,
-      note: p.note,
+      // v3.5: only the detail ("Coach's Decision", "Hamstring"); the page already shows the status in front of it.
+      note: p.injuryDetail || null,
       seen: seenBefore,
     };
   });
@@ -158,6 +164,8 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   // week's projection, not a projection itself. Clamped to 1 so week 1
   // doesn't request week 0.
   const usageWeek = Math.max(1, week - 1);
+  // v3.5: the whole season's schedule (bye weeks for player cards); 18 cached weekly scoreboards, started early.
+  const seasonSchedPromise = schedule.getSeasonSchedule(season).catch(() => null);
 
   const [league, rosters, leagueUsers, sleeperPlayers, weekSchedule, matchups, snapShareMap, usageStatsMap] = await Promise.all([
     sleeper.getLeague(leagueId),
@@ -169,6 +177,9 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     getSnapShareForWeek(season, usageWeek),
     getUsageStatsForWeek(season, usageWeek),
   ]);
+
+  const seasonSched = await seasonSchedPromise;
+  const byeOf = (team) => (team && seasonSched?.byes ? seasonSched.byes[schedule.normalizeTeam(team)] ?? null : null);
 
   // v2.8: game-day forecasts for outdoor stadiums (Open-Meteo, keyless).
   const weekWeather = await weather.getWeekWeather(season, week, weekSchedule).catch((err) => {
@@ -353,6 +364,10 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       gameState: g?.state ?? null,
       gameToday: g?.kickoffMillis != null && new Date(g.kickoffMillis).toLocaleDateString("en-CA", { timeZone: "America/New_York" }) === new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }),
       note: meta?.injury_status && meta?.injury_body_part ? `${meta.injury_status} — ${meta.injury_body_part}` : undefined,
+      // v3.5: the injury detail on its own (Injury Watch shows "status — detail"; `note` already starts with the status).
+      injuryDetail: meta?.injury_body_part || null,
+      bye: byeOf(meta?.team), // v3.5: bye week for the card
+      age: meta?.birth_date ? Math.floor(((Date.now() - Date.parse(meta.birth_date)) / (365.25 * 86400000)) * 10) / 10 : meta?.age ?? null,
       // Supplemental context from nflverse (last week's usage), not a
       // projection input — null fields mean no match/no data this week,
       // not zero usage.
@@ -534,19 +549,16 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     usage: fa.usage,
   }));
 
-  // --- Trade value index (v2.9) ---
-  // Trade Radar and Trade Finder compare players by a "value" where LOWER IS
-  // BETTER, on FantasyPros' ECR-rank scale. ECR is optional now: when it
-  // matches fewer than 60% of the league's rostered QB/RB/WR/TE (FantasyPros
-  // down, over quota, or not configured) the value falls back to each player's
-  // rank by projection among all rostered players at his position in this
-  // league, stretched onto a similar scale (QB 36 / RB 80 / WR 100 / TE 36
-  // deep) so the "25 spots" and "20 spots" thresholds keep a similar meaning.
-  // That scaling is a judgement call, not something measured.
+  // --- v3.5 trade values and team strength ---
+  // Dynasty leagues: Roster Audit dynasty values (FantasyCalc's dynasty values if Roster Audit is down) for both
+  // team strength and trade fairness. Redraft / keeper leagues: team strength from rest-of-season projected points
+  // (Sleeper's weekly projections summed to the end of the league's playoffs), trade fairness from FantasyCalc
+  // redraft values. When neither source loads, the old stand-in (FantasyPros ECR rank, or each player's rank by
+  // this week's projection) is turned into a value so the page still works.
   const posGroups = ["QB", "RB", "WR", "TE"];
   const POS_DEPTH = { QB: 36, RB: 80, WR: 100, TE: 36 };
-  const valueById = new Map();
-  let tradeBasis = "ecr";
+  const legacyRank = new Map(); // lower = better
+  let legacyBasis = "ecr";
   {
     let total = 0;
     let withEcr = 0;
@@ -557,13 +569,13 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       const rec = lookupFpMulti(ecrIndex, [playerName(meta, id)], toFpPosition(meta.position));
       const ecr = rec ? Number(rec.rank_ecr ?? rec.rank ?? null) : null;
       if (ecr != null && !Number.isNaN(ecr)) {
-        valueById.set(String(id), ecr);
+        legacyRank.set(String(id), ecr);
         withEcr++;
       }
     }
     if (!total || withEcr / total < 0.6) {
-      tradeBasis = "projection";
-      valueById.clear();
+      legacyBasis = "projection";
+      legacyRank.clear();
       const byPos = {};
       for (const id of allRosteredIds) {
         const meta = sleeperPlayers[id];
@@ -574,104 +586,102 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       }
       for (const [pos, list] of Object.entries(byPos)) {
         list.sort((x, y) => y.proj - x.proj);
-        list.forEach((x, i) => valueById.set(x.id, Math.round(((i + 1) * POS_DEPTH[pos]) / list.length)));
+        list.forEach((x, i) => legacyRank.set(x.id, Math.round(((i + 1) * POS_DEPTH[pos]) / list.length)));
       }
     }
   }
+  const legacyValueOf = (id) => {
+    const r = legacyRank.get(String(id));
+    const pos = sleeperPlayers[id]?.position;
+    return r == null || !POS_DEPTH[pos] ? null : POS_DEPTH[pos] + 1 - r;
+  };
 
-  // --- Trade Radar: every team's strengths/weaknesses, suggestions grouped by opponent ---
-  // "Team strength" at a position = the average trade value (ECR rank, or the
-  // projection-based stand-in above) of that roster's players there.
+  const leagueType = Number(league.settings?.type) === 2 ? "dynasty" : "redraft"; // Sleeper: 0 redraft, 1 keeper, 2 dynasty
+  const bestBall = Number(league.settings?.best_ball) === 1;
+  const pprSetting = Number(league.scoring_settings?.rec ?? 0);
+  const tepSetting = Number(league.scoring_settings?.bonus_rec_te ?? 0) > 0;
+  const valueTable = await values
+    .leagueValues({ dynasty: leagueType === "dynasty", superflex, ppr: pprSetting, tep: tepSetting, teams: rosters.length })
+    .catch((err) => ({ source: null, error: err.message, valueOf: () => null, details: () => null, picks: [] }));
+  let ros = null;
+  if (leagueType !== "dynasty" || !valueTable.source) {
+    ros = await rosProjections.rosPoints({ season, week, settings: league.scoring_settings }).catch((err) => {
+      console.warn(`[buildLeague] Rest-of-season projections unavailable: ${err.message}`);
+      return null;
+    });
+  }
+  const rosOf = (id) => (ros?.byId?.size ? ros.byId.get(String(id)) ?? null : null);
+  let strengthOf;
+  let strengthBasis;
+  if (leagueType === "dynasty" && valueTable.source) (strengthOf = valueTable.valueOf), (strengthBasis = valueTable.source);
+  else if (ros?.byId?.size) (strengthOf = rosOf), (strengthBasis = "rest-of-season projections");
+  else if (valueTable.source) (strengthOf = valueTable.valueOf), (strengthBasis = valueTable.source);
+  else (strengthOf = legacyValueOf), (strengthBasis = legacyBasis === "ecr" ? "FantasyPros ECR" : "this week's projections");
+  let tradeValueOf;
+  let valueBasis;
+  if (valueTable.source) (tradeValueOf = valueTable.valueOf), (valueBasis = valueTable.source);
+  else if (ros?.byId?.size) (tradeValueOf = rosOf), (valueBasis = "rest-of-season projections");
+  else (tradeValueOf = legacyValueOf), (valueBasis = legacyBasis === "ecr" ? "FantasyPros ECR" : "this week's projections");
+  const tradeBasis = {
+    leagueType,
+    strength: strengthBasis,
+    value: valueBasis,
+    valuesAt: valueTable.at ?? null,
+    valuesStale: Boolean(valueTable.stale),
+    valuesError: valueTable.source ? null : valueTable.error || null,
+    ros: ros ? { from: ros.weeks?.from ?? null, to: ros.weeks?.to ?? null, loaded: ros.weeks?.loaded ?? null } : null,
+  };
+
+  // --- Trade Radar: every team's strengths and weaknesses (rank at each position), mutual ideas per rival ---
+  const rosterLabel = (r) => {
+    if (!r) return null;
+    if (r.roster_id === myRoster.roster_id) return "Your Team";
+    const owner = leagueUsers.find((u) => u.user_id === r.owner_id);
+    return r.metadata?.team_name || owner?.metadata?.team_name || owner?.display_name || `Roster #${r.roster_id}`;
+  };
+  const rosterLabels = Object.fromEntries(rosters.map((r) => [r.roster_id, rosterLabel(r)]));
   let leagueTeams = [];
   const tradeSuggestions = [];
   let myAnalysis = null;
   let teamAnalyses = [];
+  let pickSlotByRoster = {};
   try {
-    const avgValueByPos = (roster) => {
-      const byPos = {};
-      (roster.players || []).forEach((id) => {
-        const meta = sleeperPlayers[id];
-        if (!meta || !posGroups.includes(meta.position)) return;
-        const v = valueById.get(String(id));
-        if (v == null) return;
-        byPos[meta.position] = byPos[meta.position] || [];
-        byPos[meta.position].push(v);
-      });
-      const avg = {};
-      for (const pos of posGroups) {
-        const list = byPos[pos] || [];
-        avg[pos] = { count: list.length, avgEcr: list.length ? list.reduce((a, b) => a + b, 0) / list.length : null };
-      }
-      return avg;
-    };
-
-    teamAnalyses = rosters.map((r) => {
-      const avg = avgValueByPos(r);
-      const withValues = posGroups.filter((p) => avg[p].avgEcr != null && avg[p].count >= 1);
-      // Lower average value = better (rank 1 is the best player at a position).
-      const ranked = [...withValues].sort((a, b) => avg[a].avgEcr - avg[b].avgEcr);
-      const strengths = ranked.slice(0, Math.min(2, ranked.length));
-      const weaknesses = [...ranked].reverse().slice(0, Math.min(2, ranked.length));
-      const owner = leagueUsers.find((u) => u.user_id === r.owner_id);
-      const label =
-        r.roster_id === myRoster.roster_id
-          ? "Your Team"
-          : r.metadata?.team_name || owner?.metadata?.team_name || owner?.display_name || `Roster #${r.roster_id}`;
-      return { rosterId: r.roster_id, label, isMe: r.roster_id === myRoster.roster_id, avg, strengths, weaknesses };
+    const depth = tradeTools.depthByPosition(league.roster_positions || []);
+    const strength = tradeTools.positionStrength({
+      rosters: rosters.map((r) => ({ rosterId: r.roster_id, players: r.players || [] })),
+      posOf: (id) => sleeperPlayers[id]?.position,
+      valueOf: strengthOf,
+      depth,
     });
-
+    pickSlotByRoster = tradeTools.pickSlots(strength);
+    const n = rosters.length;
+    teamAnalyses = rosters.map((r) => {
+      const row = strength.get(r.roster_id);
+      const sw = tradeTools.strengthsAndWeaknesses(row, n);
+      return { rosterId: r.roster_id, ownerId: r.owner_id, label: rosterLabel(r), isMe: r.roster_id === myRoster.roster_id, row, ...sw };
+    });
     myAnalysis = teamAnalyses.find((t) => t.isMe);
-
-    leagueTeams = teamAnalyses.map((t) => ({
-      team: t.label,
-      isMe: t.isMe,
-      strengths: t.strengths.map((p) => ({ pos: p, avgEcr: Math.round(t.avg[p].avgEcr) })),
-      weaknesses: t.weaknesses.map((p) => ({ pos: p, avgEcr: Math.round(t.avg[p].avgEcr) })),
-    }));
-
+    leagueTeams = teamAnalyses.map((t) => ({ rosterId: t.rosterId, label: t.label, team: t.label, isMe: t.isMe, strengths: t.strengths, weaknesses: t.weaknesses }));
     if (myAnalysis) {
       for (const other of teamAnalyses) {
         if (other.isMe) continue;
-        const suggestionsForTeam = [];
-        // A real trade opportunity: a position I'm weak at where they're
-        // strong, paired with a position I'm strong at where THEY'RE
-        // weak — a swap that helps both sides, not just mine.
-        for (const myWeak of myAnalysis.weaknesses) {
-          if (!other.strengths.includes(myWeak)) continue;
-          const mutualGive = myAnalysis.strengths.find((s) => other.weaknesses.includes(s));
-          if (!mutualGive) continue;
-          const gap = myAnalysis.avg[myWeak].avgEcr - other.avg[myWeak].avgEcr;
-          if (gap <= 0) continue;
-          suggestionsForTeam.push({
-            severity: gap > 25 ? "major" : "minor",
-            give: `A ${mutualGive}`,
-            get: `A ${myWeak}`,
-            note: `You're weak at ${myWeak} (avg ${tradeBasis === "ecr" ? "ECR" : "proj. rank"} ~${Math.round(myAnalysis.avg[myWeak].avgEcr)}) — they're strong there (~${Math.round(other.avg[myWeak].avgEcr)}). You're strong at ${mutualGive}, which is one of their weak spots — mutually beneficial.`,
-          });
-        }
-        const capped = suggestionsForTeam.slice(0, 2);
-        if (capped.length) {
-          capped.forEach((s) => tradeSuggestions.push({ ...s, theirTeam: other.label }));
-        }
+        tradeTools.radarIdeas(myAnalysis, other, n).forEach((s) => tradeSuggestions.push({ ...s, theirTeam: other.label }));
       }
     }
   } catch (err) {
     console.warn(`[buildLeague] Trade Radar failed for league ${leagueId}, continuing without it: ${err.message}`);
   }
 
-  // --- Trade Finder (v2.9): concrete 1-for-1 swaps, never the same position ---
-  // You SELL from a position of strength and BUY at a position of weakness:
-  // give one of your players at a strength position, get one of a rival's at
-  // a position where you're weak. Kept only when the two are close enough in
-  // trade value (|Δ| <= 20 on the value scale) that the rival could plausibly
-  // say yes, and when the swap raises YOUR projected starting lineup:
+  // --- Trade Finder: concrete 1-for-1 swaps, never the same position ---
+  // You SELL from a position of strength and BUY at a position of weakness: give one of your players at a strong
+  // position, get one of a rival's at a weak one. Kept only when the two trade values are within 10% of each other
+  // (a rival could plausibly say yes) and the swap raises YOUR projected starting lineup this week:
   //   net gain = (what the new player adds over the starter he'd replace)
-  //            - (what you lose if the player you give is a starter, i.e. he
-  //               drops to the best bench player at his position)
+  //            - (what you lose if the player you give is a starter, i.e. he drops to the best bench player at his position)
   // `mutual` marks rivals who are themselves weak where you're giving.
   const tradeFinder = [];
   try {
-    const FAIRNESS_TOLERANCE = 20;
+    const FAIRNESS = 0.1;
     const eligibleForSlot = (slot, pos) => (FLEX_ELIGIBLE[slot] ? FLEX_ELIGIBLE[slot].includes(pos) : slot === pos);
     const myStarters = starters.filter((s) => s.player);
     const gainFromAdding = (pos, proj) => {
@@ -688,26 +698,24 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     };
 
     if (myAnalysis?.strengths.length && myAnalysis?.weaknesses.length) {
-      const myWeakSet = new Set(myAnalysis.weaknesses);
+      const myWeakSet = new Set(myAnalysis.weaknesses.map((w) => w.pos));
       const giveCandidates = myAnalysis.strengths
+        .map((s) => s.pos)
         .filter((sPos) => !myWeakSet.has(sPos))
-        .flatMap((sPos) => myByPos(sPos).sort((x, y) => y.proj - x.proj).slice(0, 4))
-        .map((p) => ({ ...p, value: valueById.get(String(p.id)) ?? null }))
-        .filter((p) => p.value != null);
+        .flatMap((sPos) => myByPos(sPos).map((p) => ({ ...p, value: tradeValueOf(p.id) })).filter((p) => p.value != null).sort((x, y) => y.value - x.value).slice(0, 4));
       for (const otherRoster of rosters) {
         if (otherRoster.roster_id === myRoster.roster_id) continue;
         const theirs = teamAnalyses.find((t) => t.rosterId === otherRoster.roster_id);
-        const owner = leagueUsers.find((u) => u.user_id === otherRoster.owner_id);
-        const theirLabel = otherRoster.metadata?.team_name || owner?.metadata?.team_name || owner?.display_name || `Roster #${otherRoster.roster_id}`;
+        const theirLabel = rosterLabel(otherRoster);
         const wants = (otherRoster.players || [])
-          .map((id) => ({ id: String(id), meta: sleeperPlayers[id], value: valueById.get(String(id)) }))
+          .map((id) => ({ id: String(id), meta: sleeperPlayers[id], value: tradeValueOf(id) }))
           .filter((c) => c.meta && myWeakSet.has(c.meta.position) && c.value != null)
-          .sort((x, y) => x.value - y.value)
+          .sort((x, y) => y.value - x.value)
           .slice(0, 8);
         const swapsForTeam = [];
         for (const give of giveCandidates) {
           if (!give.proj) continue;
-          const near = wants.filter((c) => c.meta.position !== give.pos && Math.abs(c.value - give.value) <= FAIRNESS_TOLERANCE).slice(0, 3);
+          const near = wants.filter((c) => c.meta.position !== give.pos && tradeTools.closeInValue(c.value, give.value, FAIRNESS)).slice(0, 3);
           for (const cand of near) {
             const { proj: candProj } = await resolveProjection(cand.id);
             if (candProj == null) continue;
@@ -717,9 +725,9 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
             if (net <= 0.5) continue;
             swapsForTeam.push({
               theirTeam: theirLabel,
-              mutual: Boolean(theirs?.weaknesses.includes(give.pos)),
-              give: { name: give.name, pos: give.pos, proj: give.proj, ecr: give.value },
-              get: { name: cand.meta ? playerName(cand.meta, cand.id) : cand.id, pos: cand.meta.position, proj: candProj, ecr: cand.value },
+              mutual: Boolean(theirs?.weaknesses.some((w) => w.pos === give.pos)),
+              give: { id: String(give.id), name: give.name, pos: give.pos, proj: give.proj, value: Math.round(give.value) },
+              get: { id: cand.id, name: cand.meta ? playerName(cand.meta, cand.id) : cand.id, pos: cand.meta.position, proj: candProj, value: Math.round(cand.value) },
               gain: Math.round(net * 10) / 10,
               gainParts: { add: Math.round(add * 10) / 10, loss: Math.round(loss * 10) / 10 },
             });
@@ -752,6 +760,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
 
   // --- v3.1: injury opportunities (pickups and plays caused by injuries at relevant depth-chart slots) ---
   let injuryOpportunities = null;
+  const profileKey = store.profileOf(league.scoring_settings).key;
   try {
     const global = await injuryOpps.compute({ season, week, sleeperPlayers, trending });
     const myActive = new Set([...starterIds, ...benchIds].map(String));
@@ -772,6 +781,26 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
         return r?.proj ?? null;
       },
       topFree: (pos) => (projTop.get(pos) || [])[0] || null,
+      // v3.5: best available players at a position (projection order), for topping up injury replacements.
+      topFreeList: (pos, n, exclude = new Set()) => (projTop.get(pos) || []).filter((x) => !exclude.has(String(x.id))).slice(0, n),
+      // v3.5: the injured player's projection before the injury: this week's if still above 0, else his latest
+      // recorded projection from the previous three weeks, else his points per game this season.
+      preInjuryProj: (id) => {
+        const cur = projWeek ? hub.pick(projWeek, id)?.proj : null;
+        if (cur != null && cur > 0) return cur;
+        const prevWeeks = [week - 1, week - 2, week - 3].filter((w) => w >= 1);
+        const rows = store.playerProjHistory({ profile: profileKey, season, playerId: id, weeks: prevWeeks });
+        const RANK = { V: 0, T: 1, S: 2, E: 3 };
+        for (const w of prevWeeks) {
+          const best = rows.filter((r) => r.week === w && (r.adj_proj ?? r.proj) > 0).sort((a, b) => (RANK[a.source] ?? 9) - (RANK[b.source] ?? 9))[0];
+          if (best) return best.adj_proj ?? best.proj;
+        }
+        const pos = sleeperPlayers[id]?.position;
+        const games = store.playerActuals(season, id).filter((g) => Number(g.stats?.gp ?? 1) > 0);
+        if (!games.length) return null;
+        const pts = games.map((g) => slp.scoreStats({ pos, stats: g.stats }, league.scoring_settings) ?? 0);
+        return pts.reduce((a, b) => a + b, 0) / pts.length;
+      },
       cardOf,
     });
   } catch (err) {
@@ -802,31 +831,48 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     });
     if (res) {
       const high = new Set(ownership.highOwnership(res, { opponentsTotal: oppIds.length }));
+      const highBB = new Set(ownership.highOwnership(res, { opponentsTotal: oppIds.length, includeBestBall: true }));
       const labelOf = (ownerId) => {
         const r = rosters.find((x) => x.owner_id === ownerId);
         const u = leagueUsers.find((x) => x.user_id === ownerId);
         return r?.metadata?.team_name || u?.metadata?.team_name || u?.display_name || ownerId;
       };
+      const avg = (list, key) => (list.length ? Math.round((list.reduce((s, o) => s + (o[key] || 0), 0) / list.length) * 10) / 10 : 0);
       ownershipInfo = {
         pending: false,
         at: res.at,
         opponents: oppIds.length,
         leaguesChecked: res.leaguesChecked,
+        bestBallLeagues: res.bestBallLeagues ?? null,
         errors: res.errors,
         capped: res.capped,
         min: { opponents: ownership.MIN_OPPONENTS, pct: ownership.MIN_PCT },
         players: Object.entries(res.players || {})
           .filter(([, p]) => p.opponentCount > 0)
-          .map(([id, p]) => ({
-            id,
-            name: playerName(sleeperPlayers[id], id),
-            pos: sleeperPlayers[id]?.position || "?",
-            opponentCount: p.opponentCount,
-            leagueCount: p.leagueCount,
-            high: high.has(id),
-            opponents: p.opponents.map((o) => ({ team: labelOf(o.ownerId), leagues: o.leagues })),
-          }))
-          .sort((a, b) => Number(b.high) - Number(a.high) || b.opponentCount - a.opponentCount),
+          .map(([id, p]) => {
+            const opps = (p.opponents || []).map((o) => ({
+              ownerId: o.ownerId,
+              team: labelOf(o.ownerId),
+              leagues: o.leagues, total: o.total, pct: o.pct ?? null,
+              leaguesNoBB: o.leaguesNoBB ?? o.leagues, totalNoBB: o.totalNoBB ?? o.total, pctNoBB: o.pctNoBB ?? o.pct ?? null,
+            }));
+            // Average share of their leagues across ALL opponents in this league (0% for those who don't hold him).
+            const all = oppIds.map((oid) => opps.find((o) => String(o.ownerId) === String(oid)) || { pct: 0, pctNoBB: 0 });
+            return {
+              id,
+              name: playerName(sleeperPlayers[id], id),
+              pos: sleeperPlayers[id]?.position || "?",
+              opponentCount: p.opponentCount,
+              opponentCountNoBB: p.opponentCountNoBB ?? p.opponentCount,
+              leagueCount: p.leagueCount,
+              avgPct: avg(all, "pct"),
+              avgPctNoBB: avg(all, "pctNoBB"),
+              high: high.has(id),
+              highBB: highBB.has(id),
+              opponents: opps,
+            };
+          })
+          .sort((a, b) => Number(b.high) - Number(a.high) || b.avgPctNoBB - a.avgPctNoBB),
       };
     }
   } catch (err) {
@@ -847,6 +893,12 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     dropSummary,
     ownership: ownershipInfo,
     tradeBasis,
+    leagueType, // v3.5: "dynasty" | "redraft" (keeper counts as redraft)
+    bestBall,
+    avatar: league.avatar || null, // v3.5: league picture (Sleeper avatar id)
+    rosterLabels, // v3.5: roster id -> team name (trade offers show names, not numbers)
+    pickSlots: pickSlotByRoster, // v3.5: projected early/mid/late slot of each roster's own picks (dynasty pick values)
+    valueParams: { ppr: pprSetting, tep: tepSetting, teams: rosters.length }, // v3.5: which value table offers use
     myRosterId: myRoster.roster_id,
     ownerId: userId,
     // v3.0: raw roster arrays (slot order, '0' = empty) for pushing lineup / IR changes to Sleeper.

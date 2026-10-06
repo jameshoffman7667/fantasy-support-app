@@ -158,3 +158,55 @@ export const ALL_NFL_TEAMS = [
 ];
 
 export { normalizeTeam };
+
+/**
+ * v3.5: the whole regular season at once — opponent, home/away and kickoff for every team and week, plus each
+ * team's bye week (the week it doesn't appear). Built from the 18 weekly scoreboards (each already cached), kept
+ * 12 hours. A week ESPN answers for the wrong week number is skipped rather than read as a league-wide bye.
+ */
+const SEASON_TTL_MS = 12 * 60 * 60 * 1000;
+const seasonInflight = new Map();
+export async function getSeasonSchedule(season, { weeks = 18, concurrency = 3, getWeek = getWeekSchedule } = {}) {
+  const key = `season-schedule:v1:${season}`;
+  const hit = cacheGet(key);
+  if (hit !== null) return hit;
+  if (seasonInflight.has(key)) return seasonInflight.get(key);
+  const p = (async () => {
+    const list = Array.from({ length: weeks }, (_, i) => i + 1);
+    const byWeek = {};
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: concurrency }, async () => {
+        while (next < list.length) {
+          const w = list[next++];
+          try {
+            const s = await getWeek(season, w);
+            if (!s?.byTeam || !Object.keys(s.byTeam).length) continue;
+            if (s.weekNumber != null && Number(s.weekNumber) !== w) continue;
+            const m = {};
+            for (const [t, g] of Object.entries(s.byTeam)) m[t] = { opp: g.opponent || null, home: g.homeAway === "home", kickoff: g.kickoffMillis ?? null, state: g.state || null };
+            byWeek[w] = m;
+          } catch {
+            /* skip this week */
+          }
+        }
+      })
+    );
+    const byes = {};
+    for (const team of ALL_NFL_TEAMS) {
+      for (const w of list) {
+        if (!byWeek[w]) continue; // unknown week, not a bye
+        if (!byWeek[w][team]) {
+          byes[team] = w;
+          break;
+        }
+      }
+    }
+    const out = { season: Number(season), byWeek, byes, weeksLoaded: Object.keys(byWeek).length, at: Date.now() };
+    // Only keep it for the full 12 hours when nearly every week loaded.
+    cacheSet(key, out, out.weeksLoaded >= weeks - 1 ? SEASON_TTL_MS : 10 * 60 * 1000);
+    return out;
+  })().finally(() => seasonInflight.delete(key));
+  seasonInflight.set(key, p);
+  return p;
+}

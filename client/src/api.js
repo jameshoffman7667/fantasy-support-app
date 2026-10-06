@@ -26,11 +26,12 @@ export function connect() {
 }
 
 // v2.9: `leagueIds` = build these now; `trackedIds` = the full tracked list to remember.
-export function buildLeagues(sessionId, leagueIds, week, trackedIds) {
+export function buildLeagues(sessionId, leagueIds, week, trackedIds, { manual = false } = {}) {
   return request(`/api/leagues/build`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, leagueIds, week, trackedIds }),
+    // v3.5: manual = the refresh button was pressed (re-reads trade offers live)
+    body: JSON.stringify({ sessionId, leagueIds, week, trackedIds, manual }),
   });
 }
 
@@ -185,6 +186,12 @@ export function saveWeatherSettings(settings) {
 }
 export const playerImageUrl = (id) => `/api/img/player/${encodeURIComponent(id)}`;
 export const teamLogoUrl = (team) => `/api/img/team/${encodeURIComponent(team)}`;
+// v3.5: Sleeper user photos and league pictures (avatar ids), through the same server-side image cache.
+export const avatarUrl = (avatarId) => (avatarId ? `/api/img/avatar/${encodeURIComponent(avatarId)}` : null);
+// v3.5: the player card pop-up.
+export function getPlayerCard(id, leagueId) {
+  return request(`/api/player-card?${new URLSearchParams({ id, ...(leagueId ? { leagueId } : {}) })}`);
+}
 
 /* ---------------- Variance report (v2.8.1) ---------------- */
 export function getVarianceAcks() {

@@ -128,6 +128,8 @@ export function collectVariances(lg) {
   // an offer YOU made that has gone stale is red (N02). Resolved offers disappear on their own.
   const T = lg.privateInfo?.trades;
   for (const o of T?.incoming || []) add("trade", "Incoming trade offer", `offer ${o.id}`, "minor", `Offer from ${o.partner || "another team"}: you get ${offerSide(o.get, o.getPicks)}, you give ${offerSide(o.give, o.givePicks)}`);
+  // v3.5: an incoming offer that would cost you more than 10% of trade value (league's value table) is its own yellow variance.
+  for (const o of T?.incoming || []) if (o.value?.verdict === "loss") add("trade", "Offer loses trade value", `offer ${o.id}`, "minor", `Offer from ${o.partner || "another team"} loses ${Math.abs(o.value.pct)}% of value (${o.value.source}): you get ${offerSide(o.get, o.getPicks)}, you give ${offerSide(o.give, o.givePicks)}`);
   for (const o of T?.outgoing || []) if (o.stale) add("trade", "Stale trade offer", `offer ${o.id}`, "major", `Your offer to ${o.partner || "another team"} (you give ${offerSide(o.give, o.givePicks)}, you get ${offerSide(o.get, o.getPicks)}): ${o.stale}`);
 
   // v3.0: League page — every settings change in the log is a minor variance until cleared.

@@ -151,7 +151,8 @@ instead of a colored status badge.
 
 - Tapping a **league name** → League Overview page.
 - Tapping a **status indicator** next to a league → deep-links directly into that sub-tab for that league.
-- **Breadcrumb header** on every screen: `Sleeper username > League Name > Sub-tab name`. Every level but the current one is clickable — this replaced an earlier back-button-only pattern.
+- **Breadcrumb header** on every screen: `Sleeper username > League Name > Sub-tab name`. Every level but the current one is clickable — this replaced an earlier back-button-only pattern. (v3.5: the Sleeper photo and name at the top left open the user menu — My leagues, League management, Enable alerts, Account settings, Log out.)
+- **Player card (v3.5):** tapping a player's photo or name anywhere opens his card (Section 8.2n).
 - **Browser back/forward buttons work** — real `history.pushState`/`popstate` integration, not just an in-app control.
 - **Week selector** in the header (available on the dashboard, league overview, and every tab) — changing it rebuilds every tracked league for that week (fresh roster-for-week + projections/ECR for that week).
 
@@ -167,7 +168,7 @@ Vertical list, one row per tracked league:
 - `●R`/`●L`/`●W`/`●T`/`●I` = Roster / Lineup / Waiver / Trade / Injury status.
 - Each indicator: 🟢 Green (OK) / 🟡 Yellow (minor variance) / 🔴 Red (major variance) / ⚪ Grey (no data available for that tab).
 - **Week and scoring format are intentionally not shown here** (they're on the League Overview screen instead) — the card shows the user's team name in that league in their place, which is more immediately identifying across many tracked leagues than a scoring format string.
-- "Edit tracked leagues" and "Log out" controls live at the top of this screen.
+- "Edit tracked leagues" and "Log out" controls live at the top of this screen. (v3.5: moved into the user menu as "League management" and "Log out"; each league shows its picture left of its name.)
 
 ---
 
@@ -411,7 +412,7 @@ Everything here uses only public Sleeper data (plus the existing Tank01 / ESPN /
 - 🟢 Green: no suggestions surfaced across any opposing team.
 - 🟡/🔴: scaled by the size of the ECR gap at the position being targeted.
 
-This is a **heuristic based on positional depth**, not a dedicated trade-value model — FantasyPros doesn't publish one through this API.
+This is a **heuristic based on positional depth**, not a dedicated trade-value model — FantasyPros doesn't publish one through this API. **v3.5:** strength is now Roster Audit values (dynasty) or rest-of-season projected points (redraft/keeper), with offers valued by Roster Audit / FantasyCalc — see Section 8.2n. ECR remains the fallback when no values or projections are available.
 
 ---
 
@@ -421,7 +422,7 @@ This is a **heuristic based on positional depth**, not a dedicated trade-value m
 
 **Methodology:** For each player in the user's starting lineup, scans every rival roster for same-position players whose FantasyPros ECR is within a **20-rank fairness tolerance** of the user's player (a proxy for "close enough a rival could plausibly accept," not a negotiated trade-value model) and who project **more points** than the player being given up. To bound FantasyPros/ESPN API call volume, only the 3 closest-ECR candidates per position per rival are resolved to full point projections. Results are ranked by projected-points gain to the user's starting lineup, capped at 10 shown.
 
-**Display:** "Give [player] · Get [player] from [rival team]" cards with the projected point gain, shown above the existing Trade Radar section on the same tab.
+**Display:** "Give [player] · Get [player] from [rival team]" cards with the projected point gain, shown above the existing Trade Radar section on the same tab. **v3.5:** the fairness check is trade value within 10% (the league's value table) instead of the ECR tolerance, and the two values are shown.
 
 ---
 
@@ -462,6 +463,30 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2n v3.5 — trade values, player card, injury rules, Game Day, header menu
+
+**Trade values.** Each league gets one value table: dynasty (`settings.type` 2) uses Roster Audit (format from the league's QB slots, PPR and TE premium), falling back to FantasyCalc dynasty; redraft and keeper (treated the same) use FantasyCalc redraft values. Tables refresh daily; when a site fails the last good copy is used for up to 7 days and the Trades page says so.
+
+**Offers.** Every incoming and outgoing offer shows "you get X, you give Y" in value and the % change. Incoming offers that lose 10% or more are a yellow variance ("Offer loses trade value"); a gain of 10% or more is shown in green (not a variance). Dynasty offers also show Roster Audit's trade-calculator result (what you get = side A). Redraft values ignore draft picks and say so; dynasty picks are valued by year, round and an early/mid/late slot guessed from the original owner's strength (weakest third = early).
+
+**Strengths and weaknesses.** Per team and position: the sum over the position's starting slots plus each flex it can fill. Dynasty: Roster Audit values. Redraft/keeper: rest-of-season points (Sleeper weekly projections from this week to the last fantasy playoff week, league scoring). Shown as ranks ("2nd of 12"), top/bottom third, at most two each. Trade Finder: give a player at a strong position for a different-position player, within 10% in value, ranked by projected lineup gain.
+
+**Trades page.** Opponent ownership excludes best ball leagues unless ticked and shows each opponent's share of his own leagues (and the average). Deadline = end of the last game of the deadline week. Team names are real roster names. A manual refresh re-reads offers and claims live.
+
+**Player card.** Tapping a player's photo or name opens a pop-up modelled on Sleeper's card. Header: name, position, team, number, bye, age (one decimal), height, weight, experience, injury, and availability in every tracked league. Tabs: SUMMARY (position and overall rank, points per game in the league's scoring, trending adds, this week, last game, 4 weeks of projection vs final, advanced stats, dynasty/trade value with trend, news), GAME LOG (this and last season: fantasy points, snap %, weekly rank, stat columns per position), TEAM (team offence ranks out of 32, depth chart with ages, rookie and injury marks), HISTORY (this league's transactions and drafts, following previous seasons; career by season with half-PPR and PPR ranks). The league on screen (or, on Game Day, the league where you cheer for him) is the context.
+
+**Advanced stats.** Season to date from nflverse (weekly stats, team stats, snap counts, PFR advanced stats, Next Gen Stats). Colouring toggle (remembered per device): Percentile = rank among qualifying players at the position (top third green, middle yellow, bottom red; QB 50+ dropbacks, RB 20+ carries or 10+ targets, WR 10+ targets, TE 8+); Fixed = the 2025 top-third / bottom-third cut-offs. Context metrics are uncoloured. Routes are estimated (offensive snaps × team dropback rate), WR/TE only, labelled "est.".
+
+**Bye weeks** appear on roster ranking and waiver cards and in the card header.
+
+**Injury opportunities.** ESPN's separate WR1/WR2/WR3 slots are kept; the next players are his own slot's backups, then players ranked below him — never a player above him. Only players projected 5+ points before the injury count (that week's projection, else the latest stored one from the previous 3 weeks, else season points per game). Pickups: up to two available same-position players and the best available of the top three at the other of WR/TE, all from his team; other teams' best available players are added only when he is on your active roster and his team can't fill it.
+
+**Game Day.** League cards two wide: "my score (my projection) – their score (their projection)". Title green when the expected final leads by at least 5% of the points both teams still have to score, red when it trails by that much, yellow otherwise; projections red when below the baseline (projected totals at the week's first kickoff); live win % on each card. Players grouped by kickoff slot, then game, then team; slots collapse; finished games sit in a "Complete" section at the top, collapsed.
+
+**Header.** Top left: Sleeper photo and name; tapping opens the menu (My leagues, League management, Enable alerts, Account settings, Log out). League pictures sit left of league names. Icons: League Management = football player outline, Game Day = goal posts. The sync status line is at the bottom of the page.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -497,7 +522,8 @@ Collected here since they cut across multiple sections:
 - **ESPN's schedule and projections endpoints are unofficial/undocumented** — could change without notice. A real bug was found and partially fixed here: the season-year query parameter was wrong, and even after correcting it, live testing suggested a caching layer may still return a different week than requested. Mitigated with a cache-busting parameter and explicit logged validation, but not fully re-verified — check server logs for a week-mismatch warning if kickoff times still look wrong. Both degrade gracefully (missing kickoff time / no projection, with a warning) rather than breaking the build.
 - **The ffb_ids crosswalk's exact column headers were never directly verified** (a research-tool limitation, not a real access restriction) — columns are discovered dynamically at runtime and logged on first load. The presence of a `fantasyprosId` column specifically was confirmed by direct inspection.
 - **FAAB suggestions are scoped to tracked leagues only**, not platform-wide, and are statistically a directional guide (percentile of recent winning bids) rather than a true per-player confidence interval, given realistic sample sizes.
-- **Trade Radar uses average ECR, not literal rest-of-season point totals**, as its "team strength" signal — a reasonable proxy, but a real distinction if exact ROS point projections are wanted later (would need a separate, currently-unbuilt fetch).
+- **Trade values (v3.5) come from Roster Audit and FantasyCalc, neither reachable from the build sandbox** — responses are parsed defensively, and if neither answers the Trades page falls back to rest-of-season projections or ECR and says so. Roster Audit's calculator is limited to about 35 calls an hour. Rest-of-season points are Sleeper's weekly projections summed; weeks Sleeper hasn't projected yet are missing from the sum (shown as weeks loaded).
+- **Player card data (v3.5):** nflverse publishes weekly stats a day or two after games, so the card's season stats can lag; routes run are estimated (no in-season participation data); ESPN's news feed is unofficial. The fixed colour cut-offs are last season's distribution, not a scouting standard.
 - **FantasyPros' free/personal API tier is rate-limited** (~50 requests/day) — mitigated by the SQLite-backed cache, but a real constraint if tracking many leagues with frequent manual refreshes.
 - **Sleeper-connection session state is in-memory per server process**; a restart forgets active Sleeper sessions (the client's auto-reconnect, now driven by server-side last-session data, papers over this from the user's side). The SQLite-backed pieces (cache, injury history, last-session record, and now login sessions) do survive restarts.
 - **The internal client port changed from 80 to 5000** in this version, to match the externally-published port — a minor operational detail (nginx now listens on 5000 inside the container), not a behavior change, but relevant if you have an existing Caddyfile or firewall rule referencing `client:80` directly.
@@ -583,3 +609,13 @@ Collected here since they cut across multiple sections:
 63. **Upset picks (v3.4):** app picks = favourites except 1–4 underdog picks by upset potential (always the top one, others at ≥ threshold 45); started games keep stored picks; replaces weekly leverage.
 64. **Pick'em performance (v3.4):** you vs app vs Vegas vs results; earlier weeks reconstructed from ESPN odds where no data was stored (marked); your earlier picks loadable by hand.
 65. **Locked players (v3.4):** locked = game kicked off and week not over; no variances, notes or suggested moves that need a move to fix; reopens after the last game.
+66. **Trade values (v3.5):** dynasty = Roster Audit (FantasyCalc fallback); redraft and keeper are one type and use FantasyCalc redraft values; no Roster Audit credit shown (personal app).
+67. **Offer verdict (v3.5):** an incoming offer losing 10%+ of value is a yellow variance; winning by 10%+ is a green note, not a variance.
+68. **Team strength (v3.5):** dynasty by Roster Audit values, redraft/keeper by rest-of-season projections (sum of Sleeper weekly projections); trade fairness within 10%.
+69. **Opponent ownership (v3.5):** best ball excluded unless switched on; shown as a share of each opponent's leagues.
+70. **Trade deadline (v3.5):** the end of the last game of the deadline week; no explanation text.
+71. **Player card (v3.5):** Sleeper-style pop-up from any player; advanced stats with a Percentile/Fixed colouring toggle; estimated routes allowed for WR/TE, labelled "est.".
+72. **Injury opportunities (v3.5):** only players projected 5+ before the injury (last projection before the status change, league scoring; fallback season PPG); never promote a player ranked above the injured one; pickups 2 same-position + 1 WR/TE from the same team, other teams only for your own active player when the team can't fill it.
+73. **Game Day (v3.5):** colour threshold = 5% of both teams' remaining projected points; baseline = projected totals at the week's first kickoff; live win % on each card.
+74. **Header (v3.5):** user menu under the Sleeper photo/name holds League management (the old Edit tracked leagues), alerts, account settings and log out.
+75. **Images (v3.5):** amd64 only (the server is a Linux Intel PC).
