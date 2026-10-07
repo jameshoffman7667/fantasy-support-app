@@ -474,6 +474,15 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.1 additions
+- **Claim pushes:** a claim Sleeper accepts is now found when read back (it checks this week and next). If the app still can't see it, the result says "Sent, not verified" — check Sleeper and tap **I can see it in Sleeper**; from then on Push sends every ticked claim at once.
+- **Claims page:** "Drops" (least-rostered first until you drag them; rostered %, projection, injury, next matchup), tick boxes with **Select all**, **Clear all** for claims and drops (tap twice), player cards on every name.
+- **Available page:** a search box for any free agent, **Available elsewhere** (bid in your other leagues from one pop-up), and warnings for an empty IR spot or an ineligible roster.
+- "Beats a starter / bench player" skips locked games and players who are Out, Doubtful, IR (anything but Questionable) or Questionable with no projection.
+- Yellow **Clear variances** button on each page; league tabs look like the dashboard boxes; tapping an open bench spot opens Waivers.
+- Waiver research runs by itself Tuesday and Wednesday around 8 am and 4 pm.
+- **Optional auto-deploy:** add GitHub secrets `DOCKHAND_WEBHOOK_URL` (and `DOCKHAND_WEBHOOK_SECRET`) and every push to main redeploys your Dockhand stack once both images are built. No compose or environment changes in this release.
+
 ### v4.0 additions
 - **Android app (APK).** `android/` is a ready-made Android project (a Trusted Web Activity: the app opens this site full screen in Chrome's engine, with its own icon, splash screen and notifications). The new GitHub workflow **Build Android app** turns it into a signed APK on the "Android app" release. Follow [`ANDROID_APK.md`](./ANDROID_APK.md): make a signing key once, add two GitHub secrets, run the workflow, set `ANDROID_APP_SHA256` in Portainer, install the APK.
 - The server answers `/.well-known/assetlinks.json` from `ANDROID_APP_SHA256` / `ANDROID_APP_PACKAGE`, the check Android uses to open the app without an address bar; nginx forwards that one path to it. `/api/health` shows `androidAppLinks`.
@@ -1035,6 +1044,7 @@ server/
   bestBall.js             Best ball leaderboards: Max PF, combined leagues, hero multipliers, exact best lineups, CSV evidence (v3.8)
   waiverCategories.js     Available page categories (Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff) and research/injury notes (v3.9)
   androidApp.js           /.well-known/assetlinks.json for the Android app, from ANDROID_APP_SHA256 / ANDROID_APP_PACKAGE (v4.0)
+  playerSearch.js         Available-page search: any free agent in a league (v4.1)
   rosProjections.js       Rest-of-season points from Sleeper weekly projections (v3.5)
   tradeTools.js           Position strength, strengths/weaknesses, pick slots, value fairness (v3.5)
   nflverseStats.js        nflverse CSV downloads (weekly, season, team, snaps, PFR, NGS, players), disk-cached (v3.5)

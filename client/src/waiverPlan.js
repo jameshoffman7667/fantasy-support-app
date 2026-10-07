@@ -194,3 +194,41 @@ export function describeClaim(c) {
 export function resetClaims(plan) {
   return { ...plan, edits: {}, removed: [], custom: [], order: [] };
 }
+
+/* ---------------- v4.1: Drops list, selection, clear all ---------------- */
+/**
+ * The Drops list's DEFAULT order: least-rostered first (rostered % from ESPN), players without a rostered % last,
+ * ties by lowest projection. Once the user drags the list (`arranged`), his order is kept as it is.
+ */
+export function orderDrops(drops = [], bench = [], arranged = false) {
+  if (arranged) return drops;
+  const byId = new Map(bench.filter(Boolean).map((p) => [String(p.id), p]));
+  const r = (d) => byId.get(String(d.id))?.rostered;
+  const pr = (d) => byId.get(String(d.id))?.proj;
+  return drops
+    .map((d, i) => ({ d, i }))
+    .sort((a, b) => {
+      const ra = r(a.d), rb = r(b.d);
+      if ((ra == null) !== (rb == null)) return ra == null ? 1 : -1;
+      if (ra != null && ra !== rb) return ra - rb;
+      const pa = pr(a.d) ?? 0, pb = pr(b.d) ?? 0;
+      return pa - pb || a.i - b.i;
+    })
+    .map((x) => x.d);
+}
+
+/** Claims ticked for pushing (every claim is ticked unless the user unticked it). */
+export function selectedClaims(claims, unselected = []) {
+  const off = new Set(unselected);
+  return claims.filter((c) => !off.has(c.key));
+}
+
+/** Clear all on the proposed claims: every bid, edit, custom claim and saved order goes (the Drops list stays). */
+export function clearClaims(plan) {
+  return { ...plan, bids: [], edits: {}, removed: [], custom: [], order: [], unselected: [] };
+}
+
+/** Clear all on the Drops list: nobody is marked willing to drop (the order stays). */
+export function clearDrops(drops = []) {
+  return drops.map((d) => ({ ...d, willing: false }));
+}

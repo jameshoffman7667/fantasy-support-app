@@ -359,7 +359,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       ecrRec = ecrTeamIndex.get(schedule.normalizeTeam(meta.team)) || null;
     }
     const { kickoff, kickoffLabel, onBye } = kickoffFor(meta?.team);
-    let { proj, projSource, projFactor, projStats, props } = await resolveProjection(id);
+    let { proj, projSource, projFactor, projStats, props, rostered } = await resolveProjection(id);
     // v2.8: this week's matchup and forecast, for the player card.
     const nt = meta?.team ? schedule.normalizeTeam(meta.team) : null;
     const g = nt && weekSchedule ? weekSchedule.byTeam[nt] : null;
@@ -415,6 +415,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       started: kickoff != null && kickoff <= Date.now(),
       ecr: ecrRec ? Number(ecrRec.rank_ecr ?? ecrRec.rank ?? null) : null,
       irEligible: irStatusOk(meta?.injury_status),
+      rostered: rostered ?? null, // v4.1: ESPN rostered % (Claims → Drops)
       // v3.1: today's game state for this player's team ("pre" | "in" | "post" | null) and whether
       // the game is today (US Eastern), used by the "non-eligible player in an IR slot" rule.
       gameState: g?.state ?? null,
@@ -1077,6 +1078,13 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     weekOver,
     irAllowed: [...irAllowed],
     waiverLock: { active: !weekOver, hidden: lockedHidden.size, lockedIds: [...lockedHidden] },
+    // v4.1: what the Available-page search and "Available elsewhere" need to tell who can be claimed here:
+    // everyone rostered in this league, the positions this league uses, and the teams whose game has locked.
+    faSearch: {
+      rosteredIds: [...allRosteredIds].map(String),
+      positions: WAIVER_POSITIONS.filter(posWanted),
+      lockedTeams: weekSchedule?.byTeam ? Object.keys(weekSchedule.byTeam).filter((t) => waiverLocked(t)) : [],
+    },
     tradeSuggestions,
     leagueTeams,
     tradeFinder: tradeFinder.slice(0, 10),

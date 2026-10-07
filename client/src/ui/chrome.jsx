@@ -2,7 +2,7 @@ import * as api from "../api.js";
 import { ArrowLeftRight, Bell, BellOff, CheckCircle2, ChevronRight, ClipboardList, ListChecks, Loader2, LogOut, RefreshCw, Settings2, Stethoscope, TrendingUp, Trophy, UserCog, Users } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Avatar, FootballPlayerIcon, UprightsIcon } from "./common.jsx";
-import { C } from "./theme.js";
+import { C, STATUS } from "./theme.js";
 
 function WeekPicker({ week, onChange, disabled }) {
   if (week == null) return null;
@@ -153,17 +153,31 @@ export const TAB_META = {
 };
 
 // v3.9: the team pages as tabs under the League Management header (Overview, Roster, Waivers, …).
+// v4.1: the tabs look like the status boxes on the dashboard's league card (StatusBadge: same colour, tint and icon
+// per page status). Pages without a status (Overview, Outlook) are neutral boxes. The open page has a solid outline.
 export function LeagueTabs({ active, onSelect, statusOf }) {
   const tabs = [{ key: "overview", short: "Overview" }, ...Object.entries(TAB_META).map(([key, m]) => ({ key, short: m.short }))];
-  const dotColor = { major: C.major, minor: C.minor };
   return (
-    <div className="flex overflow-x-auto px-2" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }} data-league-tabs>
+    <div className="flex overflow-x-auto gap-1.5 px-3 py-2" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }} data-league-tabs>
       {tabs.map((t) => {
         const st = statusOf?.(t.key);
+        const s = st && STATUS[st] ? STATUS[st] : null;
+        const Icon = s?.Icon;
+        const on = active === t.key;
+        const color = s ? s.color : C.textMuted;
         return (
-          <button key={t.key} type="button" onClick={() => onSelect(t.key)} aria-current={active === t.key ? "page" : undefined} data-league-tab={t.key} style={{ color: active === t.key ? C.text : C.textMuted, borderBottom: `2px solid ${active === t.key ? C.brand : "transparent"}` }} className="relative shrink-0 px-3 py-2 text-xs font-medium whitespace-nowrap">
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onSelect(t.key)}
+            aria-current={on ? "page" : undefined}
+            data-league-tab={t.key}
+            data-tab-status={st || "none"}
+            style={{ background: s ? s.bg : C.surface, color, border: `1px solid ${on ? color : `${s ? s.color : C.border}33`}`, boxShadow: on ? `inset 0 0 0 1px ${color}` : "none" }}
+            className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium whitespace-nowrap"
+          >
+            {Icon && <Icon size={11} strokeWidth={2.3} />}
             {t.short}
-            {dotColor[st] && <span className="absolute top-1.5 right-0.5 inline-block w-1.5 h-1.5 rounded-full" style={{ background: dotColor[st] }} aria-label={st === "major" ? "Needs action" : "Worth a look"} />}
           </button>
         );
       })}

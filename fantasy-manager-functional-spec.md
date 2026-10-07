@@ -540,11 +540,27 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 **Notes on every card.** If the research mentions a player, his card (in any list) shows the source count and names, spot / rest of season / stash, and the sources' argument in one sentence. If he fills in for an injured starter, the card says for whom. FAAB suggested bids (70% / 95% of winning bids) load automatically and sit on each card; there is no separate FAAB section.
 
-**Research.** One grounded Gemini search (`GEMINI_API_KEY`) over the last 7 days of redraft and dynasty waiver articles, Reddit posts in r/fantasyfootball and r/DynastyFF, and analysts' X posts — posts only, not comments or replies. Cached 12 hours per week, started in the background by a league build (never awaited) or on demand with "Research again".
+**Research.** One grounded Gemini search (`GEMINI_API_KEY`) over the last 7 days of redraft and dynasty waiver articles, Reddit posts in r/fantasyfootball and r/DynastyFF, and analysts' X posts — posts only, not comments or replies. Cached 12 hours per week (v4.1: a week, on a schedule — see 8.2s), started in the background by a league build (never awaited) or on demand with "Research again".
 
 **Navigation.** The league name and page name in the header are drop-downs (other leagues keep the current page; "League overview"; every page of the league). A tab strip under the League Management header lists Overview, Roster, Waivers, Trades, Injury, League, Outlook, with a dot where a page has open variances.
 
 **Week.** The app moves to the next week on Tuesday at 10:00 (Toronto) instead of waiting for Sleeper, then follows Sleeper again once it moves on; claims and trades are filed under Sleeper's own week.
+
+### 8.2s v4.1 — Claims push, Drops, free-agent search, roster warnings
+
+**Claims push.** Pending claims are read under Sleeper's week, the next week and the app's week (a claim made after Tuesday's week change is filed under the coming week); if the roster-filtered read is empty the league-wide list is filtered to the user's roster. A claim Sleeper returns with a transaction id is "sent"; it is "confirmed" once read back. The first push sends one claim; once a claim is confirmed — by the read-back or by the user tapping "I can see it in Sleeper" — every ticked claim is sent.
+
+**Claims page.** Drops: rostered % (ESPN), projection, injury designation, next matchup with difficulty; least-rostered first by default; the user's dragged order is kept. Proposed claims: tick boxes, Select all, Clear all (also on Drops; two taps). Every player name opens his card.
+
+**Available page.** A search box above the position filters finds any free agent in the league and adds a claim on him. "Available elsewhere" opens the other leagues where he can be claimed, with FAAB left / budget and a bid box (or Add claim) that adds him to that league's Claims page. Warnings: an IR-eligible player not on IR while an IR slot is empty; an ineligible roster (too many players, or a non-IR-eligible player in IR) — claims may fail.
+
+**Beats a starter / bench player.** Next game only: locked players on either side are skipped. A free agent with a designation other than Questionable, or Questionable and projected 0, never counts — for the card note and both variances.
+
+**Pages.** Yellow "Clear variances" left of "Variance report — this page". League tabs look like the dashboard's status boxes. The page name in the header is plain text; the league name keeps its drop-down. An open bench spot links to Waivers.
+
+**Research schedule.** Tuesday and Wednesday ~8:00 and ~16:00 Toronto for the coming week; kept for the week; previously found outlets are named in the next search.
+
+**Deploy.** Optional Dockhand webhook after both images are pushed.
 
 ---
 
@@ -709,3 +725,13 @@ Collected here since they cut across multiple sections:
 99. **Week change (v3.9):** Tuesday 10:00 Toronto time.
 100. **Android app (v4.0):** a dedicated APK as a Trusted Web Activity of the live site (not a WebView or native rewrite), built and signed by GitHub Actions with the owner's own key, side-loaded from a GitHub release; web updates never need a new APK.
 101. **Asset links (v4.0):** served by the server from environment variables (set in Portainer), not a committed static file.
+102. **Claim pushes (v4.1):** read back under both possible weeks; a claim Sleeper accepted is "sent" even unconfirmed; the user can confirm he sees it in Sleeper to unlock batch pushes.
+103. **Drops (v4.1):** least-rostered first by default, the user's own order kept once he rearranges; rostered %, projection, designation and next matchup shown.
+104. **Claim selection (v4.1):** tick boxes with Select all; Clear all on claims and on drops.
+105. **Free-agent search and Available elsewhere (v4.1):** any free agent can be searched and claimed; a player available in other leagues opens a pop-up with each league's FAAB and a bid box that adds him to that league's claims.
+106. **Designation rule (v4.1):** a free agent other than Questionable, or Questionable projected 0, never beats a starter or bench player (note and variances).
+107. **Next game only (v4.1):** locked games on either side are not compared.
+108. **Roster warnings (v4.1):** IR-eligible player not on IR with an empty IR slot; ineligible roster means claims may fail.
+109. **Page chrome (v4.1):** yellow Clear variances button; league tabs styled as status boxes; plain last crumb; open bench spot links to Waivers.
+110. **Research schedule (v4.1):** Tuesday and Wednesday ~8:00 and ~16:00 Toronto, remembering previous sources.
+111. **Auto-deploy (v4.1):** Dockhand Git stack webhook after both images push, URL and secret from GitHub secrets.

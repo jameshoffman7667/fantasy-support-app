@@ -93,45 +93,95 @@ export function computeLineup(league) {
 //  - yellow: a free agent projected higher than a bench player at his position.
 // Trending is shown on the card but no longer flags anything.
 // v3.9: the starter / bench comparison on its own, so every Available-page card (any category) gets it.
+// v4.1: compared against the NEXT game only — a starter or bench player whose game has locked isn't a comparison,
+// and neither is a free agent whose own game has started. A free agent with any designation other than Questionable
+// (Out, Doubtful, IR, PUP, Suspended, …), or Questionable and projected 0, never "beats" anyone — for the starter rule
+// and the bench rule alike (the waiver card note and the variance are the same thing).
+const PLAYABLE_STATUS = new Set([null, undefined, "", "Healthy", "Questionable"]);
+export function faCanCount(fa, league) {
+  if (!fa) return false;
+  if (!PLAYABLE_STATUS.has(fa.status)) return false;
+  if (fa.status === "Questionable" && !(Number(fa.proj) > 0)) return false;
+  if (isLocked(fa, league)) return false;
+  return true;
+}
 export function compareToRoster(league, fa) {
   const eligible = (slot, pos) => (FLEX_ELIGIBLE[slot] ? FLEX_ELIGIBLE[slot].includes(pos) : slot === pos);
   const projOf = (p) => (p && p.proj != null ? p.proj : 0);
-  {
-    let rule = null;
-    let note = null;
-    let severity = "ok";
-    if (fa.proj != null) {
-      // v3.4: a locked starter can't be replaced this week, so he's not a comparison
-      const slots = (league.starters || []).filter((s) => eligible(s.slot, fa.pos) && !isLocked(s.player, league));
-      const weakest = slots.length ? slots.reduce((m, s) => (projOf(s.player) < projOf(m.player) ? s : m)) : null;
-      if (weakest && fa.proj > projOf(weakest.player)) {
-        rule = "Free agent outprojects a starter";
-        severity = "major";
-        note = `projected ${fa.proj.toFixed(1)} vs ${weakest.player ? weakest.player.name : "(empty)"} ${projOf(weakest.player).toFixed(1)} at ${weakest.slot}`;
-      } else {
-        const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos && !isLocked(p, league)); // v3.4: nor can a locked bench player be dropped
-        const weakBench = bench.length ? bench.reduce((m, p) => (projOf(p) < projOf(m) ? p : m)) : null;
-        if (weakBench && fa.proj > projOf(weakBench)) {
-          rule = "Free agent outprojects a bench player";
-          severity = "minor";
-          note = `projected ${fa.proj.toFixed(1)} vs bench ${weakBench.name} ${projOf(weakBench).toFixed(1)}`;
-        }
+  let rule = null;
+  let note = null;
+  let severity = "ok";
+  if (fa.proj != null && faCanCount(fa, league)) {
+    // v3.4: a locked starter can't be replaced this week, so he's not a comparison
+    const slots = (league.starters || []).filter((s) => eligible(s.slot, fa.pos) && !isLocked(s.player, league));
+    const weakest = slots.length ? slots.reduce((m, s) => (projOf(s.player) < projOf(m.player) ? s : m)) : null;
+    if (weakest && fa.proj > projOf(weakest.player)) {
+      rule = "Free agent outprojects a starter";
+      severity = "major";
+      note = `projected ${fa.proj.toFixed(1)} vs ${weakest.player ? weakest.player.name : "(empty)"} ${projOf(weakest.player).toFixed(1)} at ${weakest.slot}`;
+    } else {
+      const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos && !isLocked(p, league)); // v3.4: nor can a locked bench player be dropped
+      const weakBench = bench.length ? bench.reduce((m, p) => (projOf(p) < projOf(m) ? p : m)) : null;
+      if (weakBench && fa.proj > projOf(weakBench)) {
+        rule = "Free agent outprojects a bench player";
+        severity = "minor";
+        note = `projected ${fa.proj.toFixed(1)} vs bench ${weakBench.name} ${projOf(weakBench).toFixed(1)}`;
       }
     }
-    return { rule, note, severity };
   }
+  return { rule, note, severity };
+}
+
+/**
+ * v4.1: the other tracked leagues where this player can be claimed right now — not rostered there, his position is
+ * used there, and his game hasn't locked there. Uses each league's `faSearch` (built by the server); an older build
+ * without it falls back to that league's free-agent lists. Each entry carries the FAAB budget and what's left.
+ */
+export function availableElsewhere(fa, league, allLeagues = []) {
+  if (!fa?.id) return [];
+  const id = String(fa.id);
+  return allLeagues
+    .filter((l) => l && l.id !== league?.id && !l.error)
+    .filter((l) => {
+      const fs = l.faSearch;
+      if (fs?.rosteredIds) {
+        if (fs.rosteredIds.includes(id)) return false;
+        if (fs.positions && !fs.positions.includes(fa.pos)) return false;
+        if (fa.team && (fs.lockedTeams || []).includes(fa.team)) return false;
+        return true;
+      }
+      return (l.freeAgents || []).some((x) => String(x.id) === id) || Boolean(l.waiverCategories?.cards?.[id]);
+    })
+    .map((l) => ({ id: l.id, name: l.name || l.id, faab: Boolean(l.waiverInfo?.faab), budget: l.waiverInfo?.budget || 0, remaining: l.waiverInfo?.remaining ?? Math.max(0, (l.waiverInfo?.budget || 0) - (l.waiverInfo?.used || 0)) }));
 }
 
 export function computeWaiver(league, allLeagues) {
   const rows = (league.freeAgents || []).map((fa) => {
     const { rule, note, severity } = compareToRoster(league, fa);
-    const crossLeagues = allLeagues
-      .filter((l) => l.id !== league.id && !l.error)
-      .filter((l) => (l.freeAgents || []).some((x) => x.id === fa.id || x.name === fa.name))
-      .map((l) => l.name);
-    return { ...fa, rule, note, severity, crossLeagues };
+    const elsewhere = availableElsewhere(fa, league, allLeagues);
+    return { ...fa, rule, note, severity, elsewhere, crossLeagues: elsewhere.map((l) => l.name) };
   });
   return { rows, status: worst(rows.map((r) => r.severity)) };
+}
+
+/**
+ * v4.1: roster warnings for the Waivers screen.
+ *  irMoves    players (starters or bench, not locked) who are IR-eligible here while an IR slot is empty
+ *  over       { players, spots } when starters + bench hold more players than the starting + bench slots
+ *  badIr      players sitting in an IR slot who aren't IR-eligible in this league any more
+ *  ineligible true when either of the last two — claims may fail until it's fixed
+ */
+export function waiverRosterWarnings(league) {
+  const starters = (league.starters || []).map((s) => s.player).filter(Boolean);
+  const bench = (league.bench || []).filter(Boolean);
+  const ir = (league.ir || []).filter(Boolean);
+  const openIr = Number.isFinite(league.irSlots) ? Math.max(0, league.irSlots - ir.length) : 0;
+  const irMoves = openIr > 0 ? [...starters, ...bench].filter((p) => p.irEligible && !isLocked(p, league)) : [];
+  const spots = (league.starters || []).length + (Number.isFinite(league.benchSlots) ? league.benchSlots : bench.length);
+  const players = starters.length + bench.length;
+  const over = players > spots ? { players, spots } : null;
+  const badIr = ir.filter((p) => !p.irEligible);
+  return { irMoves, openIr, over, badIr, ineligible: Boolean(over || badIr.length) };
 }
 
 // v2.9: a big-gap opportunity is yellow and clears itself once the page has

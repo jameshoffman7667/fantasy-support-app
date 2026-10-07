@@ -121,7 +121,10 @@ async function fetchLeague(username, lg, ctx, prev = null, { force = false } = {
     const m = players[pid];
     return m ? { name: `${m.first_name || ""} ${m.last_name || ""}`.trim() || pid, pos: m.position || "?", team: m.team || null } : {};
   };
-  const leg = lg.week;
+  // v4.1: Sleeper's own week for trades (the app's week moves on Tuesday 10:00, Sleeper's later); claims are read
+  // under Sleeper's week AND the next one, since a claim made after the change is filed under the coming week.
+  const leg = Number(ctx.sleeperWeek ?? lg.week);
+  const claimLegs = priv.claimLegs(leg, leg + 1, lg.week);
   const classify = (rows) => ({ ...classifyTrades(rows, { myRosterId: lg.myRosterId, myUserId: lg.ownerId, seasonType: ctx.seasonType, teamKickoff: ctx.teamKickoff, playerInfo, rosterLabel: (r) => roster[r] || (r != null ? `Team ${r}` : null) }), legChecked: leg });
   const dirty = store.getState(dirtyKey(username, lg.id), 0) || 0; // a push of yours makes the snapshot out of date
   // v3.5: a manual refresh (force) always re-reads trade offers and pending claims.
@@ -141,8 +144,8 @@ async function fetchLeague(username, lg, ctx, prev = null, { force = false } = {
         (rows) => { info.rawTrades = rows; info.trades = classify(rows); },
         (e) => { info.txAt = 0; info.trades = { incoming: [], outgoing: [], error: e.message }; }
       ),
-      priv.getPendingClaims(username, lg.id, leg, lg.myRosterId).then(
-        (r) => (info.claims = { pending: r.claims.map((c) => ({ id: String(c.transaction_id), adds: Object.keys(c.adds || {}), drops: Object.keys(c.drops || {}), bid: c.settings?.waiver_bid ?? null, status: c.status })), statuses: r.statuses }),
+      priv.getPendingClaims(username, lg.id, claimLegs, lg.myRosterId).then(
+        (r) => (info.claims = { pending: r.claims.map((c) => ({ id: String(c.transaction_id), adds: Object.keys(c.adds || {}), drops: Object.keys(c.drops || {}), bid: c.settings?.waiver_bid ?? null, status: c.status, leg: c.leg ?? null })), statuses: r.statuses, legs: r.legs }),
         (e) => { info.txAt = 0; info.claims = { pending: [], statuses: [], error: e.message }; }
       )
     );
@@ -206,7 +209,7 @@ export async function attach(username, leagues, { live = false, force = false } 
     const [state, players] = await Promise.all([sleeper.getState().catch(() => null), sleeper.getPlayers().catch(() => ({}))]);
     const week = state?.week;
     const sched = state && week ? await schedule.getWeekSchedule(Number(state.season), Number(week), { live: false }).catch(() => null) : null;
-    ctx = { seasonType: state?.season_type || "regular", players, teamKickoff: (team) => sched?.byTeam?.[team]?.kickoffMillis ?? null };
+    ctx = { seasonType: state?.season_type || "regular", sleeperWeek: state?.sleeperWeek ?? state?.week ?? null, players, teamKickoff: (team) => sched?.byTeam?.[team]?.kickoffMillis ?? null };
   }
   return Promise.all(
     leagues.map(async (l) => {

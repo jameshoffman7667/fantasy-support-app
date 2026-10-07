@@ -246,8 +246,12 @@ export function pushReserve(leagueId, reserve) {
 export function pushClaim(leagueId, claim, marks = {}) {
   return jsonPost(`/api/private/claim`, { leagueId, addId: claim.addId, dropId: claim.dropId || null, bid: claim.bid, confirm: true, keys: marks.keys });
 }
-export function cancelClaim(leagueId, transactionId) {
-  return jsonPost(`/api/private/claim/cancel`, { leagueId, transactionId, confirm: true });
+export function cancelClaim(leagueId, transactionId, leg = null) {
+  return jsonPost(`/api/private/claim/cancel`, { leagueId, transactionId, leg, confirm: true });
+}
+// v4.1: "I can see it in Sleeper" — unlocks pushing every claim at once.
+export function confirmClaimsWork() {
+  return jsonPost(`/api/private/claim/confirm`, {});
 }
 
 // v3.2: own picks + CBS pick'em push.
@@ -341,4 +345,9 @@ export const bestBallCsvUrl = (leagueId) => `/api/bestball/evidence.csv?leagueId
 // v3.9: run (or re-run) the Gemini waiver research behind the Available page's Hype Train.
 export function runWaiverResearch({ force = false, week = null } = {}) {
   return jsonPost(`/api/waivers/research`, { force, week });
+}
+
+// v4.1: Available page search — any free agent in this league.
+export function searchFreeAgents(leagueId, q) {
+  return request(`/api/waivers/search?leagueId=${encodeURIComponent(leagueId)}&q=${encodeURIComponent(q)}`);
 }

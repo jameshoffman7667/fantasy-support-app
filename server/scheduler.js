@@ -13,6 +13,7 @@ import * as performance from "./performance.js";
 import * as gameday from "./gameday.js"; // v3.5: Game Day baselines before the week's first kickoff
 import * as faabDb from "./faabDb.js"; // v3.7: opponent bid collection 2 h before each league's waivers
 import * as commish from "./commish.js"; // v3.8: charters re-read each July
+import * as gemini from "./gemini.js"; // v4.1: scheduled waiver research
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -205,6 +206,40 @@ async function preKickoffCheck() {
   }
 }
 
+/**
+ * v4.1: the waiver research (Hype Train) runs on Tuesday and Wednesday at about 8:00 and 16:00 Toronto — four runs a
+ * week, each once (checked every 10 minutes during those hours). It researches the COMING week: on Tuesday morning,
+ * before the app moves on at 10:00, that is the week after the one whose games just finished.
+ */
+export const HYPE_DAYS = ["Tue", "Wed"];
+export const HYPE_HOURS = [8, 16];
+export function hypeSlot(t) {
+  return HYPE_DAYS.includes(t.weekday) && HYPE_HOURS.includes(t.hour) ? `${t.date}:${t.hour}` : null;
+}
+export async function hypeTargetWeek(state, getWeekSchedule = schedule.getWeekSchedule, now = Date.now()) {
+  const week = Number(state?.week) || 1;
+  if (state?.season_type && state.season_type !== "regular") return null;
+  if (state?.weekAdvanced) return week;
+  const sched = await getWeekSchedule(Number(state.season), week).catch(() => null);
+  const games = sched?.games || [];
+  const over = games.length > 0 && games.every((g) => g.state === "post" || (g.kickoffMillis != null && g.kickoffMillis + 4.5 * 3600e3 < now));
+  return over ? Math.min(18, week + 1) : week;
+}
+async function hypeTick() {
+  if (!gemini.isConfigured()) return;
+  const slot = hypeSlot(sleeper.torontoNow());
+  if (!slot) return;
+  const k = `hype-run:${slot}`;
+  if (cacheGet(k) !== null) return;
+  if (!getAllUserStates().some((st) => getUser(st.username)?.active && st.leagueIds?.length)) return;
+  cacheSet(k, true, 2 * 24 * 60 * 60 * 1000);
+  const state = await sleeper.getState();
+  const week = await hypeTargetWeek(state);
+  if (!week) return;
+  const out = await gemini.waiverHype(Number(state.season), week, { force: true });
+  console.log(`[scheduler] Waiver research (${slot}) for week ${week}: ${out?.players?.length ?? 0} players.`);
+}
+
 export function startScheduler() {
   // Run once shortly after boot (so a fresh deploy warms up quickly
   // rather than waiting a full hour), then on the regular interval.
@@ -241,6 +276,8 @@ export function startScheduler() {
     const users = getAllUserStates().filter((st) => getUser(st.username)?.active && st.leagueIds?.length && !isInactive(getUser(st.username), st)).map((st) => st.username);
     faabDb.tick({ users }).catch((err) => console.warn(`[scheduler] FAAB collection check failed: ${err.message}`));
   }, 10 * 60 * 1000);
+  // v4.1: scheduled waiver research, Tue + Wed ~8:00 and ~16:00 Toronto.
+  setInterval(() => hypeTick().catch((err) => console.warn(`[scheduler] Waiver research failed: ${err.message}`)), 10 * 60 * 1000);
   // v3.8: each July, linked charters are downloaded again and re-read by Gemini only if they changed (one Gemini read a day).
   setInterval(() => {
     const users = getAllUserStates().filter((st) => getUser(st.username)?.active).map((st) => st.username);

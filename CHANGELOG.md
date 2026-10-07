@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -33,6 +33,35 @@ instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
 
 ---
+
+## v4.1 — Claims push fix, Drops, free-agent search, roster warnings
+
+**Commit (short):** `v4.1: feat: claims push fix, drops, FA search`
+
+**Commit (extended):**
+v4.1 fixes waiver claim pushes and reworks the Claims and Available pages.
+
+Claims sent to Sleeper are now read back under Sleeper's week and the next one, so a claim made after the Tuesday week change is found. A claim Sleeper accepted but the app can't see shows as "sent, not verified", with an "I can see it in Sleeper" button that unlocks pushing every claim at once.
+
+Claims page: tick boxes with Select all, Clear all for claims and drops, a "Drops" list sorted least-rostered first (ESPN rostered %, projection, injury, next matchup) that keeps your own order once dragged, and player cards on every name.
+
+Available page: search any free agent, "Available elsewhere" pop-up to bid in your other leagues, IR and ineligible-roster warnings. "Beats a starter/bench player" ignores locked games and free agents who are Out, Doubtful, IR or Questionable with no projection.
+
+Also: yellow Clear variances button, league tabs styled like the dashboard boxes, plain page crumb, open bench spots link to Waivers, scheduled waiver research (Tue/Wed 8:00 and 16:00) that remembers its sources, and an optional Dockhand auto-deploy job.
+
+**Details**
+- Manual step: none required — no docker-compose or environment-variable changes. Optional: the auto-deploy job needs GitHub secrets `DOCKHAND_WEBHOOK_URL` (and `DOCKHAND_WEBHOOK_SECRET`); without them it does nothing.
+- Claim push fix (`server/sleeperPrivate.js`, `server/privateData.js`, `server/server.js`): James's push came back "Sleeper returned a claim (status "pending") but it did not appear when read back (statuses seen: none)". The read-back used one leg (Sleeper's week) while the claim, made Tuesday night after the app's 10:00 week change, was most likely filed under the coming week (not confirmed). Pending claims are now read for Sleeper's week, the next week and the app's week, merged by transaction id; if the roster filter returns nothing, the league-wide list is read and filtered to his roster; any status other than complete / failed / cancelled counts as queued. A claim Sleeper hands back with a transaction id is `ok` (sent) even when the read-back misses it, with the weeks checked and statuses seen in the message. Trade offers are read under Sleeper's own week too (the snapshot used the app's week). Cancel uses the claim's own leg.
+- "Proven" (`claims_proven:{user}`): set by a verified read-back or by "I can see it in Sleeper" (`POST /api/private/claim/confirm`); `/api/private/status` returns `claimsProven`. Until then the push sends one claim; afterwards every ticked claim. Push results: green confirmed, yellow "Sent, not verified", red failed.
+- Claims page: the willing-to-drop list is now **Drops** — rostered % (ESPN `ownership.percentOwned`, new `rostered` field on roster players via the projection hub; shows "n/a" when missing), projection, injury designation and the next matchup with its difficulty colours; default order least-rostered first (ties: lower projection; unknown last); dragging saves `dropsArranged` and the order is kept ("Sort by rostered %" goes back). Proposed claims have tick boxes (`unselected` in the plan); Select all / Deselect all; only ticked claims are pushed and listed on the checklist. Clear all (tap twice) on proposed claims empties bids, edits, custom claims and order; on Drops it unticks every player. Every name on the page opens the player card, including "Dropping …" under each claim and the "Already queued in Sleeper" list (names instead of ids).
+- Available page: a search box above the position filters (`GET /api/waivers/search`, `server/playerSearch.js`) finds any free agent in the league — not rostered, a position the league uses, active with a team — whether or not he is in a list; his card takes a bid or "Add claim" like any other (players whose game has started are listed as locked). "Also available in" is replaced by **Available elsewhere**: a pop-up with every other tracked league where he can be claimed (built from each league's new `faSearch`: rostered ids, positions, locked teams), each league's FAAB left / budget, and a bid box (or Add claim without FAAB) that saves straight into that league's waiver plan.
+- Roster warnings at the top of Available and Claims: an empty IR slot while a non-locked starter or bench player is IR-eligible; and "Claims may fail — your roster is ineligible" when starters + bench exceed the starting and bench spots or a player in an IR slot is no longer IR-eligible.
+- Waiver note and variances (`client/src/ui/compute.js`): "Beats a starter" / "Beats a bench player" compare against the next game only — locked starters and bench players are skipped (as before) and a free agent whose own game has started is skipped too; a free agent with any designation other than Questionable, or Questionable and projected 0, never counts. The same rule drives both variances.
+- Every team page: a yellow **Clear variances** button left of "Variance report — this page" clears that page's clearable (yellow) variances. League tabs are styled like the dashboard league card's status boxes (colour, tint and icon per status; open page outlined). The page name in the header is plain text again (the league name keeps its drop-down). An open bench spot on Roster → Current lineup opens that league's Waivers page.
+- Waiver research: runs on a schedule, Tuesday and Wednesday at about 8:00 and 16:00 Toronto (checked every 10 minutes, once per slot, only when someone is active), for the coming week (Tuesday morning: the week after the one just finished). Results are kept for the week (was 12 hours). The outlets and accounts found are remembered for 60 days and named at the start of the next search.
+- `docker-publish.yml`: new `deploy` job after both images push (main only) that POSTs a GitHub-push-style payload to `DOCKHAND_WEBHOOK_URL`, signed with `X-Hub-Signature-256` when `DOCKHAND_WEBHOOK_SECRET` is set; fails the job on a non-2xx answer; skips cleanly without the secret.
+- Tests: new suite (47 checks: multi-leg read-back, league-wide fallback, sent-not-verified, proven flag, token never in status, player search, plan fields, Drops order, clear/select helpers, designation and lock rules, roster warnings, available elsewhere, research slots and target week, source memory). Earlier suites unchanged (unit 97, integration 68 / 61 with value sites down, client 12 + 22, server 4, FAAB 36, Commish 72, waivers 41, asset links 15). Browser harness: every page renders without errors; new scenario covers search, the pop-up, Drops, tick boxes, the push/confirm flow, Clear all and the bench link. The webhook script was run against a local test server checking the signature.
+- Not verified: Sleeper's leg for a Tuesday-night claim (the fix reads both weeks either way); ESPN's `percentOwned` field; Dockhand's webhook payload and signature format; Gemini following the remembered sources.
 
 ## v4.0 — Android app (APK)
 

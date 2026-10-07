@@ -175,6 +175,34 @@ export function VarianceButton({ variances, onOpen, compact = false, label = "Va
   );
 }
 
+// v4.1: yellow "Clear variances" — clears this page's clearable (yellow/minor) variances in one tap, left of the report button.
+export function ClearVariancesButton({ variances, onClear }) {
+  const keys = minorKeys(variances);
+  const [busy, setBusy] = useState(false);
+  const none = keys.length === 0;
+  return (
+    <button
+      type="button"
+      disabled={none || busy}
+      onClick={async (e) => {
+        e.stopPropagation();
+        setBusy(true);
+        try {
+          await onClear(keys);
+        } finally {
+          setBusy(false);
+        }
+      }}
+      style={{ color: none ? C.textFaint : "#1a1400", background: none ? "transparent" : C.minor, border: `1px solid ${none ? C.border : C.minor}` }}
+      className="text-xs px-2.5 py-1.5 rounded-full font-medium shrink-0"
+      aria-label={`Clear variances: ${keys.length} clearable`}
+      data-clear-variances={keys.length}
+    >
+      {busy ? "Clearing…" : `Clear variances${keys.length ? ` · ${keys.length}` : ""}`}
+    </button>
+  );
+}
+
 export function VarianceReportModal({ title, variances, onClear, onClose }) {
   // v2.9: opens fully expanded (collapse is still one tap away). Groups that
   // appear later (a new league/page/rule) also open, unless the user collapsed them.

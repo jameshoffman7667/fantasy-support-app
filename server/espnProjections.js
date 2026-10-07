@@ -117,6 +117,9 @@ export async function getWeekProjections(season, week, { force = false } = {}) {
       pts: Number(proj.appliedTotal),
       rec: stats[STAT_RECEPTIONS] != null ? Number(stats[STAT_RECEPTIONS]) : null,
       passTd: stats[STAT_PASS_TD] != null ? Number(stats[STAT_PASS_TD]) : null,
+      // v4.1: ESPN's rostered % (player.ownership.percentOwned) for the Claims page "Drops" list. NOT VERIFIED here —
+      // the field comes from community docs of this feed; when it's missing the app shows no rostered %.
+      own: Number.isFinite(Number(p.ownership?.percentOwned)) ? Math.round(Number(p.ownership.percentOwned) * 10) / 10 : null,
     };
     if (Number.isNaN(rec.pts)) continue;
     withProjection++;

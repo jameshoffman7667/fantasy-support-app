@@ -2,11 +2,11 @@ import * as api from "../api.js";
 import { isLocked } from "../lineup.js";
 import { pushKeys } from "../variances.js";
 import { CATEGORIES, POSITION_FILTERS, categoryView, keyLabel } from "../waiverLists.js"; // v3.9
-import { compareToRoster } from "../ui/compute.js"; // v3.9
-import { claimKey, describeClaim, effectiveClaims, flatten, groupClaims, resetClaims, setBid, simulate, syncDrops, toDollars } from "../waiverPlan.js";
-import { ChevronRight, Loader2, X } from "lucide-react";
+import { availableElsewhere, compareToRoster, waiverRosterWarnings } from "../ui/compute.js"; // v3.9, v4.1
+import { claimKey, clearClaims, clearDrops, describeClaim, effectiveClaims, flatten, groupClaims, orderDrops, resetClaims, selectedClaims, setBid, simulate, syncDrops, toDollars } from "../waiverPlan.js";
+import { ChevronRight, Loader2, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BidBox, ConfirmPush, DragHandle, DragList, EntryModeToggle, Headshot, MatchupChip, PrivateGate, PushResults, SectionLabel, SourceTag, UsageBadge, WeatherChip } from "../ui/common.jsx";
+import { BidBox, ConfirmPush, DragHandle, DragList, EntryModeToggle, Headshot, MatchupChip, Modal, PrivateGate, PushResults, SectionLabel, SourceTag, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { C, POS_COLOR, STATUS, fmtInt, fmtMoney, fmtPct, fmtWhen, inputStyle } from "../ui/theme.js";
 
@@ -59,7 +59,7 @@ function TypeExtras({ p, leagueType }) {
   return <div style={{ color: C.brand }} className="text-[11px] mt-0.5" data-type-extras>{bits.join(" · ")}</div>;
 }
 
-function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile, leagueType, keyText = null }) {
+function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile, leagueType, keyText = null, elsewhere = null, onElsewhere = null }) {
   const s = STATUS[p.severity] || STATUS.ok;
   const bid = (plan.bids || []).find((b) => b.id === p.id);
   return (
@@ -97,7 +97,11 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile,
           )}
           {p.note && p.rule && <div style={{ color: s.color }} className="text-[11px] mt-1">{p.rule === "Free agent outprojects a starter" ? "Beats a starter" : "Beats a bench player"}: {p.note}</div>}
           {p.usage && <div className="mt-1"><UsageBadge usage={p.usage} /></div>}
-          {p.crossLeagues?.length > 0 && <div style={{ color: C.brand }} className="text-[11px] mt-1">Also available in: {p.crossLeagues.join(", ")}</div>}
+          {(elsewhere || p.elsewhere)?.length > 0 && onElsewhere && (
+            <button type="button" onClick={() => onElsewhere(p, elsewhere || p.elsewhere)} style={{ color: C.brand }} className="text-[11px] mt-1 underline" data-available-elsewhere={(elsewhere || p.elsewhere).length}>
+              Available elsewhere
+            </button>
+          )}
           {faabHint && (
             <div style={{ color: C.textFaint }} className="text-[10px] mt-1" data-faab-hint>
               Suggested bid: {fmtMoney((budget * faabHint.suggestion70Pct) / 100)} (70%) · {fmtMoney((budget * faabHint.suggestion95Pct) / 100)} (95%) · n={faabHint.sampleSize}
@@ -151,7 +155,7 @@ function ResearchStatus({ hype, onRefresh }) {
   if (!hype || hype.state === "off") return <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2">The research needs a Gemini key on the server (GEMINI_API_KEY).</div>;
   return (
     <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2 flex items-center gap-2 flex-wrap" data-research-status>
-      <span>{hype.state === "ready" ? `Research from ${fmtWhen(hype.at)} · ${hype.players} players found` : "The research is running — refresh in a minute."}</span>
+      <span>{hype.state === "ready" ? `Research from ${fmtWhen(hype.at)} · ${hype.players} players found · runs by itself Tue & Wed ~8 am and 4 pm` : "The research is running — refresh in a minute."}</span>
       <button type="button" disabled={busy} onClick={() => run(hype.state === "ready")} style={{ color: C.brand }} className="underline" data-research-refresh>
         {busy ? "Researching…" : hype.state === "ready" ? "Research again" : "Refresh"}
       </button>
@@ -160,7 +164,156 @@ function ResearchStatus({ hype, onRefresh }) {
   );
 }
 
-function AvailablePage({ league, plan, setPlan, faab, onRefresh }) {
+// v4.1: roster warnings at the top of the Waivers screen (Available and Claims).
+function RosterWarnings({ league }) {
+  const w = waiverRosterWarnings(league);
+  if (!w.irMoves.length && !w.ineligible) return null;
+  return (
+    <div className="space-y-1.5 mb-3" data-roster-warnings>
+      {w.ineligible && (
+        <div style={{ background: C.majorBg, border: `1px solid ${C.major}55`, color: C.text }} className="rounded-md px-3 py-2 text-xs" data-roster-ineligible>
+          <div style={{ color: C.major }} className="font-semibold">Claims may fail — your roster is ineligible</div>
+          {w.over && <div>You have {w.over.players} players for {w.over.spots} starting and bench spots — drop or move {w.over.players - w.over.spots} first.</div>}
+          {w.badIr.map((p) => (
+            <div key={p.id}>
+              <PlayerLink player={p} className="inline underline">{p.name}</PlayerLink> is in an IR slot but isn't IR-eligible here ({p.status || "Healthy"}) — move him out of IR.
+            </div>
+          ))}
+        </div>
+      )}
+      {w.irMoves.length > 0 && (
+        <div style={{ background: C.minorBg, border: `1px solid ${C.minor}55`, color: C.text }} className="rounded-md px-3 py-2 text-xs" data-ir-warning>
+          <div style={{ color: C.minor }} className="font-semibold">{w.openIr} IR spot{w.openIr === 1 ? " is" : "s are"} empty</div>
+          {w.irMoves.map((p) => (
+            <div key={p.id}>
+              <PlayerLink player={p} className="inline underline">{p.name}</PlayerLink> ({p.status}) is IR-eligible but not on IR — moving him frees a roster spot for a claim.
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// v4.1: "Available elsewhere" — the other leagues he can be claimed in, with each league's FAAB left / budget and a
+// bid box (or "Add claim" without FAAB). A bid goes straight into THAT league's waiver plan (its Claims page).
+function ElsewhereModal({ player, leagues, mode, onClose }) {
+  const [plans, setPlans] = useState({});
+  const [msg, setMsg] = useState({});
+  useEffect(() => {
+    let alive = true;
+    for (const l of leagues) api.getWaiverPlan(l.id).then((pl) => alive && setPlans((m) => ({ ...m, [l.id]: pl }))).catch((e) => alive && setMsg((m) => ({ ...m, [l.id]: { err: e.message } })));
+    return () => {
+      alive = false;
+    };
+  }, [leagues]);
+  const save = async (l, dollars) => {
+    const pl = plans[l.id];
+    if (!pl) return;
+    const next = { ...pl, bids: setBid(pl.bids || [], player, dollars) };
+    setPlans((m) => ({ ...m, [l.id]: next }));
+    try {
+      const saved = await api.saveWaiverPlan(l.id, next);
+      setPlans((m) => ({ ...m, [l.id]: saved }));
+      setMsg((m) => ({ ...m, [l.id]: { ok: dollars == null ? "Removed from its Claims page" : "Added to its Claims page" } }));
+    } catch (e) {
+      setMsg((m) => ({ ...m, [l.id]: { err: e.message } }));
+    }
+  };
+  return (
+    <Modal title={`${player.name} — available elsewhere`} onClose={onClose}>
+      <div className="space-y-1.5" data-elsewhere-modal>
+        {leagues.map((l) => {
+          const pl = plans[l.id];
+          const bid = pl ? (pl.bids || []).find((b) => String(b.id) === String(player.id)) : null;
+          const m = msg[l.id];
+          const lmode = l.faab && l.budget ? pl?.entryMode || mode : "dollars";
+          return (
+            <div key={l.id} style={{ background: C.surfaceRaised, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2 flex items-center justify-between gap-2" data-elsewhere-league={l.id}>
+              <div className="min-w-0">
+                <div style={{ color: C.text }} className="text-sm truncate">{l.name}</div>
+                <div style={{ color: C.textFaint }} className="text-[11px]">{l.faab ? `FAAB ${fmtMoney(l.remaining)} left of ${fmtMoney(l.budget)}` : "No FAAB — waiver priority"}</div>
+                {m?.ok && <div style={{ color: C.ok }} className="text-[11px]">{m.ok}</div>}
+                {m?.err && <div style={{ color: C.major }} className="text-[11px]">{m.err}</div>}
+              </div>
+              <div className="shrink-0">
+                {!pl ? (
+                  <Loader2 size={14} className="animate-spin" style={{ color: C.textMuted }} />
+                ) : l.faab ? (
+                  <BidBox dollars={bid ? bid.bid : null} mode={lmode} budget={l.budget} onCommit={(d) => save(l, d)} ariaLabel={`Bid for ${player.name} in ${l.name}`} />
+                ) : (
+                  <button type="button" onClick={() => save(l, bid ? null : 0)} style={{ color: bid ? C.ok : C.brand, border: `1px solid ${bid ? C.ok : C.brand}66` }} className="text-xs rounded-md px-2 py-1" data-elsewhere-claim>
+                    {bid ? "Claimed ✓" : "Add claim"}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <div style={{ color: C.textFaint }} className="text-[11px] pt-1">A bid here is saved to that league's Claims page — its drops come from that league's own Drops list.</div>
+      </div>
+    </Modal>
+  );
+}
+
+// v4.1: search any free agent in this league (in a list below or not) and add a claim on him.
+function FreeAgentSearch({ league, renderRow }) {
+  const [q, setQ] = useState("");
+  const [st, setSt] = useState({ loading: false, players: null, error: null });
+  useEffect(() => {
+    const t = q.trim();
+    if (t.length < 2) {
+      setSt({ loading: false, players: null, error: null });
+      return undefined;
+    }
+    let alive = true;
+    setSt((x) => ({ ...x, loading: true }));
+    const timer = setTimeout(() => {
+      api
+        .searchFreeAgents(league.id, t)
+        .then((r) => alive && setSt({ loading: false, players: r.players || [], error: null }))
+        .catch((e) => alive && setSt({ loading: false, players: null, error: e.message }));
+    }, 300);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [q, league.id]);
+  return (
+    <div className="px-1 pb-2" data-fa-search>
+      <label className="flex items-center gap-2 rounded-md px-2 py-1.5" style={inputStyle}>
+        <Search size={14} style={{ color: C.textFaint }} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search any free agent to add a claim…" className="flex-1 bg-transparent outline-none text-sm" style={{ color: C.text }} aria-label="Search free agents" data-fa-search-input />
+        {st.loading && <Loader2 size={13} className="animate-spin" style={{ color: C.textMuted }} />}
+        {q && (
+          <button type="button" onClick={() => setQ("")} aria-label="Clear search" style={{ color: C.textFaint }}>
+            <X size={13} />
+          </button>
+        )}
+      </label>
+      {st.error && <div style={{ color: C.major }} className="text-[11px] pt-1">{st.error}</div>}
+      {st.players && (
+        <div className="space-y-1.5 pt-2" data-fa-search-results>
+          {st.players.length === 0 ? (
+            <div style={{ color: C.textMuted }} className="text-xs">No free agent in this league matches “{q.trim()}”.</div>
+          ) : (
+            st.players.map((p) =>
+              p.locked ? (
+                <div key={p.id} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-2 text-xs" data-fa-search-locked={p.id}>
+                  <PlayerLink player={p} className="inline" style={{ color: C.text }}>{p.name}</PlayerLink> {p.pos}{p.team ? ` · ${p.team}` : ""} — his game has started; he can be claimed once the week's last game ends.
+                </div>
+              ) : (
+                renderRow(p)
+              )
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = [] }) {
   const budget = league.waiverInfo?.budget || 0;
   const isFaab = Boolean(league.waiverInfo?.faab);
   const mode = plan.entryMode;
@@ -185,9 +338,16 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh }) {
     return known ? { ...card, ...known, hype: card.hype ?? known.hype, fillIn: card.fillIn ?? known.fillIn } : { ...card, ...compareToRoster(league, card) };
   };
   const meta = CATEGORIES.find((c) => c.key === cat);
+  const [elsewhereFor, setElsewhereFor] = useState(null); // v4.1: { player, leagues }
+  const rowProps = (p, keyText = null) => {
+    const hint = isFaab && budget ? hints.get(`id:${p.id}`) || hints.get(`name:${p.name}`) : null;
+    return { p, plan, mode, budget, isFaab, faabHint: hint, onBid, profile: league.scoringProfile, leagueType: league.leagueType, keyText, elsewhere: availableElsewhere(p, league, allLeagues), onElsewhere: (pl, leagues) => setElsewhereFor({ player: pl, leagues }) };
+  };
   const chip = (active) => ({ background: active ? C.brand : "transparent", color: active ? "#fff" : C.textMuted, border: `1px solid ${active ? C.brand : C.border}` });
   return (
     <div>
+      {elsewhereFor && <ElsewhereModal player={elsewhereFor.player} leagues={elsewhereFor.leagues} mode={mode} onClose={() => setElsewhereFor(null)} />}
+      <FreeAgentSearch league={league} renderRow={(r) => <AvailableRow key={r.id} {...rowProps({ ...r, ...compareToRoster(league, r) }, "search")} />} />
       <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap" data-available-controls>
         <div className="flex items-center gap-1 flex-wrap" data-pos-filter>
           {POSITION_FILTERS.map((f) => (
@@ -218,8 +378,7 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh }) {
       <div className="space-y-1.5" data-category-list={cat}>
         {view.map((e) => {
           const p = rowFor(e.id);
-          const hint = isFaab && budget ? hints.get(`id:${p.id}`) || hints.get(`name:${p.name}`) : null;
-          return <AvailableRow key={p.id} p={p} plan={plan} mode={mode} budget={budget} isFaab={isFaab} faabHint={hint} onBid={onBid} profile={league.scoringProfile} leagueType={league.leagueType} keyText={keyLabel(cat, p)} />;
+          return <AvailableRow key={p.id} {...rowProps(p, keyLabel(cat, p))} />;
         })}
       </div>
       {league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
@@ -231,11 +390,13 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh }) {
 }
 
 const simColor = (pct) => (pct == null ? C.textFaint : pct >= 70 ? C.ok : pct >= 40 ? C.minor : C.major);
-function ClaimRow({ c, result, sim, mode, budget, isFaab, bench, handle, dragging, onBid, onDrop, onDelete }) {
+function ClaimRow({ c, result, sim, mode, budget, isFaab, bench, handle, dragging, onBid, onDrop, onDelete, selected = true, onSelect }) {
   const failed = result && !result.ok;
+  const dropP = c.dropId ? bench.find((x) => String(x.id) === String(c.dropId)) : null;
   return (
-    <div style={{ background: C.surface, border: `1px solid ${failed ? `${C.minor}66` : C.border}`, borderLeft: `3px solid ${failed ? C.minor : C.ok}`, boxShadow: dragging ? "0 6px 18px rgba(0,0,0,0.5)" : "none", opacity: dragging ? 0.92 : 1 }} className="rounded-md px-2.5 py-2 flex items-start gap-2" data-claim={c.key}>
+    <div style={{ background: C.surface, border: `1px solid ${failed ? `${C.minor}66` : C.border}`, borderLeft: `3px solid ${failed ? C.minor : C.ok}`, boxShadow: dragging ? "0 6px 18px rgba(0,0,0,0.5)" : "none", opacity: dragging ? 0.92 : selected ? 1 : 0.55 }} className="rounded-md px-2.5 py-2 flex items-start gap-2" data-claim={c.key}>
       {handle}
+      {onSelect && <input type="checkbox" checked={selected} onChange={(e) => onSelect(c, e.target.checked)} className="mt-1 shrink-0" aria-label={`Push the claim for ${c.addName}`} data-claim-select={c.key} />}
       <div className="min-w-0 flex-1">
         <div style={{ color: C.text }} className="text-sm font-medium truncate">
           <PlayerLink player={{ id: c.addId, name: c.addName, pos: c.pos }} className="inline">{c.addName}</PlayerLink> <span style={{ color: C.textFaint }} className="text-[11px]">{c.pos}{c.source === "custom" ? " · custom" : c.edited ? " · edited" : ""}</span>
@@ -259,6 +420,11 @@ function ClaimRow({ c, result, sim, mode, budget, isFaab, bench, handle, draggin
             ))}
           </select>
         </label>
+        {dropP && (
+          <div className="text-[11px] mt-0.5" style={{ color: C.textFaint }}>
+            Dropping <PlayerLink player={dropP} className="inline underline" style={{ color: C.textMuted }}>{dropP.name}</PlayerLink>
+          </div>
+        )}
         {result && <div style={{ color: result.ok ? C.ok : C.minor }} className="text-[11px] mt-1">{result.ok ? "Would succeed (if no one outbids you)" : `Would fail: ${result.reason}`}</div>}
         {sim && (
           <div style={{ color: simColor(sim.winPct) }} className="text-[11px] mt-0.5" data-sim-result={sim.winPct} title={sim.basis}>
@@ -408,18 +574,20 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
   const openSpots = Math.max(0, (league.benchSlots ?? allBench.length) - allBench.length);
 
   // Keep the drop ranking in step with the bench (new bench players go to the bottom, unticked).
-  const syncedDrops = useMemo(() => syncDrops(plan.drops, bench), [plan.drops, bench]);
+  // v4.1: "Drops" — least-rostered first by default; once dragged, the user's order is kept (plan.dropsArranged).
+  const syncedDrops = useMemo(() => orderDrops(syncDrops(plan.drops, bench), bench, plan.dropsArranged), [plan.drops, plan.dropsArranged, bench]);
   useEffect(() => {
     const same = syncedDrops.length === plan.drops.length && syncedDrops.every((d, i) => d.id === plan.drops[i].id && d.name === plan.drops[i].name);
-    if (!same) setPlan((pl) => ({ ...pl, drops: syncDrops(pl.drops, bench) }));
+    if (!same) setPlan((pl) => ({ ...pl, drops: orderDrops(syncDrops(pl.drops, bench), bench, pl.dropsArranged) }));
   }, [syncedDrops, plan.drops, bench, setPlan]);
+  const benchById = useMemo(() => new Map(allBench.filter(Boolean).map((p) => [String(p.id), p])), [allBench]);
 
   const eff = useMemo(() => effectiveClaims({ ...plan, drops: syncedDrops }, { openSpots }), [plan, syncedDrops, openSpots]);
   // v3.0: claims already queued in Sleeper aren't proposed again. A queued claim matches a
   // proposed one when it adds the same player and drops the same player (or nobody).
   const pending = league.privateInfo?.claims?.pending || [];
   const existing = useMemo(
-    () => pending.map((x) => ({ key: `sl:${x.id}`, addId: String(x.adds[0] ?? ""), dropId: x.drops[0] != null ? String(x.drops[0]) : null, bid: Number(x.bid) || 0, source: "sleeper", dropPriority: -2, txId: x.id })),
+    () => pending.map((x) => ({ key: `sl:${x.id}`, addId: String(x.adds[0] ?? ""), dropId: x.drops[0] != null ? String(x.drops[0]) : null, bid: Number(x.bid) || 0, source: "sleeper", dropPriority: -2, txId: x.id, leg: x.leg ?? null })),
     [pending]
   );
   const existingKeys = useMemo(() => new Set(existing.map((x) => claimKey(x.addId, x.dropId))), [existing]);
@@ -429,6 +597,28 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
   const hiddenCount = eff.claims.length - visibleClaims.length;
   const groups = useMemo(() => groupClaims(visibleClaims, plan.order), [visibleClaims, plan.order]);
   const ordered = useMemo(() => flatten(groups), [groups]);
+  // v4.1: tick boxes — only ticked claims are pushed and listed on the checklist.
+  const unselected = useMemo(() => new Set(plan.unselected || []), [plan.unselected]);
+  const toPush = useMemo(() => selectedClaims(ordered, plan.unselected), [ordered, plan.unselected]);
+  const allTicked = toPush.length === ordered.length;
+  const onSelect = (c, on) => setPlan((pl) => {
+    const set = new Set(pl.unselected || []);
+    if (on) set.delete(c.key);
+    else set.add(c.key);
+    return { ...pl, unselected: [...set] };
+  });
+  const [clearArm, setClearArm] = useState(null); // "claims" | "drops" — the second tap clears
+  useEffect(() => {
+    if (!clearArm) return undefined;
+    const t = setTimeout(() => setClearArm(null), 4000);
+    return () => clearTimeout(t);
+  }, [clearArm]);
+  const clear = (what) => {
+    if (clearArm !== what) return setClearArm(what);
+    setClearArm(null);
+    if (what === "claims") setPlan((pl) => clearClaims(pl));
+    else setPlan((pl) => ({ ...pl, drops: clearDrops(syncDrops(pl.drops, bench)) }));
+  };
   // The budget prediction counts what is already queued in Sleeper too.
   const simOrder = useMemo(() => flatten(groupClaims([...visibleClaims, ...existing], plan.order)), [visibleClaims, existing, plan.order]);
   const sim = useMemo(() => simulate(simOrder, { budget, used, openSpots }), [simOrder, budget, used, openSpots]);
@@ -454,6 +644,12 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
     else setPlan((pl) => ({ ...pl, removed: [...new Set([...pl.removed, c.key])] }));
   };
   const addCandidates = league.addCandidates?.length ? league.addCandidates : league.waiver.rows || [];
+  // v4.1: names (and card details) for claims already queued in Sleeper, which arrive as player ids.
+  const nameOf = useMemo(() => {
+    const m = new Map();
+    for (const p of [...Object.values(league.waiverCategories?.cards || {}), ...(league.waiver?.rows || []), ...addCandidates, ...allBench.filter(Boolean)]) if (p?.id != null) m.set(String(p.id), p);
+    return (id) => m.get(String(id)) || { id: String(id), name: String(id) };
+  }, [league.waiverCategories, league.waiver, addCandidates, allBench]);
   const addCustom = () => {
     const fa = addCandidates.find((r) => r.id === draft.addId) || (league.waiver.rows || []).find((r) => r.id === draft.addId);
     const bid = toDollars(draft.bidText, mode, budget);
@@ -472,7 +668,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
   const moveDrops = (keys) => setPlan((pl) => {
     const cur = syncDrops(pl.drops, bench);
     const byId = new Map(cur.map((d) => [d.id, d]));
-    return { ...pl, drops: keys.map((k) => byId.get(k)).filter(Boolean) };
+    return { ...pl, drops: keys.map((k) => byId.get(k)).filter(Boolean), dropsArranged: true };
   });
 
   const Stat = ({ label, dollars, pct, accent }) => (
@@ -512,9 +708,21 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
         </div>
       )}
 
-      <SectionLabel>Who you'd drop — rank most willing first</SectionLabel>
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Drops</SectionLabel>
+        <div className="flex items-center gap-2 pt-3">
+          {plan.dropsArranged && (
+            <button type="button" onClick={() => setPlan((pl) => ({ ...pl, dropsArranged: false }))} style={{ color: C.textMuted }} className="text-[11px] underline" data-drops-default>
+              Sort by rostered %
+            </button>
+          )}
+          <button type="button" onClick={() => clear("drops")} disabled={!syncedDrops.some((d) => d.willing)} style={{ color: clearArm === "drops" ? C.major : C.textMuted, border: `1px solid ${clearArm === "drops" ? C.major : C.border}`, opacity: syncedDrops.some((d) => d.willing) ? 1 : 0.5 }} className="text-xs rounded-md px-2 py-1" data-clear-drops>
+            {clearArm === "drops" ? "Tap again to clear" : "Clear all"}
+          </button>
+        </div>
+      </div>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Drag your bench into the order you'd drop them, and tick the ones you're willing to lose. The claim list below is built from this.
+        Tick the bench players you're willing to drop, most willing first. {plan.dropsArranged ? "Your own order is kept." : "Least-rostered first until you drag them into your own order."} The claim list below is built from this.
       </div>
       {syncedDrops.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1 pb-2">No bench players to drop.</div>
@@ -524,23 +732,45 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
           getKey={(d) => d.id}
           onReorder={moveDrops}
           label="Drag to rank the player you would drop"
-          render={(d, { handleProps, dragging }) => (
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: dragging ? 0.92 : 1 }} className="rounded-md px-2.5 py-2 flex items-center gap-2" data-drop-row={d.id}>
-              <DragHandle handleProps={handleProps} dragging={dragging} />
-              <span style={{ color: C.textFaint, fontVariantNumeric: "tabular-nums" }} className="text-xs w-5 text-right">{syncedDrops.findIndex((x) => x.id === d.id) + 1}</span>
-              <span style={{ color: C.text }} className="text-sm truncate flex-1">{d.name} <span style={{ color: C.textFaint }} className="text-[11px]">{d.pos}</span></span>
-              <label className="flex items-center gap-1 text-xs shrink-0" style={{ color: C.textMuted }}>
-                <input type="checkbox" checked={d.willing} onChange={(e) => setPlan((pl) => ({ ...pl, drops: syncDrops(pl.drops, bench).map((x) => (x.id === d.id ? { ...x, willing: e.target.checked } : x)) }))} data-willing />
-                Willing to drop
-              </label>
-            </div>
-          )}
+          render={(d, { handleProps, dragging }) => {
+            const p = benchById.get(String(d.id)) || { id: d.id, name: d.name, pos: d.pos };
+            const st = p.status && p.status !== "Healthy" ? p.status : null;
+            return (
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: dragging ? 0.92 : 1 }} className="rounded-md px-2.5 py-2 flex items-center gap-2" data-drop-row={d.id}>
+                <DragHandle handleProps={handleProps} dragging={dragging} />
+                <span style={{ color: C.textFaint, fontVariantNumeric: "tabular-nums" }} className="text-xs w-5 text-right shrink-0">{syncedDrops.findIndex((x) => x.id === d.id) + 1}</span>
+                <div className="min-w-0 flex-1">
+                  <PlayerLink player={p} className="block min-w-0 truncate">
+                    <span style={{ color: C.text }} className="text-sm">{d.name}</span> <span style={{ color: C.textFaint }} className="text-[11px]">{d.pos}{p.team ? ` · ${p.team}` : ""}</span>
+                  </PlayerLink>
+                  <div style={{ color: C.textMuted }} className="text-[11px] flex items-center gap-1.5 flex-wrap mt-0.5" data-drop-info>
+                    <span data-drop-rostered>{p.rostered != null ? `${p.rostered}% rostered` : "rostered % n/a"}</span>
+                    <span>· {p.proj != null ? `Proj ${p.proj.toFixed(1)}` : "No projection"}</span>
+                    {st && <span style={{ color: st === "Bye" ? C.textMuted : C.minor }} data-drop-status>· {st}</span>}
+                    {p.matchup && <MatchupChip player={p} profile={league.scoringProfile} />}
+                  </div>
+                </div>
+                <label className="flex items-center gap-1 text-xs shrink-0" style={{ color: C.textMuted }}>
+                  <input type="checkbox" checked={d.willing} onChange={(e) => setPlan((pl) => ({ ...pl, drops: syncDrops(pl.drops, bench).map((x) => (x.id === d.id ? { ...x, willing: e.target.checked } : x)) }))} data-willing />
+                  Willing
+                </label>
+              </div>
+            );
+          }}
         />
       )}
 
-      <div className="flex items-center justify-between gap-2">
+      <div>
         <SectionLabel>Proposed claims — {visibleClaims.length}</SectionLabel>
-        <div className="flex items-center gap-2 pt-3">
+        <div className="flex items-center gap-2 pb-2 flex-wrap px-1">
+          {ordered.length > 0 && (
+            <button type="button" onClick={() => setPlan((pl) => ({ ...pl, unselected: allTicked ? ordered.map((c) => c.key) : [] }))} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="text-xs rounded-md px-2 py-1" data-select-all>
+              {allTicked ? "Deselect all" : "Select all"}
+            </button>
+          )}
+          <button type="button" onClick={() => clear("claims")} disabled={!ordered.length} style={{ color: clearArm === "claims" ? C.major : C.textMuted, border: `1px solid ${clearArm === "claims" ? C.major : C.border}`, opacity: ordered.length ? 1 : 0.5 }} className="text-xs rounded-md px-2 py-1" data-clear-claims>
+            {clearArm === "claims" ? "Tap again to clear" : "Clear all"}
+          </button>
           <button type="button" onClick={() => setAdding((v) => !v)} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="text-xs rounded-md px-2 py-1" data-add-custom>
             + Custom claim
           </button>
@@ -593,7 +823,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
                   setPlan((pl) => ({ ...pl, order: next }));
                 }}
                 render={(c, { handleProps, dragging }) => (
-                  <ClaimRow c={c} result={resultByKey.get(c.key)} sim={mcByKey.get(c.key)} mode={mode} budget={budget} isFaab={isFaab} bench={benchByProj} dragging={dragging} handle={<DragHandle handleProps={handleProps} dragging={dragging} />} onBid={onBid} onDrop={onDrop} onDelete={onDelete} />
+                  <ClaimRow c={c} result={resultByKey.get(c.key)} sim={mcByKey.get(c.key)} mode={mode} budget={budget} isFaab={isFaab} bench={benchByProj} dragging={dragging} handle={<DragHandle handleProps={handleProps} dragging={dragging} />} onBid={onBid} onDrop={onDrop} onDelete={onDelete} selected={!unselected.has(c.key)} onSelect={onSelect} />
                 )}
               />
             </div>
@@ -601,9 +831,9 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
         </div>
       )}
 
-      <ClaimsPush league={league} ordered={ordered} existing={existing} isFaab={isFaab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />
+      <ClaimsPush league={league} ordered={toPush} existing={existing} isFaab={isFaab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} nameOf={nameOf} />
 
-      {ordered.length > 0 && (
+      {toPush.length > 0 && (
         <>
           <SectionLabel>Enter these in Sleeper, in this order</SectionLabel>
           <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
@@ -611,7 +841,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
             <a href={`https://sleeper.com/leagues/${league.id}`} target="_blank" rel="noreferrer" style={{ color: C.brand }} className="underline">Open this league in Sleeper</a>
           </div>
           <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y" data-claim-checklist>
-            {ordered.map((c, i) => (
+            {toPush.map((c, i) => (
               <label key={c.key} className="flex items-start gap-2 px-3 py-2 text-xs" style={{ color: ticked.has(c.key) ? C.textFaint : C.text, borderColor: C.border, textDecoration: ticked.has(c.key) ? "line-through" : "none" }}>
                 <input type="checkbox" checked={ticked.has(c.key)} onChange={(e) => setTicked((prev) => { const n = new Set(prev); if (e.target.checked) n.add(c.key); else n.delete(c.key); return n; })} />
                 <span>{i + 1}. {isFaab ? describeClaim(c) : `Claim ${c.addName}${c.dropName ? ` and drop ${c.dropName}` : " (no drop)"}`}</span>
@@ -625,9 +855,9 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
 }
 
 // v3.0: push the proposed claims to Sleeper (private API, opt-in, confirm, read-back).
-// The submit/cancel claim calls have never been confirmed to work, so the FIRST push
-// is a single claim; once one has been read back successfully, the rest go in one go.
-function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccount }) {
+// The FIRST push is a single claim; once one has been read back from Sleeper — or the user has confirmed he can
+// see it in Sleeper (v4.1) — every ticked claim goes in one go.
+function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccount, nameOf = (id) => ({ id, name: id }) }) {
   const [st, setSt] = useState(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -636,9 +866,11 @@ function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccoun
   useEffect(() => {
     if (league.privateInfo?.configured) loadStatus();
   }, [league.privateInfo?.configured, loadStatus]);
-  const proven = Boolean(st?.log?.some((l) => l.action === "submit_waiver_claim" && l.ok));
+  // v4.1: proven = a verified read-back or the user's "I can see it in Sleeper" (server flag), or a v3.x verified log line.
+  const proven = Boolean(st?.claimsProven) || Boolean(st?.log?.some((l) => l.action === "submit_waiver_claim" && l.ok && /and verified/.test(l.detail || "")));
   const batch = proven ? ordered : ordered.slice(0, 1);
   const label = (c) => (isFaab ? describeClaim(c) : `Claim ${c.addName}${c.dropName ? ` and drop ${c.dropName}` : " (no drop)"}`);
+  const sentUnverified = !proven && results?.some((r) => r.ok && r.verified === false);
   const send = async () => {
     setBusy(true);
     const out = [];
@@ -646,7 +878,7 @@ function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccoun
       try {
         const r = await api.pushClaim(league.id, { addId: c.addId, dropId: c.dropId, bid: c.bid }, { keys: pushKeys(league, "waiver") });
         out.push({ label: label(c), ok: r.ok, verified: r.verified, detail: r.detail });
-        if (!r.ok) break; // stop at the first claim Sleeper doesn't confirm
+        if (!r.ok) break; // stop at the first claim Sleeper doesn't accept
       } catch (e) {
         out.push({ label: label(c), ok: false, detail: e.message });
         break;
@@ -658,13 +890,23 @@ function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccoun
     loadStatus();
     if (out.some((o) => o.ok)) onRefresh?.();
   };
-  const cancel = async (x) => {
+  const confirmWorks = async () => {
     try {
-      const r = await api.cancelClaim(league.id, x.txId);
-      setResults([{ label: `Cancel queued claim for ${x.addId}`, ok: r.ok, detail: r.detail }]);
+      await api.confirmClaimsWork();
+      setResults((r) => [...(r || []), { label: "Claim pushes marked as working", ok: true, detail: "the next push sends every ticked claim." }]);
+      loadStatus();
+    } catch (e) {
+      setResults((r) => [...(r || []), { label: "Couldn't save that", ok: false, detail: e.message }]);
+    }
+  };
+  const cancel = async (x) => {
+    const who = nameOf(x.addId).name;
+    try {
+      const r = await api.cancelClaim(league.id, x.txId, x.leg ?? null);
+      setResults([{ label: `Cancel queued claim for ${who}`, ok: r.ok, detail: r.detail }]);
       if (r.ok) onRefresh?.();
     } catch (e) {
-      setResults([{ label: "Cancel queued claim", ok: false, detail: e.message }]);
+      setResults([{ label: `Cancel queued claim for ${who}`, ok: false, detail: e.message }]);
     }
   };
   return (
@@ -675,24 +917,41 @@ function ClaimsPush({ league, ordered, existing, isFaab, onRefresh, onOpenAccoun
         {existing.length > 0 && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y" data-existing-claims>
             <div style={{ color: C.textFaint }} className="px-3 py-1.5 text-[11px]">Already queued in Sleeper</div>
-            {existing.map((x) => (
-              <div key={x.key} style={{ color: C.text, borderColor: C.border }} className="px-3 py-2 text-xs flex items-center justify-between gap-2">
-                <span>Add {x.addId}{x.dropId ? `, drop ${x.dropId}` : ""} · bid {fmtMoney(x.bid)}</span>
-                <button type="button" onClick={() => cancel(x)} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded px-2 py-0.5 text-[11px]">Cancel</button>
-              </div>
-            ))}
+            {existing.map((x) => {
+              const add = nameOf(x.addId);
+              const drop = x.dropId ? nameOf(x.dropId) : null;
+              return (
+                <div key={x.key} style={{ color: C.text, borderColor: C.border }} className="px-3 py-2 text-xs flex items-center justify-between gap-2" data-existing-claim={x.txId}>
+                  <span className="min-w-0">
+                    Add <PlayerLink player={add} className="inline underline">{add.name}</PlayerLink>
+                    {drop ? <>, drop <PlayerLink player={drop} className="inline underline">{drop.name}</PlayerLink></> : ""}
+                    {isFaab ? ` · bid ${fmtMoney(x.bid)}` : ""}
+                  </span>
+                  <button type="button" onClick={() => cancel(x)} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded px-2 py-0.5 text-[11px] shrink-0">Cancel</button>
+                </div>
+              );
+            })}
           </div>
         )}
         {ordered.length === 0 ? (
-          <div style={{ color: C.textMuted }} className="text-xs px-1">Nothing to push.</div>
+          <div style={{ color: C.textMuted }} className="text-xs px-1">Nothing ticked to push.</div>
         ) : !confirming ? (
           <button type="button" onClick={() => setConfirming(true)} style={{ background: C.brand, color: C.text }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium" data-push-claims>
             {proven ? `Push ${ordered.length} claim${ordered.length === 1 ? "" : "s"} to Sleeper` : "Push first claim to Sleeper (test)"}
           </button>
         ) : (
-          <ConfirmPush title={proven ? "Send these claims to Sleeper?" : "Send ONE test claim to Sleeper?"} lines={batch.map(label)} buttonLabel={proven ? "Yes, submit them" : "Yes, submit this claim"} busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note={proven ? "Each claim is read back from Sleeper to confirm it registered; the push stops at the first one that doesn't." : "Entering waiver claims through Sleeper's private API has never been confirmed to work. This sends only the first claim and reads it back. If it registers, the next push sends the rest. Either way, the checklist below still works."} />
+          <ConfirmPush title={proven ? "Send these claims to Sleeper?" : "Send ONE test claim to Sleeper?"} lines={batch.map(label)} buttonLabel={proven ? "Yes, submit them" : "Yes, submit this claim"} busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note={proven ? "Each claim is read back from Sleeper; the push stops at the first one Sleeper doesn't accept." : "This sends only the first ticked claim and reads it back. Once one is confirmed — by the read-back or by you seeing it in Sleeper — the next push sends the rest. Either way, the checklist below still works."} />
         )}
         <PushResults results={results} />
+        {sentUnverified && (
+          <div style={{ background: C.surface, border: `1px solid ${C.minor}66` }} className="rounded-md px-3 py-2 text-xs space-y-1.5" data-confirm-claims>
+            <div style={{ color: C.textMuted }}>Open the league in Sleeper and check your pending claims. If the claim is there, tell the app so it can send the rest in one go.</div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={confirmWorks} style={{ background: C.ok, color: "#fff" }} className="rounded px-2.5 py-1" data-confirm-claims-btn>I can see it in Sleeper</button>
+              <a href={`https://sleeper.com/leagues/${league.id}`} target="_blank" rel="noreferrer" style={{ color: C.brand }} className="underline">Open Sleeper</a>
+            </div>
+          </div>
+        )}
       </PrivateGate>
     </div>
   );
@@ -882,7 +1141,7 @@ function OpponentsPage({ league }) {
   );
 }
 
-export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount }) {
+export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeagues = [] }) {
   const [sub, setSub] = useState("available");
   const [plan, setPlanState] = useState(null);
   const [planError, setPlanError] = useState(null);
@@ -955,12 +1214,13 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount }) {
         {league.waiverInfo?.faab && tab("opponents", "Opponents")}
       </div>
       {planError && <div style={{ color: C.major }} className="text-xs px-1 pb-2">{planError}</div>}
+      {sub !== "opponents" && <RosterWarnings league={league} />}
       {!plan ? (
         <div className="flex items-center gap-2 px-1 py-4" style={{ color: C.textMuted }}>
           <Loader2 size={16} className="animate-spin" /> <span className="text-sm">Loading your waiver plan…</span>
         </div>
       ) : sub === "available" ? (
-        <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRefresh={onRefresh} />
+        <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRefresh={onRefresh} allLeagues={allLeagues} />
       ) : sub === "opponents" ? (
         <OpponentsPage league={league} />
       ) : (

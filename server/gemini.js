@@ -316,7 +316,25 @@ Reply with ONLY the JSON object.`;
  * Returns { at, model, players: [{ name, pos, team, mentions, sources, kind, dynasty, note }], sources } or null.
  * Cached 12 hours per week. Unverified from the build sandbox: model id and response shape (see top).
  */
-const HYPE_TTL = 12 * 60 * 60 * 1000;
+// v4.1: the research runs on a schedule (Tue + Wed ~8:00 and ~16:00 Toronto, scheduler.js), so a result is kept for the
+// whole week instead of 12 hours; a build still starts one in the background if there is none for the week.
+const HYPE_TTL = 8 * 24 * 60 * 60 * 1000;
+// v4.1: the outlets / accounts the last runs found are remembered (60 days) and named in the next search, so Gemini
+// starts from places known to publish waiver pieces instead of rediscovering them every time.
+const HYPE_SOURCES_KEY = "gemini:waiverhype:sources:v1";
+export function rememberSources(prev = [], out) {
+  const count = new Map((Array.isArray(prev) ? prev : []).map((x) => [x.name, { name: x.name, n: Number(x.n) || 1 }]));
+  const add = (name) => {
+    const n = String(name || "").trim().replace(/^www\./, "").slice(0, 60);
+    if (!n || /^https?:/i.test(n) || /vertexaisearch|grounding-api/i.test(n)) return;
+    const e = count.get(n) || { name: n, n: 0 };
+    e.n += 1;
+    count.set(n, e);
+  };
+  for (const p of out?.players || []) for (const src of p.sources || []) add(src);
+  for (const s of out?.sources || []) add(s.title);
+  return [...count.values()].sort((a, b) => b.n - a.n).slice(0, 25);
+}
 const hypeInFlight = new Map();
 export const hypeCacheKey = (season, week) => `gemini:waiverhype:v1:${season}:${week}`;
 
@@ -352,7 +370,8 @@ export async function waiverHype(season, week, { force = false, cacheOnly = fals
   if (cacheOnly && !force) return null;
   if (hypeInFlight.has(cacheKey)) return hypeInFlight.get(cacheKey);
   const run = (async () => {
-    const prompt = `You are researching the fantasy football waiver wire for the ${season} NFL season, week ${week}. Use pieces published in the last 7 days.
+    const known = (cacheGet(HYPE_SOURCES_KEY) || []).slice(0, 15).map((x) => x.name);
+    const prompt = `You are researching the fantasy football waiver wire for the ${season} NFL season, week ${week}. Use pieces published in the last 7 days.${known.length ? `\nStart with these outlets and accounts, which published waiver pieces recently: ${known.join(", ")}. Then look for others.` : ""}
 Search for:
 1. Redraft waiver-wire "top adds" / pickups articles (e.g. FantasyPros, ESPN, Yahoo, CBS Sports, NFL.com, PFF, Rotoballer, The Athletic, 4for4, Fantasy Footballers).
 2. Dynasty waiver-wire and stash articles (e.g. Dynasty Nerds, Dynasty League Football, KeepTradeCut, FantasyPros dynasty, PFF dynasty).
@@ -380,6 +399,7 @@ Do not invent players or sources. Reply with ONLY a JSON array, no prose:
     const out = { at: Date.now(), model: MODEL(), players: parseHype(arr), sources };
     console.log(`[gemini] Waiver research ${season} wk${week}: ${out.players.length} players, ${sources.length} sources.`);
     cacheSet(cacheKey, out, HYPE_TTL);
+    cacheSet(HYPE_SOURCES_KEY, rememberSources(cacheGet(HYPE_SOURCES_KEY) || [], out), 60 * 24 * 60 * 60 * 1000);
     return out;
   })();
   hypeInFlight.set(cacheKey, run);

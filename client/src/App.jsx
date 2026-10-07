@@ -16,7 +16,7 @@ import { WaiverTab } from "./pages/WaiverPage.jsx";
 import { LeagueTabs, STATUS_BADGE_TABS, TAB_META, TabBar, TopBar, sourceStatusLabel } from "./ui/chrome.jsx";
 import { BootstrapScreen, CardCtx, ErrorScreen } from "./ui/common.jsx";
 import { computeInjury, computeLineup, computeRoster, computeTrade, computeWaiver } from "./ui/compute.js";
-import { DvpDetailModal, VarianceButton, VarianceReportModal, WeatherModal } from "./ui/modals.jsx";
+import { ClearVariancesButton, DvpDetailModal, VarianceButton, VarianceReportModal, WeatherModal } from "./ui/modals.jsx";
 import { PlayerCardCtx, PlayerCardModal } from "./ui/playerCard.jsx";
 import { C } from "./ui/theme.js";
 
@@ -552,12 +552,8 @@ export default function App() {
         onSelect: () => navigate(view.screen === "tab" ? { screen: "tab", leagueId: l.id, tab: tabKey } : { screen: "league", leagueId: l.id }),
       })),
     ];
-    const pageOptions = () => [
-      { key: "overview", label: "Overview", onSelect: () => navigate({ screen: "league", leagueId: activeLeague.id }) },
-      ...Object.entries(TAB_META).map(([k, m]) => ({ key: k, label: m.label, current: k === tabKey, onSelect: () => navigate({ screen: "tab", leagueId: activeLeague.id, tab: k }) })),
-    ];
     if (view.screen === "league" && activeLeague) return [root, { label: activeLeague.name, menuKey: "league", options: leagueOptions(activeLeague.id) }];
-    if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, menuKey: "league", options: leagueOptions(activeLeague.id) }, { label: (TAB_META[tabKey] || TAB_META.roster).label, menuKey: "page", options: pageOptions() }];
+    if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, menuKey: "league", options: leagueOptions(activeLeague.id) }, { label: (TAB_META[tabKey] || TAB_META.roster).label }]; // v4.1: plain text again — the league tabs switch pages
     return [root];
   }, [view, sleeperUser, liveLeagues, activeLeague, navigate]);
 
@@ -657,11 +653,12 @@ export default function App() {
         return (
           <>
             {STATUS_BADGE_TABS.includes(tabKey) && (
-              <div className="flex justify-end px-4 pt-3 -mb-1">
+              <div className="flex justify-end items-center gap-2 px-4 pt-3 -mb-1">
+                <ClearVariancesButton variances={pageVariances} onClear={clearVariances} />
                 <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: tabKey })} label="Variance report — this page" />
               </div>
             )}
-            <Comp league={activeLeague} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={() => handleRefresh({ manual: true })} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
+            <Comp league={activeLeague} allLeagues={computed} onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={() => handleRefresh({ manual: true })} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
           </>
         );
       })()}

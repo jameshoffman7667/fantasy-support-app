@@ -91,7 +91,7 @@ export function status(username) {
   const r = record(username);
   if (!r) return { configured: false, writesEnabled: false, perms: permsOf(null) };
   const perms = permsOf(r);
-  return { configured: true, perms, writesEnabled: WRITE_GROUPS.some((g) => perms[g]), sleeperUsername: r.sleeperUsername || null, sleeperUserId: r.sleeperUserId || null, verifiedAt: r.verifiedAt || null };
+  return { configured: true, perms, writesEnabled: WRITE_GROUPS.some((g) => perms[g]), claimsProven: claimsProven(username), sleeperUsername: r.sleeperUsername || null, sleeperUserId: r.sleeperUserId || null, verifiedAt: r.verifiedAt || null };
 }
 export const hasToken = (username) => Boolean(record(username)?.token);
 function tokenOf(username) {
@@ -185,13 +185,48 @@ export async function getProposedTrades(username, leagueId, leg) {
 }
 
 /** Waiver claims you have queued in Sleeper. UNVERIFIED: whether `status:"pending"` is the right word is a guess,
- *  so the distinct statuses seen are returned for diagnosis. */
-export async function getPendingClaims(username, leagueId, leg, rosterId) {
+ *  so the distinct statuses seen are returned for diagnosis.
+ *  v4.1: a claim made after the app's Tuesday 10:00 week change came back as "statuses seen: none" — the read looked
+ *  at one leg only. Now every leg passed in is read (Sleeper's week and the next one), the results are merged by
+ *  transaction id, and if the roster filter finds nothing at all the league-wide list is read and filtered to this
+ *  roster here. Anything not finished (complete / failed / cancelled) counts as queued. */
+const DONE_STATUSES = new Set(["complete", "completed", "failed", "cancelled", "canceled", "rejected", "processed"]);
+export const claimLegs = (...legs) => [...new Set(legs.flat().map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+export async function getPendingClaims(username, leagueId, legs, rosterId) {
   needRead(username);
-  const d = await call(username, `query($l:Snowflake!,$g:Int!,$r:Int){ league_transactions(league_id:$l, leg:$g, type:"waiver", roster_id:$r, limit:100){ ${TX_FIELDS} } }`, { l: String(leagueId), g: Number(leg), r: Number(rosterId) });
-  const all = (d.league_transactions || []).filter(Boolean);
-  const claims = all.filter((t) => String(t.status).toLowerCase() === "pending");
-  return { claims, statuses: [...new Set(all.map((t) => t.status))] };
+  const legList = claimLegs(legs);
+  const q = (withRoster) => `query($l:Snowflake!,$g:Int!${withRoster ? ",$r:Int" : ""}){ league_transactions(league_id:$l, leg:$g, type:"waiver"${withRoster ? ", roster_id:$r" : ""}, limit:100){ ${TX_FIELDS} } }`;
+  const read = async (withRoster) => {
+    const rows = [];
+    for (const g of legList) {
+      const vars = { l: String(leagueId), g };
+      if (withRoster) vars.r = Number(rosterId);
+      const d = await call(username, q(withRoster), vars);
+      rows.push(...(d.league_transactions || []).filter(Boolean));
+    }
+    return rows;
+  };
+  let all = await read(true);
+  let scope = "roster";
+  if (!all.length && rosterId != null) {
+    all = (await read(false)).filter((t) => (t.roster_ids || []).map(Number).includes(Number(rosterId)));
+    scope = "league";
+  }
+  const byId = new Map();
+  for (const t of all) byId.set(String(t.transaction_id), t);
+  const uniq = [...byId.values()];
+  const claims = uniq.filter((t) => !DONE_STATUSES.has(String(t.status || "").toLowerCase()));
+  return { claims, statuses: [...new Set(uniq.map((t) => t.status))], legs: legList, scope };
+}
+
+/** v4.1: "claim pushes work" — set by a verified read-back or by the user confirming he saw the claim in Sleeper.
+ *  Until then the Claims page sends one claim per push. */
+const provenKey = (u) => `claims_proven:${u}`;
+export const claimsProven = (username) => store.getState(provenKey(username), null);
+export function markClaimsProven(username, how) {
+  const v = { at: Date.now(), how: how === "manual" ? "manual" : "verified" };
+  store.setState(provenKey(username), v);
+  return v;
 }
 
 /** Settings change log (who changed what, old → new). */
@@ -309,8 +344,10 @@ export async function updateReserve(username, { leagueId, rosterId, reserve, con
   });
 }
 
-/** Submit ONE waiver claim. UNVERIFIED mutation; verified by reading pending claims back. */
-export async function submitClaim(username, { leagueId, rosterId, leg, addId, dropId, bid, confirm }) {
+/** Submit ONE waiver claim. Verified by reading pending claims back.
+ *  v4.1: `legs` = every leg the claim may be filed under. A claim Sleeper hands back with a transaction id counts as
+ *  sent (ok) even when the read-back can't see it — it is then "sent, not verified" rather than a failure. */
+export async function submitClaim(username, { leagueId, rosterId, leg, legs, addId, dropId, bid, confirm }) {
   guardWrite(username, confirm, "claims");
   const bidN = Math.max(0, Math.round(Number(bid) || 0));
   const req = { addId, dropId: dropId || null, bid: bidN };
@@ -318,15 +355,33 @@ export async function submitClaim(username, { leagueId, rosterId, leg, addId, dr
     const vars = { l: String(leagueId), ka: [String(addId)], va: [Number(rosterId)], ks: ["waiver_bid"], vs: [bidN] };
     const hasDrop = dropId != null && dropId !== "";
     const q = hasDrop
-      ? `mutation($l:Snowflake!,$ka:[String],$va:[Int],$kd:[String],$vd:[Int],$ks:[String],$vs:[Int]){ submit_waiver_claim(league_id:$l, k_adds:$ka, v_adds:$va, k_drops:$kd, v_drops:$vd, k_settings:$ks, v_settings:$vs){ transaction_id status adds drops settings } }`
-      : `mutation($l:Snowflake!,$ka:[String],$va:[Int],$ks:[String],$vs:[Int]){ submit_waiver_claim(league_id:$l, k_adds:$ka, v_adds:$va, k_settings:$ks, v_settings:$vs){ transaction_id status adds drops settings } }`;
+      ? `mutation($l:Snowflake!,$ka:[String],$va:[Int],$kd:[String],$vd:[Int],$ks:[String],$vs:[Int]){ submit_waiver_claim(league_id:$l, k_adds:$ka, v_adds:$va, k_drops:$kd, v_drops:$vd, k_settings:$ks, v_settings:$vs){ transaction_id status leg adds drops settings } }`
+      : `mutation($l:Snowflake!,$ka:[String],$va:[Int],$ks:[String],$vs:[Int]){ submit_waiver_claim(league_id:$l, k_adds:$ka, v_adds:$va, k_settings:$ks, v_settings:$vs){ transaction_id status leg adds drops settings } }`;
     if (hasDrop) Object.assign(vars, { kd: [String(dropId)], vd: [Number(rosterId)] });
     const d = await call(username, q, vars);
     const tx = d.submit_waiver_claim;
-    if (!tx?.transaction_id) return { ok: false, detail: "Sleeper didn't return a claim." };
-    const back = await getPendingClaims(username, leagueId, leg, rosterId);
+    if (!tx?.transaction_id) return { ok: false, verified: false, detail: "Sleeper didn't return a claim." };
+    // The leg Sleeper filed it under (when it says) is read first.
+    const legList = claimLegs(tx.leg, legs || [], leg);
+    let back = { claims: [], statuses: [], legs: legList, scope: "roster" };
+    let readErr = null;
+    try {
+      back = await getPendingClaims(username, leagueId, legList, rosterId);
+    } catch (e) {
+      readErr = e.message;
+    }
     const found = back.claims.some((c) => String(c.transaction_id) === String(tx.transaction_id));
-    return { ok: found, verified: found, transactionId: tx.transaction_id, status: tx.status ?? null, detail: found ? "claim registered and verified" : `Sleeper returned a claim (status "${tx.status}") but it did not appear when read back (statuses seen: ${back.statuses.join(", ") || "none"}).` };
+    if (found) markClaimsProven(username, "verified");
+    return {
+      ok: true,
+      verified: found,
+      transactionId: tx.transaction_id,
+      status: tx.status ?? null,
+      leg: tx.leg ?? null,
+      detail: found
+        ? "claim registered and verified"
+        : `Sleeper accepted it (status "${tx.status}") but the read-back couldn't see it (weeks checked: ${back.legs.join(", ") || "none"}; statuses seen: ${back.statuses.join(", ") || "none"}${readErr ? `; read failed: ${readErr}` : ""}). Check Sleeper.`,
+    };
   });
 }
 

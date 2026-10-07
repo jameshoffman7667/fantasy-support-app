@@ -174,11 +174,14 @@ export function computeAllSources({ pools, settings, sleeperPlayers }) {
       if (!sid) continue;
       const e = entry(sid, metaPos(sid) || rec.pos, metaTeam(sid) || rec.team);
       e.E = round(espn.adjustForScoring(rec, settings));
+      if (rec.own != null) e.own = rec.own; // v4.1: rostered %
       // ESPN's feed only gives us receptions and passing TDs, not a full line.
       setLine(e, "E", { rec: rec.rec, pass_td: rec.passTd });
     }
     for (const [team, rec] of Object.entries(ep.byTeamDef || {})) {
-      entry(team, "DEF", team).E = round(espn.adjustForScoring(rec, settings));
+      const d = entry(team, "DEF", team);
+      d.E = round(espn.adjustForScoring(rec, settings));
+      if (rec.own != null) d.own = rec.own;
     }
   }
   return out;
@@ -358,20 +361,27 @@ export function leanSummary(leans) {
 }
 
 /** Picks the projection for one player: Vegas raw, else the first other source with its lean applied. */
+/** v4.1: this week's projection from the in-memory cache only (the Available-page search never computes a week). */
+export function cachedPick(season, week, profileKey, sleeperId) {
+  const hit = cache.get(`${season}|${week}|${profileKey}`);
+  return hit ? pick(hit.result, sleeperId) : null;
+}
+
 export function pick(result, sleeperId) {
   const e = result?.all?.get(String(sleeperId));
   if (!e) return { proj: null, projSource: null, projFactor: null, projStats: null };
   // v2.8: projStats is the stat line from the same source as the number
   // (raw, before any lean — the lean only scales the points total).
   const props = e.props || null; // v3.6
-  if (e.V != null) return { proj: e.V, projSource: "V", projFactor: null, projStats: e.lines?.V || null, props };
+  const rostered = e.own ?? null; // v4.1: ESPN rostered %
+  if (e.V != null) return { proj: e.V, projSource: "V", projFactor: null, projStats: e.lines?.V || null, props, rostered };
   for (const src of ["T", "S", "E"]) {
     if (e[src] == null) continue;
     const lean = result.leans?.[src]?.[e.pos];
     const f = lean && !lean.none ? lean.factor : 1;
-    return { proj: round(e[src] * f), projSource: src, projFactor: f !== 1 ? f : null, projRaw: e[src], projStats: e.lines?.[src] || null, props };
+    return { proj: round(e[src] * f), projSource: src, projFactor: f !== 1 ? f : null, projRaw: e[src], projStats: e.lines?.[src] || null, props, rostered };
   }
-  return { proj: null, projSource: null, projFactor: null, projStats: null, props };
+  return { proj: null, projSource: null, projFactor: null, projStats: null, props, rostered };
 }
 
 export function clearCache() {

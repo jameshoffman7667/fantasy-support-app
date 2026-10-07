@@ -46,7 +46,8 @@ import * as bestBall from "./bestBall.js"; // v3.8: best ball leaderboards
 import { assetLinks } from "./androidApp.js"; // v4.0: Android app (Digital Asset Links)
 import * as gemini from "./gemini.js";
 import * as tank01 from "./tank01.js";
-import { getLastSummary } from "./projectionHub.js";
+import { getLastSummary, cachedPick } from "./projectionHub.js";
+import { searchFreeAgents } from "./playerSearch.js"; // v4.1
 import { simulateSeason } from "./simulate.js";
 import { isPushConfigured, getPublicKey, saveSubscription, removeSubscription } from "./push.js";
 import {
@@ -569,18 +570,26 @@ app.post("/api/private/claim", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
-    const out = await priv.submitClaim(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, leg: await sleeperLeg(lg), addId: req.body?.addId, dropId: req.body?.dropId, bid: req.body?.bid, confirm: req.body?.confirm });
+    const leg = await sleeperLeg(lg);
+    const out = await priv.submitClaim(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, leg, legs: [leg, leg + 1, Number(lg.week)], addId: req.body?.addId, dropId: req.body?.dropId, bid: req.body?.bid, confirm: req.body?.confirm });
     if (out?.ok) privateData.recordPush(req.user.username, lg.id, "waiver", { keys: req.body?.keys });
     res.json(out);
   } catch (e) {
     privError(res, e);
   }
 });
+// v4.1: "I can see it in Sleeper" — the user confirms a sent-but-unverified claim, which unlocks pushing every claim at once.
+app.post("/api/private/claim/confirm", (req, res) => {
+  const v = priv.markClaimsProven(req.user.username, "manual");
+  res.json({ ok: true, claimsProven: v });
+});
 app.post("/api/private/claim/cancel", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
-    res.json(await priv.cancelClaim(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: await sleeperLeg(lg), confirm: req.body?.confirm }));
+    // v4.1: the claim's own leg when the client knows it (a claim can be filed under next week).
+    const leg = Number(req.body?.leg) > 0 ? Number(req.body.leg) : await sleeperLeg(lg);
+    res.json(await priv.cancelClaim(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg, confirm: req.body?.confirm }));
   } catch (e) {
     privError(res, e);
   }
@@ -664,6 +673,24 @@ app.post("/api/waivers/research", async (req, res) => {
     res.json({ ok: Boolean(out), at: out?.at ?? null, players: out?.players?.length ?? 0 });
   } catch (err) {
     res.status(502).json({ error: err.message || "The waiver research failed." });
+  }
+});
+
+// v4.1: the Available page's player search — any free agent in this league, in a list or not.
+app.get("/api/waivers/search", async (req, res) => {
+  const lg = ownBuilt(req, res, req.query.leagueId);
+  if (!lg) return;
+  try {
+    const players = await sleeper.getPlayers();
+    const out = searchFreeAgents({
+      players,
+      faSearch: lg.faSearch || { rosteredIds: [...(lg.rosterIds || [])] },
+      q: req.query.q,
+      projOf: (id) => cachedPick(lg.season, lg.week, lg.scoringProfile, id),
+    });
+    res.json({ players: out, partial: !lg.faSearch });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Search failed." });
   }
 });
 

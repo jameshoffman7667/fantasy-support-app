@@ -465,9 +465,10 @@ export function PushResults({ results }) {
   return (
     <div className="space-y-1" data-push-results>
       {results.map((r, i) => (
-        <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${r.ok ? C.ok : C.major}`, color: C.text }} className="rounded-md px-3 py-2 text-xs">
+        // v4.1: sent but not verified (a waiver claim Sleeper accepted that the read-back couldn't see) is yellow.
+        <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${r.ok ? (r.verified === false ? C.minor : C.ok) : C.major}`, color: C.text }} className="rounded-md px-3 py-2 text-xs" data-push-result={r.ok ? (r.verified === false ? "sent" : "ok") : "failed"}>
           <div>{r.label}</div>
-          <div style={{ color: r.ok ? C.ok : C.major }}>{r.ok ? (r.verified ? "Done — read back from Sleeper and confirmed" : "Sent") : "Not confirmed"}{r.detail ? ` — ${r.detail}` : ""}</div>
+          <div style={{ color: r.ok ? (r.verified === false ? C.minor : C.ok) : C.major }}>{r.ok ? (r.verified ? "Done — read back from Sleeper and confirmed" : r.verified === false ? "Sent, not verified" : "Sent") : "Not confirmed"}{r.detail ? ` — ${r.detail}` : ""}</div>
         </div>
       ))}
     </div>

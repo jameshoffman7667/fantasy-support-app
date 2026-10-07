@@ -15,6 +15,8 @@ import * as store from "./projectionStore.js";
  *  removed    [claimKey] generated claims the user deleted
  *  custom     [{key,addId,addName,pos,bid,dropId,dropName}] claims the user added by hand
  *  order      [claimKey] saved order within each bid group (drag handle)
+ *  dropsArranged  v4.1: true once the user has dragged the Drops list (then his order is kept, not re-sorted by rostered %)
+ *  unselected     v4.1: [claimKey] proposed claims the user unticked (not pushed / not on the checklist)
  */
 const k = (username, leagueId) => `waiver_plan:${username}:${leagueId}`;
 const str = (v, n = 80) => String(v ?? "").slice(0, n);
@@ -24,7 +26,7 @@ const num = (v, min, max) => {
 };
 
 export function emptyPlan() {
-  return { entryMode: "dollars", drops: [], bids: [], edits: {}, removed: [], custom: [], order: [], updatedAt: null };
+  return { entryMode: "dollars", drops: [], bids: [], edits: {}, removed: [], custom: [], order: [], dropsArranged: false, unselected: [], updatedAt: null };
 }
 
 export function sanitize(input) {
@@ -55,6 +57,8 @@ export function sanitize(input) {
     .filter((c) => c && c.addId != null && num(c.bid, 0, 1e6) != null)
     .map((c, i) => ({ key: str(c.key || `c:${i}:${c.addId}`, 100), addId: str(c.addId, 40), addName: str(c.addName), pos: str(c.pos, 6), bid: num(c.bid, 0, 1e6), dropId: c.dropId == null || c.dropId === "" ? null : str(c.dropId, 40), dropName: c.dropId ? str(c.dropName) : null }));
   out.order = (Array.isArray(p.order) ? p.order : []).slice(0, 1000).map((x) => str(x, 100));
+  out.dropsArranged = p.dropsArranged === true;
+  out.unselected = (Array.isArray(p.unselected) ? p.unselected : []).slice(0, 500).map((x) => str(x, 100));
   return out;
 }
 

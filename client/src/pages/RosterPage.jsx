@@ -82,20 +82,23 @@ function PointsCol({ p }) {
  * actual stat lines, usage, projected and actual points. `notes` are coloured lines under it; `highlight`
  * ("in" | "out" | "ir") marks a change on the Proposed lineup tab.
  */
-function RosterPlayerRow({ slot, player: p, profile, severity = null, notes = [], highlight = null, sub = null, emptyLabel = "(empty)" }) {
+function RosterPlayerRow({ slot, player: p, profile, severity = null, notes = [], highlight = null, sub = null, emptyLabel = "(empty)", onTapEmpty = null }) {
   const sev = severity ? STATUS[severity] : null;
   const edge = highlight === "in" ? C.ok : highlight === "out" ? C.minor : highlight === "ir" ? C.major : sev ? sev.color : C.border;
   const bg = highlight === "in" ? C.okBg : highlight === "out" ? C.minorBg : C.surface;
   if (!p) {
+    // v4.1: an open bench spot (with its "consider a waiver add" note) is a link to this league's Waivers page.
+    const Tag = onTapEmpty ? "button" : "div";
     return (
-      <div style={{ background: bg, border: `1px solid ${C.border}`, borderLeft: `3px solid ${edge}` }} className="rounded-md px-2.5 py-2.5 flex items-center gap-2.5" data-roster-row="empty" data-slot={slot}>
+      <Tag {...(onTapEmpty ? { type: "button", onClick: onTapEmpty, "aria-label": `${emptyLabel} — open Waivers`, "data-open-waivers": true } : {})} style={{ background: bg, border: `1px solid ${C.border}`, borderLeft: `3px solid ${edge}` }} className="w-full text-left rounded-md px-2.5 py-2.5 flex items-center gap-2.5" data-roster-row="empty" data-slot={slot}>
         <PosBox label={slot} />
         <div className="min-w-0 flex-1">
           <div style={{ color: C.textMuted }} className="text-sm">{emptyLabel}</div>
           {sub}
           {notes.map((n, i) => <div key={i} style={{ color: n.color }} className="text-xs mt-0.5" {...(n.attr || {})}>{n.text}</div>)}
         </div>
-      </div>
+        {onTapEmpty && <span style={{ color: C.brand }} className="text-[11px] shrink-0">Waivers ›</span>}
+      </Tag>
     );
   }
   const m = p.matchup;
@@ -170,7 +173,7 @@ function rowNotes(league) {
   };
 }
 
-function CurrentLineup({ league }) {
+function CurrentLineup({ league, onOpenWaivers = null }) {
   const notesFor = rowNotes(league);
   const starterRows = league.roster.rows.filter((r) => r.slot !== "BN");
   const benchRows = league.roster.rows.filter((r) => r.slot === "BN");
@@ -186,7 +189,7 @@ function CurrentLineup({ league }) {
       <SectionLabel>Bench</SectionLabel>
       <div className="space-y-1.5">
         {benchRows.map((r, i) => (
-          <RosterPlayerRow key={i} slot="BN" player={bench[i] || null} profile={league.scoringProfile} severity={r.severity} notes={notesFor(r, bench[i]?.name)} emptyLabel="Open bench slot" />
+          <RosterPlayerRow key={i} slot="BN" player={bench[i] || null} profile={league.scoringProfile} severity={r.severity} notes={notesFor(r, bench[i]?.name)} emptyLabel="Open bench slot" onTapEmpty={!bench[i] && onOpenWaivers ? onOpenWaivers : null} />
         ))}
       </div>
       {(league.ir || []).length > 0 && (
@@ -663,7 +666,7 @@ function LineupTab({ league, onSaveRanking, hideWeather = false }) {
 /* ------------------------------------------------------------------ */
 /*  v3.0 — merged Roster page: roster, then Proposed changes / Update   */
 /* ------------------------------------------------------------------ */
-export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount }) {
+export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, onOpenTab = null }) {
   const [sub, setSub] = useState("current");
   const changes = useMemo(() => proposeChanges(league), [league]);
   const [checked, setChecked] = useState(() => new Set());
@@ -698,7 +701,7 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount }) 
       </div>
       {sub === "current" ? (
         <>
-          <CurrentLineup league={league} />
+          <CurrentLineup league={league} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
           <SuggestedChanges league={league} changes={changes} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />
         </>
       ) : (
