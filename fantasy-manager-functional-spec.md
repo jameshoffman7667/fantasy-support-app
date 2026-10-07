@@ -562,6 +562,18 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 **Deploy.** Optional Dockhand webhook after both images are pushed.
 
+### 8.2t v4.2 — Waivers "All" tab, Analytics → Scouting, stats table
+
+**Stats list.** A spreadsheet-managed list of 75 stats (ID, name, category, type Projection/Stat/Both/Neither, in the drop-downs Yes/No, positions, data from, notes). Downloaded and uploaded from Analytics → Scouting; an upload replaces every column changed; IDs are fixed.
+
+**All tab (Waivers → Available, default).** Every free agent in the league. Search bar on top with a filters-and-sort button: Projection/Stats; Category → Stat (filtered by category, position and type) with ascending/descending; Season; Week / Season (Season, Season average, a week). The chosen value is shown on each card; more load on scroll.
+
+**Scouting (Analytics).** Same pickers, multi-select; position filter; player search with preview and multi-select (Clear inside). Table of the chosen stats for all players (20 + Load more) or the picked ones. Column pop-up: definition, source, Min/Max, sort, sort bands (suggested good/OK/poor per position, editable), Clear. Multi-level sort: bands first in level order, then values in level order. Clear all at the top; last setup kept; named bookmarks.
+
+**Time rules.** Several seasons/weeks combine; Season average divides counting stats by games with snaps; rates stay whole-period values. Stats that exist only today are blank for any past time and not selectable then.
+
+**Stats table.** The server keeps weekly stat and projection lines (Sleeper + nflverse), loaded on first use.
+
 ---
 
 ## 8b. Pre-Kickoff Push Alerts (v2)
@@ -735,3 +747,11 @@ Collected here since they cut across multiple sections:
 109. **Page chrome (v4.1):** yellow Clear variances button; league tabs styled as status boxes; plain last crumb; open bench spot links to Waivers.
 110. **Research schedule (v4.1):** Tuesday and Wednesday ~8:00 and ~16:00 Toronto, remembering previous sources.
 111. **Auto-deploy (v4.1):** Dockhand Git stack webhook after both images push, URL and secret from GitHub secrets.
+112. **Stats list (v4.2):** managed in James's spreadsheet; re-uploads replace every changed column; IDs fixed; missing rows switched off.
+113. **All tab (v4.2):** first and default Available tab; search on top; one sort stat with direction; projection or stat, season, Season / Season average / week.
+114. **Category → Stat (v4.2):** the Stat drop-down is filtered by Category, position and the Projection/Stats type.
+115. **Current-only stats (v4.2):** blank for past seasons/weeks and not selectable while such a time filter is on.
+116. **Scouting (v4.2):** every active player at the chosen positions with his status in the tracked leagues; multi-select pickers; several seasons/weeks combined.
+117. **Sorting (v4.2):** levels in the order set; banded columns sort by band first (level order), then by value (level order); suggested bands per position from the card thresholds or thirds.
+118. **Saving (v4.2):** last setup kept per user, plus named bookmarks.
+119. **Stats table (v4.2):** own SQLite table of weekly stat and projection lines.

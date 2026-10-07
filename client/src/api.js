@@ -351,3 +351,30 @@ export function runWaiverResearch({ force = false, week = null } = {}) {
 export function searchFreeAgents(leagueId, q) {
   return request(`/api/waivers/search?leagueId=${encodeURIComponent(leagueId)}&q=${encodeURIComponent(q)}`);
 }
+
+// v4.2: stats list, stats query (Waivers → All, Analytics → Scouting), saved views and bookmarks.
+export function getStatsConfig() {
+  return request(`/api/stats/config`);
+}
+export function queryStats(body) {
+  return jsonPost(`/api/stats/query`, body);
+}
+export function getStatsView(key) {
+  return request(`/api/stats/view?key=${encodeURIComponent(key)}`);
+}
+export function saveStatsView(key, state) {
+  return jsonPost(`/api/stats/view`, { key, state });
+}
+export function getBookmarks() {
+  return request(`/api/stats/bookmarks`);
+}
+export function saveBookmark(name, state) {
+  return jsonPost(`/api/stats/bookmarks`, { name, state });
+}
+export function deleteBookmark(name) {
+  return jsonPost(`/api/stats/bookmarks`, { name, delete: true });
+}
+export function importStatsSheet(fileBase64) {
+  return jsonPost(`/api/stats/config/import`, { fileBase64 });
+}
+export const statsSheetUrl = () => `/api/stats/config.xlsx`;

@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -33,6 +33,30 @@ instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
 
 ---
+
+## v4.2 — Waivers "All" tab, Analytics → Scouting, own stats table
+
+**Commit (short):** `v4.2: feat: All tab sort, Scouting, stats table`
+
+**Commit (extended):**
+v4.2 adds stat-driven scouting.
+
+Waivers → Available has a new default "All" tab: every free agent in the league, with the search bar on top and a filters button. The Filters & sort pop-up picks Projection or Stats, a Category, a Stat (filtered by category, position and type) with ascending/descending, a season and Season / Season average / any week. The chosen value shows on each card; more load as you scroll.
+
+Analytics gains a Scouting page: the same pickers as multi-selects, a position filter, a player search with live preview and multi-select, and a table of every chosen stat for all players (20 at a time) or just the picked ones. Each column has a definition, source, Min/Max, sort and editable good/OK/poor sort bands; sorts stack by level, bands first. Last setup is kept; bookmarks save named setups.
+
+The server keeps its own weekly stats table (Sleeper stats and projections plus nflverse) and a stats list seeded from James's spreadsheet, downloadable and re-uploadable as .xlsx. Stats that exist only today are blank and hidden once a past season or week is chosen.
+
+**Details**
+- Manual step: none required — no docker-compose or environment-variable changes. The stats list ships in `server/config/stats-config.json` (inside the image, not the data volume).
+- Stats list (`server/statConfig.js`, table `stat_config`): seeded once from James's spreadsheet of 2026-10-07 (75 stats; passing / rushing / receiving 2-point conversions, special-teams TDs and projection source set to No). `GET /api/stats/config.xlsx` downloads it as the same spreadsheet (ID, Stat, Category, Type, In drop-down, Positions, Data from, Notes, with Yes/No and Type lists); `POST /api/stats/config/import` (owner) takes it back: every changed column is saved, row order = drop-down order, unknown IDs are reported and ignored, a missing row is switched to No, and a sheet with errors (bad Type / Yes-No, missing columns, duplicate IDs) saves nothing. Download / Upload sit at the bottom of Analytics → Scouting. `server/xlsxLite.js` reads and writes .xlsx without a new dependency.
+- How each stat is worked out, its definition, source and which way is good: `server/statDefs.js`.
+- Stats table (`server/statsStore.js`, tables `stat_lines`, `stat_line_weeks`): one row per player per week for actual stats and projections. Actual = Sleeper's weekly stats (incl. team defenses) with nflverse filling gaps and adding EPA, air yards, YAC, sacks taken and snap counts; a season Sleeper lacks comes from nflverse alone. Projections = Sleeper's weekly projections (2025 on). Loaded the first time a week is asked for (4 at a time); past seasons kept for good, this season's recent weeks refreshed after 12 h (current week 1 h), current/future projections after 6 h.
+- Query (`server/statQuery.js`, `POST /api/stats/query`): Waivers = the league's free agents (not rostered, a position the league uses, game not locked); Scouting = every active player at the chosen positions. Counting stats are summed over the chosen weeks; fantasy points are scored week by week with the league's settings (Scouting: a "Fantasy points scored with" league picker); Season average divides by games played (weeks with offensive snaps > 0; a stat line for K/DEF); rates and shares (snap %, target share, TPRR/YPRR, aDOT, separation, CPOE, EPA/dropback, pressure %, …) come from the advanced-stat aggregate over the chosen weeks and are never divided again; several seasons or weeks are combined. Position rank = rank by projected points at the position. Current-only stats (rostered %, age, ROS points, ECR, article mentions, trending adds, dynasty value, Vegas lines and props) have a value only for "now" (this season with Season / Season average, or the current week) — otherwise they're blank and the pickers don't offer them (a selected one is cleared).
+- Waivers → Available → **All** (default tab): search bar on top with a filters-and-sort button (icon) beside it; Filters & sort pop-up: Projection / Stats, Category → Stat (filtered by category, the position chips and the type), ascending / descending, Season (years the shown players have been in the league, never before the data starts) and Week / Season (Season, Season average, weeks 1–18). Each card shows "Stat: value"; 20 at a time, more as you scroll (button as fallback). The last choice is kept per user; "this week" keeps meaning the current week.
+- Analytics → **Scouting**: position chips, player search (preview while typing, filtered by the chips; multi-select; Clear players inside the list), the pickers as multi-selects (Category, Stat, Seasons, Week / Season — Season and Season average are each exclusive, weeks combine), then a table: Player, Leagues (Yours / Avail N / Rostered from your tracked leagues), one column per stat. No players picked = all players, 20 at a time + Load more; players picked = only them. Column pop-up: definition, source, Min / Max (filters; blanks fail), Sort none/ascending/descending (levels in the order set, shown in the header as ↑1 / ↓2), sort bands per position or for all positions (add, edit, remove; "Suggested good / OK / poor" uses the player card's thresholds when the stat has them, else the top/middle/bottom third of the players shown, labels flipped when lower is better), Clear this stat. Sorting: every banded column's band (in level order), then every column's value (in level order), blanks last. Cells in a band are coloured Good / OK / Poor. Clear at the top resets filters and sorts; the last setup is saved; Bookmarks save / load / delete named setups (same name replaces).
+- Tests: new suite (81 checks: seeding, spreadsheet round trip and import rules, stat lines from Sleeper + nflverse, staleness, week ranges, sums, per-week scoring incl. defense tiers, season averages over games, current-only blanking, projections and ranks, advanced shares and WOPR, universes, routes incl. upload, views and bookmarks, picker options, band and multi-level sorting with James's Age/TPRR example, Min/Max, suggested bands). Earlier suites unchanged. Browser harness: All tab and pop-up, current-only stats dropping out for a past season, Scouting table, column pop-up, bands, search multi-select, bookmarks, Clear.
+- Not verified: Sleeper's weekly stats for older seasons (nflverse fills in), Sleeper's `pass_sack` / `off_snp` names, live response sizes and first-load times for many seasons.
 
 ## v4.1 — Claims push fix, Drops, free-agent search, roster warnings
 

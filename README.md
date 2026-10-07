@@ -474,6 +474,13 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.2 additions
+- **Waivers → Available → All** (now the first tab): every free agent, sorted by any stat. The button next to the search bar opens Filters & sort: Projection or Stats, Category, Stat, up/down, Season and Week / Season.
+- **Analytics → Scouting:** pick positions, stats, seasons and weeks (multi-select), search and pick players, and compare them in a table. Tap a column header for its definition, Min/Max, sort and sort bands. Bookmarks save a setup by name.
+- **Stats list:** Scouting → Stats list → Download sheet gives the spreadsheet of stats; change it in Excel and Upload it (owner) to change names, categories, types and what the drop-downs offer.
+- The server now keeps its own weekly stats table; the first time a season is chosen it takes a moment to load.
+- No compose or environment changes in this release.
+
 ### v4.1 additions
 - **Claim pushes:** a claim Sleeper accepts is now found when read back (it checks this week and next). If the app still can't see it, the result says "Sent, not verified" — check Sleeper and tap **I can see it in Sleeper**; from then on Push sends every ticked claim at once.
 - **Claims page:** "Drops" (least-rostered first until you drag them; rostered %, projection, injury, next matchup), tick boxes with **Select all**, **Clear all** for claims and drops (tap twice), player cards on every name.
@@ -1045,6 +1052,12 @@ server/
   waiverCategories.js     Available page categories (Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff) and research/injury notes (v3.9)
   androidApp.js           /.well-known/assetlinks.json for the Android app, from ANDROID_APP_SHA256 / ANDROID_APP_PACKAGE (v4.0)
   playerSearch.js         Available-page search: any free agent in a league (v4.1)
+  statConfig.js           Stats list (table stat_config), seeded from config/stats-config.json; .xlsx download/upload (v4.2)
+  statDefs.js             How each stat is worked out, its definition and source (v4.2)
+  statsStore.js           Own weekly stats/projections table (stat_lines) from Sleeper + nflverse (v4.2)
+  statQuery.js            Sums, averages, rates and current-only values for Waivers → All and Scouting (v4.2)
+  statsApi.js             /api/stats routes: config, query, views, bookmarks (v4.2)
+  xlsxLite.js             Minimal .xlsx reader/writer (v4.2)
   rosProjections.js       Rest-of-season points from Sleeper weekly projections (v3.5)
   tradeTools.js           Position strength, strengths/weaknesses, pick slots, value fairness (v3.5)
   nflverseStats.js        nflverse CSV downloads (weekly, season, team, snaps, PFR, NGS, players), disk-cached (v3.5)
@@ -1058,10 +1071,10 @@ server/
 client/
   src/App.jsx            The app shell: state, navigation, builds, modals (v3.6: pages split out)
   src/ui/                 theme.js (colours, formatting), common.jsx (shared components), modals.jsx,
-                          playerCard.jsx (player pop-up), chrome.jsx (header, user menu, tab bar), compute.js (page status)
+                          playerCard.jsx (player pop-up), chrome.jsx (header, user menu, tab bar), compute.js (page status), statPickers.jsx (v4.2 stat pickers)
   src/pages/              Dashboard, RosterPage, WaiverPage, TradePage, InjuryPage, LeaguePage, SeasonOutlook,
-                          Account, Analytics, GameDay, Pickem, Commish (v3.8)
-  src/lineup.js, rosterChanges.js, variances.js, waiverPlan.js, waiverLists.js   Pure logic (unit-tested)
+                          Account, Analytics, GameDay, Pickem, Commish (v3.8), Scouting (v4.2, inside Analytics)
+  src/lineup.js, rosterChanges.js, variances.js, waiverPlan.js, waiverLists.js, statsView.js (v4.2: stat pickers, bands, multi-level sort)   Pure logic (unit-tested)
   src/api.js              Calls our own backend, never external APIs directly
   public/manifest.webmanifest  PWA manifest (installable in Chrome)
   public/sw.js             Service worker (app-shell caching; never caches /api/*)

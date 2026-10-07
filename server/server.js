@@ -48,6 +48,7 @@ import * as gemini from "./gemini.js";
 import * as tank01 from "./tank01.js";
 import { getLastSummary, cachedPick } from "./projectionHub.js";
 import { searchFreeAgents } from "./playerSearch.js"; // v4.1
+import { registerStatsRoutes } from "./statsApi.js"; // v4.2: stats list, Waivers → All, Analytics → Scouting
 import { simulateSeason } from "./simulate.js";
 import { isPushConfigured, getPublicKey, saveSubscription, removeSubscription } from "./push.js";
 import {
@@ -81,7 +82,7 @@ app.use(cors());
 // v3.8: the charter upload route takes files up to 10 MB (as base64 JSON); everything else keeps the small default.
 const jsonBig = express.json({ limit: "15mb" });
 const jsonSmall = express.json();
-app.use((req, res, next) => (req.path === "/api/commish/charter/upload" ? next() : jsonSmall(req, res, next)));
+app.use((req, res, next) => (req.path === "/api/commish/charter/upload" || req.path === "/api/stats/config/import" ? next() : jsonSmall(req, res, next)));
 
 // Manual cookie parsing (see auth.js) — populates req.cookies for every
 // route below, including the login route itself.
@@ -693,6 +694,9 @@ app.get("/api/waivers/search", async (req, res) => {
     res.status(502).json({ error: err.message || "Search failed." });
   }
 });
+
+// v4.2: stats list (spreadsheet), stats query, saved views and bookmarks.
+registerStatsRoutes(app, { requireAuth, requireOwner, builtLeague: (u, id) => getBuiltLeague(u, id)?.data || null, trackedLeagueIds: (u) => (getUserState(u)?.leagueIds || []).map(String), jsonBig });
 
 /* ---------------- v3.7: FAAB database, opponent bid report, waiver simulator ---------------- */
 const trackedLeague = (req, res, leagueId) => {

@@ -1,4 +1,5 @@
 import * as api from "../api.js";
+import { ScoutingPage } from "./Scouting.jsx"; // v4.2
 import { Loader2, RefreshCw, Wind } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
 import { BootstrapScreen, CardCtx, ErrorScreen, Modal, SectionLabel, Select, TeamLogo, Toggle } from "../ui/common.jsx";
@@ -289,15 +290,16 @@ function PerformanceScreen() {
 }
 
 // v2.8: Analytics has two views — projection accuracy and matchup rankings.
-export function AnalyticsScreen({ authUser, onDvpChange }) {
+export function AnalyticsScreen({ authUser, onDvpChange, leagues = [] }) {
   const [view, setView] = useState("matchups");
   return (
     <div>
-      <div className="flex gap-1.5 px-4 pt-3">
+      <div className="flex gap-1.5 px-4 pt-3 flex-wrap">
         {[
           ["matchups", "Matchup rankings"],
           ["accuracy", "Projection accuracy"],
           ["performance", "My performance"],
+          ["scouting", "Scouting"], // v4.2
         ].map(([k, label]) => (
           <button
             key={k}
@@ -309,7 +311,7 @@ export function AnalyticsScreen({ authUser, onDvpChange }) {
           </button>
         ))}
       </div>
-      {view === "accuracy" ? <AccuracyScreen authUser={authUser} /> : view === "performance" ? <PerformanceScreen /> : <MatchupRankings onDvpChange={onDvpChange} authUser={authUser} />}
+      {view === "scouting" ? <ScoutingPage authUser={authUser} leagues={leagues} /> : view === "accuracy" ? <AccuracyScreen authUser={authUser} /> : view === "performance" ? <PerformanceScreen /> : <MatchupRankings onDvpChange={onDvpChange} authUser={authUser} />}
     </div>
   );
 }

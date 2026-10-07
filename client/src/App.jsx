@@ -633,7 +633,7 @@ export default function App() {
         />
       )}
       {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
-      {view.screen === "analytics" && <AnalyticsScreen authUser={authUser} onDvpChange={() => setDvpVersion((v) => v + 1)} />}
+      {view.screen === "analytics" && <AnalyticsScreen authUser={authUser} leagues={computed} onDvpChange={() => setDvpVersion((v) => v + 1)} />}
       {view.screen === "gameday" && <GameDayScreen />}
       {view.screen === "pickem" && <PickemScreen onChangedCount={setPickemChanged} />}
       {view.screen === "commish" && <CommishScreen key={view.commishLeagueId || "all"} initialLeagueId={view.commishLeagueId || null} onSummaryChange={loadCommishSummary} />}

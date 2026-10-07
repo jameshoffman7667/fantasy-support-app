@@ -9,6 +9,8 @@
  * cards: { [id]: { pos, ... } }
  */
 export const CATEGORIES = [
+  // v4.2: "All" — every free agent in the league, sorted by any stat (Filters & sort); the default tab.
+  { key: "all", label: "All", blurb: "Every free agent in this league, sorted by the stat you choose (filter button)." },
   { key: "hype", label: "Hype Train", blurb: "Recommended in this week's waiver articles, Reddit and X posts — most mentions first." },
   { key: "spot", label: "Spot Start", blurb: "Best projections for this week." },
   { key: "ros", label: "ROS", blurb: "Most projected points for the rest of the season." },

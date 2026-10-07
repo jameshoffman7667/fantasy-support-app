@@ -4,7 +4,9 @@ import { pushKeys } from "../variances.js";
 import { CATEGORIES, POSITION_FILTERS, categoryView, keyLabel } from "../waiverLists.js"; // v3.9
 import { availableElsewhere, compareToRoster, waiverRosterWarnings } from "../ui/compute.js"; // v3.9, v4.1
 import { claimKey, clearClaims, clearDrops, describeClaim, effectiveClaims, flatten, groupClaims, orderDrops, resetClaims, selectedClaims, setBid, simulate, syncDrops, toDollars } from "../waiverPlan.js";
-import { ChevronRight, Loader2, Search, X } from "lucide-react";
+import { ChevronRight, Loader2, Search, SlidersHorizontal, X } from "lucide-react";
+import { expandPositions, fmtValue, normalizeView, sortRows } from "../statsView.js"; // v4.2
+import { StatPickers } from "../ui/statPickers.jsx"; // v4.2
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BidBox, ConfirmPush, DragHandle, DragList, EntryModeToggle, Headshot, MatchupChip, Modal, PrivateGate, PushResults, SectionLabel, SourceTag, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
@@ -257,7 +259,7 @@ function ElsewhereModal({ player, leagues, mode, onClose }) {
 }
 
 // v4.1: search any free agent in this league (in a list below or not) and add a claim on him.
-function FreeAgentSearch({ league, renderRow }) {
+function FreeAgentSearch({ league, renderRow, right = null }) {
   const [q, setQ] = useState("");
   const [st, setSt] = useState({ loading: false, players: null, error: null });
   useEffect(() => {
@@ -281,7 +283,8 @@ function FreeAgentSearch({ league, renderRow }) {
   }, [q, league.id]);
   return (
     <div className="px-1 pb-2" data-fa-search>
-      <label className="flex items-center gap-2 rounded-md px-2 py-1.5" style={inputStyle}>
+      <div className="flex items-center gap-2">
+      <label className="flex-1 min-w-0 flex items-center gap-2 rounded-md px-2 py-1.5" style={inputStyle}>
         <Search size={14} style={{ color: C.textFaint }} />
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search any free agent to add a claim…" className="flex-1 bg-transparent outline-none text-sm" style={{ color: C.text }} aria-label="Search free agents" data-fa-search-input />
         {st.loading && <Loader2 size={13} className="animate-spin" style={{ color: C.textMuted }} />}
@@ -291,6 +294,8 @@ function FreeAgentSearch({ league, renderRow }) {
           </button>
         )}
       </label>
+      {right}
+      </div>
       {st.error && <div style={{ color: C.major }} className="text-[11px] pt-1">{st.error}</div>}
       {st.players && (
         <div className="space-y-1.5 pt-2" data-fa-search-results>
@@ -313,6 +318,120 @@ function FreeAgentSearch({ league, renderRow }) {
   );
 }
 
+// v4.2: the stats list is the same for every page — loaded once per session.
+let statsCfgPromise = null;
+export function loadStatsConfig() {
+  if (!statsCfgPromise) statsCfgPromise = api.getStatsConfig().catch((e) => ((statsCfgPromise = null), Promise.reject(e)));
+  return statsCfgPromise;
+}
+export const resetStatsConfig = () => (statsCfgPromise = null);
+const PAGE = 20;
+export function defaultWaiverView(cur) {
+  return { mode: "proj", categories: ["General"], stats: ["fpts"], dir: "desc", seasons: [cur?.season].filter(Boolean), period: "weeks", weeks: [cur?.week].filter(Boolean) };
+}
+
+// v4.2: Waivers → Available → All: every free agent in the league, sorted by any stat from the stats list.
+function AllTab({ league, filter, rowProps, cardFor }) {
+  const [cfg, setCfg] = useState(null);
+  const [view, setView] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState({ loading: true, rows: [], error: null });
+  const [shown, setShown] = useState(PAGE);
+  const sentinel = useRef(null);
+  const positions = expandPositions(filter);
+  useEffect(() => {
+    let alive = true;
+    Promise.all([loadStatsConfig(), api.getStatsView("waivers").catch(() => ({ state: null }))])
+      .then(([c, v]) => {
+        if (!alive) return;
+        setCfg(c);
+        // A saved "this week" follows the calendar: it means the current week, not the week it was saved in.
+        const saved = v.state || {};
+        const follow = saved.followsWeek ? { seasons: [c.cur?.season], period: "weeks", weeks: [c.cur?.week] } : {};
+        setView(normalizeView({ ...defaultWaiverView(c.cur), ...saved, ...follow }, c, { positions: expandPositions("ALL"), cur: c.cur }));
+      })
+      .catch((e) => alive && setData({ loading: false, rows: [], error: e.message }));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const changeView = (v) => {
+    setView(v);
+    const cur = cfg?.cur;
+    const followsWeek = Boolean(cur && v.period === "weeks" && v.weeks.length === 1 && v.weeks[0] === cur.week && v.seasons.length === 1 && v.seasons[0] === cur.season);
+    api.saveStatsView("waivers", { ...v, followsWeek }).catch(() => {});
+  };
+  const statId = view?.stats?.[0] || null;
+  const sig = view ? JSON.stringify([league.id, positions, view.mode, view.seasons, view.period, view.weeks, statId]) : null;
+  useEffect(() => {
+    if (!view) return undefined;
+    let alive = true;
+    setData((d) => ({ ...d, loading: true, error: null }));
+    const t = setTimeout(() => {
+      api
+        .queryStats({ scope: "fa", leagueId: league.id, positions, mode: view.mode, time: { seasons: view.seasons, period: view.period, weeks: view.weeks }, stats: statId ? [statId] : [] })
+        .then((r) => alive && (setData({ loading: false, rows: r.rows || [], error: null, note: r.loaded?.length ? r.loaded.join("; ") : null }), setShown(PAGE)))
+        .catch((e) => alive && setData({ loading: false, rows: [], error: e.message }));
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
+  const sorted = useMemo(() => (statId ? sortRows(data.rows, [statId], { [statId]: { dir: view?.dir || "desc" } }) : data.rows), [data.rows, statId, view?.dir]);
+  // load more as the list scrolls into view (the button is the fallback)
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || typeof IntersectionObserver === "undefined") return undefined;
+    const io = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && setShown((n) => n + PAGE), { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [sorted.length, shown]);
+  const statName = statId ? cfg?.rows.find((r) => r.id === statId)?.stat || statId : null;
+  const timeLabel = view ? `${view.mode === "proj" ? "Projected" : "Actual"} · ${view.seasons.join(", ")} · ${view.period === "season" ? "season" : view.period === "avg" ? "season average" : `week ${view.weeks.join(", ")}`}` : "";
+  return (
+    <div data-all-tab>
+      <FreeAgentSearch
+        league={league}
+        renderRow={(r) => <AvailableRow key={r.id} {...rowProps({ ...r, ...compareToRoster(league, r) }, "search")} />}
+        right={
+          <button type="button" onClick={() => setOpen(true)} aria-label="Filters and sort" title="Filters and sort" style={{ background: C.surfaceRaised, border: `1px solid ${C.border}`, color: C.text }} className="rounded-md p-2 shrink-0" data-filters-button>
+            <SlidersHorizontal size={16} />
+          </button>
+        }
+      />
+      {open && cfg && view && (
+        <Modal title="Filters & sort" onClose={() => setOpen(false)}>
+          <StatPickers cfg={cfg} cur={cfg.cur} view={view} onChange={changeView} positions={positions} rows={data.rows} firstStat={cfg.firstStatSeason} firstProj={cfg.firstProjSeason} />
+          <button type="button" onClick={() => setOpen(false)} style={{ background: C.brand, color: "#fff" }} className="w-full rounded-md py-2 text-sm font-medium mt-3" data-filters-done>
+            Done
+          </button>
+        </Modal>
+      )}
+      <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2" data-all-sort>
+        {statName ? `Sorted by ${statName} (${view?.dir === "asc" ? "low to high" : "high to low"}) · ${timeLabel}` : "Choose a stat to sort by (filter button)."} · {data.loading ? "loading…" : `${data.rows.length} free agents`}
+      </div>
+      {data.error && <div style={{ color: C.major }} className="text-xs px-1 pb-2">{data.error}</div>}
+      {data.note && <div style={{ color: C.textFaint }} className="text-[10px] px-1 pb-2">Some weeks couldn't load: {data.note}</div>}
+      <div className="space-y-1.5" data-category-list="all">
+        {sorted.slice(0, shown).map((r) => {
+          const p = cardFor(r);
+          const v = statId ? r.values?.[statId] : null;
+          return <AvailableRow key={r.id} {...rowProps(p, statId ? `${statName}: ${fmtValue(statId, v)}` : null)} />;
+        })}
+      </div>
+      {shown < sorted.length && (
+        <div ref={sentinel} className="pt-2">
+          <button type="button" onClick={() => setShown((n) => n + PAGE)} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="w-full rounded-md py-2 text-sm" data-load-more>
+            Load more ({sorted.length - shown} left)
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = [] }) {
   const budget = league.waiverInfo?.budget || 0;
   const isFaab = Boolean(league.waiverInfo?.faab);
@@ -320,7 +439,7 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = []
   const wc = league.waiverCategories || fallbackLists(league);
   const hypeReady = (wc.lists?.hype || []).length > 0;
   const [filter, setFilter] = useState("ALL");
-  const [cat, setCat] = useState(hypeReady ? "hype" : "spot");
+  const [cat, setCat] = useState("all"); // v4.2: All is the default tab
   const hints = useMemo(() => {
     const m = new Map();
     for (const x of faab.result?.players || []) {
@@ -331,7 +450,7 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = []
   }, [faab.result]);
   const rowsById = useMemo(() => new Map((league.waiver?.rows || []).map((r) => [r.id, r])), [league.waiver]);
   const onBid = (p, dollars) => setPlan((pl) => ({ ...pl, bids: setBid(pl.bids, p, dollars) }));
-  const view = categoryView(wc.lists, wc.cards, cat, filter);
+  const view = cat === "all" ? [] : categoryView(wc.lists, wc.cards, cat, filter);
   const rowFor = (id) => {
     const card = wc.cards[id];
     const known = rowsById.get(id);
@@ -347,7 +466,6 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = []
   return (
     <div>
       {elsewhereFor && <ElsewhereModal player={elsewhereFor.player} leagues={elsewhereFor.leagues} mode={mode} onClose={() => setElsewhereFor(null)} />}
-      <FreeAgentSearch league={league} renderRow={(r) => <AvailableRow key={r.id} {...rowProps({ ...r, ...compareToRoster(league, r) }, "search")} />} />
       <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap" data-available-controls>
         <div className="flex items-center gap-1 flex-wrap" data-pos-filter>
           {POSITION_FILTERS.map((f) => (
@@ -374,13 +492,14 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = []
           {faab.loading ? "Working out suggested bids…" : faab.error ? `Suggested bids unavailable: ${faab.error}` : faab.result?.note ? faab.result.note : faab.result ? `Suggested bids (70% / 95% of winning bids, ${faab.result.history?.windowLabel?.toLowerCase() || "last 21 days"}) are on each card.` : null}
         </div>
       )}
-      {view.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>{cat === "hype" && !hypeReady ? "No research yet for this week." : "Nobody available here right now."}</div>}
-      <div className="space-y-1.5" data-category-list={cat}>
+      {cat === "all" && <AllTab league={league} filter={filter} rowProps={rowProps} cardFor={(r) => (wc.cards[r.id] ? rowFor(r.id) : rowsById.get(r.id) || { ...r, ...compareToRoster(league, r) })} />}
+      {cat !== "all" && view.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>{cat === "hype" && !hypeReady ? "No research yet for this week." : "Nobody available here right now."}</div>}
+      {cat !== "all" && <div className="space-y-1.5" data-category-list={cat}>
         {view.map((e) => {
           const p = rowFor(e.id);
           return <AvailableRow key={p.id} {...rowProps(p, keyLabel(cat, p))} />;
         })}
-      </div>
+      </div>}
       {league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
       <div className="mt-3">
         <DropSummary league={league} />
