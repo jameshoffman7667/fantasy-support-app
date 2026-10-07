@@ -3,7 +3,3 @@ server/.env
 .env
 dist/
 .DS_Store
-# v3.9: Android signing keys never go into git (ANDROID_APK.md)
-*.keystore
-*.keystore.b64
-*.jks

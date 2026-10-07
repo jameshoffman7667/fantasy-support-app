@@ -1,6 +1,0 @@
-# Keep the Gradle wrapper usable on the Linux build machine even when committed from Windows.
-gradlew text eol=lf
-*.sh text eol=lf
-*.bat text eol=crlf
-*.jar binary
-*.png binary
