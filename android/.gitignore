@@ -1,0 +1,19 @@
+# Gradle / Android Studio
+.gradle/
+build/
+/app/build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Signing keys never go into git — they live in GitHub secrets (see ANDROID_APK.md).
+*.keystore
+*.jks
+*.p12
+keystore.b64
+
+# Python cache from tools/make-icons.py
+__pycache__/

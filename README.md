@@ -125,9 +125,10 @@ below.
 - **PWA installability**: real manifest, generated icons, and a
   stale-while-revalidate service worker that deliberately never caches
   `/api/*`.
-- **`ANDROID_APK.md`**: step-by-step guide to packaging this as a
-  side-loadable Android APK via a Trusted Web Activity (PWABuilder or
-  Google's Bubblewrap CLI) — no native rewrite needed.
+- **`ANDROID_APK.md`**: step-by-step guide to the Android app — since
+  v4.0 a ready-made Trusted Web Activity project in `android/`, built and
+  signed by a GitHub workflow (PWABuilder remains a fallback) — no native
+  rewrite needed.
 
 ## What's new from two rounds ago (bug fixes + PWA/Android)
 
@@ -472,6 +473,12 @@ requested, logged loudly if they don't match. **If kickoff times still
 look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
+
+### v4.0 additions
+- **Android app (APK).** `android/` is a ready-made Android project (a Trusted Web Activity: the app opens this site full screen in Chrome's engine, with its own icon, splash screen and notifications). The new GitHub workflow **Build Android app** turns it into a signed APK on the "Android app" release. Follow [`ANDROID_APK.md`](./ANDROID_APK.md): make a signing key once, add two GitHub secrets, run the workflow, set `ANDROID_APP_SHA256` in Portainer, install the APK.
+- The server answers `/.well-known/assetlinks.json` from `ANDROID_APP_SHA256` / `ANDROID_APP_PACKAGE`, the check Android uses to open the app without an address bar; nginx forwards that one path to it. `/api/health` shows `androidAppLinks`.
+- Pushes that only change `android/` no longer rebuild the Docker images.
+- **Manual step:** the compose file gains `ANDROID_APP_SHA256` / `ANDROID_APP_PACKAGE` — update the stack from the new compose file (an image-only update won't add them).
 
 ### v3.9 additions
 - **Waivers → Available** has six categories — Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff — under a position filter (All, QB, RB, WR, TE, FLEX) and the $/% switch. All shows 5 per position sorted together; a position 15; FLEX 25.
@@ -994,7 +1001,8 @@ not just restarts.
 
 ```
 .github/workflows/
-  docker-publish.yml    Builds + pushes both images to Docker Hub (linux/amd64) on push to main
+  docker-publish.yml    Builds + pushes both images to Docker Hub (linux/amd64) on push to main (not for android/-only pushes)
+  android-apk.yml       Builds the signed Android APK, publishes it on the "Android app" release (v4.0)
 docker-compose.yml      PRIMARY: pulls prebuilt Docker Hub images, no build context — Portainer just pulls. Requires an external `caddy_net` Docker network to already exist (see Caddy section).
 docker-compose.local-build.yml  Builds from source instead — local dev, or build-on-host if preferred
 .env.example           Template for local `docker compose up` (skip if using Portainer)
@@ -1026,6 +1034,7 @@ server/
   commish.js              Charters: link/upload reading, Gemini checklist, actions, status, settings-log auto-tick, July re-reads (v3.8)
   bestBall.js             Best ball leaderboards: Max PF, combined leagues, hero multipliers, exact best lineups, CSV evidence (v3.8)
   waiverCategories.js     Available page categories (Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff) and research/injury notes (v3.9)
+  androidApp.js           /.well-known/assetlinks.json for the Android app, from ANDROID_APP_SHA256 / ANDROID_APP_PACKAGE (v4.0)
   rosProjections.js       Rest-of-season points from Sleeper weekly projections (v3.5)
   tradeTools.js           Position strength, strengths/weaknesses, pick slots, value fairness (v3.5)
   nflverseStats.js        nflverse CSV downloads (weekly, season, team, snaps, PFR, NGS, players), disk-cached (v3.5)
@@ -1047,11 +1056,13 @@ client/
   public/manifest.webmanifest  PWA manifest (installable in Chrome)
   public/sw.js             Service worker (app-shell caching; never caches /api/*)
   public/icons/            Generated app icons (192/512/maskable/apple-touch)
-  public/.well-known/      Placeholder for Android's assetlinks.json — see ANDROID_APK.md
+  public/.well-known/      Note only: assetlinks.json is served by the server since v4.0 (ANDROID_APK.md)
   Dockerfile              Multi-stage: vite build -> nginx serves it
   nginx.conf               Proxies /api to the server container by service name; correct manifest content-type
   vite.config.js           Proxies /api to localhost:4000 (dev only, Option C)
-ANDROID_APK.md          Step-by-step: package this as a side-loadable Android APK (TWA, no native rewrite)
+ANDROID_APK.md          Step-by-step: build and install the Android app (TWA, no native rewrite) (v4.0)
+android/                Android app project (Trusted Web Activity, Bubblewrap template): gradle.properties = site/name,
+                        app/ = manifest, 3 Java classes, icons/splash/notification images; tools/make-icons.py (v4.0)
 ```
 
 ## A note on how far this was actually tested

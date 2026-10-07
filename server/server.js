@@ -43,6 +43,7 @@ import * as waiverPlan from "./waiverPlan.js";
 import * as faabDb from "./faabDb.js"; // v3.7: FAAB database, opponent bid report, waiver simulator
 import * as commish from "./commish.js"; // v3.8: charters
 import * as bestBall from "./bestBall.js"; // v3.8: best ball leaderboards
+import { assetLinks } from "./androidApp.js"; // v4.0: Android app (Digital Asset Links)
 import * as gemini from "./gemini.js";
 import * as tank01 from "./tank01.js";
 import { getLastSummary } from "./projectionHub.js";
@@ -118,7 +119,18 @@ function dropConnectSessionsFor(username) {
 // Deliberately left unprotected — this is what the Docker healthcheck
 // hits, and it carries nothing sensitive.
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, fantasyProsKeySet: Boolean(process.env.FANTASYPROS_API_KEY && process.env.FANTASYPROS_API_KEY !== "your_key_here") });
+  res.json({ ok: true, fantasyProsKeySet: Boolean(process.env.FANTASYPROS_API_KEY && process.env.FANTASYPROS_API_KEY !== "your_key_here"), androidAppLinks: Boolean(assetLinks()) });
+});
+
+// v4.0: Digital Asset Links for the Android app — Android checks this file to confirm the app and the
+// site belong together; when it matches, the app opens full screen with no address bar. Public on
+// purpose (Android fetches it without a login); configured by ANDROID_APP_SHA256 / ANDROID_APP_PACKAGE.
+// nginx forwards /.well-known/assetlinks.json here (client/nginx.conf).
+app.get("/.well-known/assetlinks.json", (req, res) => {
+  const statements = assetLinks();
+  if (!statements) return res.status(404).json({ error: "The Android app isn't set up on this server (ANDROID_APP_SHA256 is empty or invalid)." });
+  res.set("Cache-Control", "public, max-age=300");
+  res.json(statements);
 });
 
 /* ---------------- Login / logout / auth status (per-user, v2.1) ---------------- */

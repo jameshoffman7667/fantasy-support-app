@@ -1,4 +1,6 @@
-Replace this file with the real assetlinks.json content from PWABuilder
-or `bubblewrap build` (see ANDROID_APK.md at the repo root) — only
-needed if you build an Android APK. Until then this placeholder does
-nothing and is harmless to leave in place.
+Nothing to put here any more (v4.0).
+
+The Android app's /.well-known/assetlinks.json is now served by the server
+container from its ANDROID_APP_SHA256 (and optional ANDROID_APP_PACKAGE)
+environment variables — nginx forwards that one path to it (client/nginx.conf),
+so a file placed here would be ignored. See ANDROID_APK.md at the repo root.

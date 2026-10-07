@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copyright 2019 Google Inc. Licensed under the Apache License, Version 2.0
+    (Bubblewrap 1.25 template). Where the splash screen image is shared with Chrome.
+-->
+<paths>
+    <files-path path="twa_splash/" name="twa_splash" />
+</paths>
