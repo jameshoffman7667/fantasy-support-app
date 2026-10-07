@@ -519,7 +519,7 @@ app.post("/api/private/reject-trade", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
-    res.json(await priv.rejectTrade(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: Number(req.body?.leg ?? lg.week), confirm: req.body?.confirm }));
+    res.json(await priv.rejectTrade(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: Number(req.body?.leg ?? (await sleeperLeg(lg))), confirm: req.body?.confirm }));
   } catch (e) {
     privError(res, e);
   }
@@ -528,7 +528,7 @@ app.post("/api/private/withdraw-trade", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
-    res.json(await priv.withdrawTrade(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: Number(req.body?.leg ?? lg.week), confirm: req.body?.confirm }));
+    res.json(await priv.withdrawTrade(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: Number(req.body?.leg ?? (await sleeperLeg(lg))), confirm: req.body?.confirm }));
   } catch (e) {
     privError(res, e);
   }
@@ -557,7 +557,7 @@ app.post("/api/private/claim", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
-    const out = await priv.submitClaim(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, leg: Number(lg.week), addId: req.body?.addId, dropId: req.body?.dropId, bid: req.body?.bid, confirm: req.body?.confirm });
+    const out = await priv.submitClaim(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, leg: await sleeperLeg(lg), addId: req.body?.addId, dropId: req.body?.dropId, bid: req.body?.bid, confirm: req.body?.confirm });
     if (out?.ok) privateData.recordPush(req.user.username, lg.id, "waiver", { keys: req.body?.keys });
     res.json(out);
   } catch (e) {
@@ -568,7 +568,7 @@ app.post("/api/private/claim/cancel", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
-    res.json(await priv.cancelClaim(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: Number(lg.week), confirm: req.body?.confirm }));
+    res.json(await priv.cancelClaim(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg: await sleeperLeg(lg), confirm: req.body?.confirm }));
   } catch (e) {
     privError(res, e);
   }
@@ -614,8 +614,11 @@ app.post("/api/faab", async (req, res) => {
     );
     const sleeperPlayers = await sleeper.getPlayers();
     const thisLeagueRaw = fullLeagues.find((l) => l?.league_id === leagueId);
+    // v3.9: suggestions for every player the Available page can show (all categories), not only the old list.
+    const pool = new Map((targetLeague.freeAgents || []).map((p) => [String(p.id), p]));
+    for (const c of Object.values(targetLeague.waiverCategories?.cards || {})) if (!pool.has(String(c.id))) pool.set(String(c.id), c);
     const result = await getFaabSuggestions(
-      targetLeague.freeAgents || [],
+      [...pool.values()],
       fullLeagues.filter(Boolean),
       sleeperPlayers,
       session.week,
@@ -625,6 +628,30 @@ app.post("/api/faab", async (req, res) => {
     res.json({ ...result, budget: thisLeague?.settings?.waiver_budget ?? null });
   } catch (err) {
     res.status(502).json({ error: err.message || "Couldn't compute FAAB suggestions." });
+  }
+});
+
+// v3.9: claims and trades are filed under Sleeper's own week, which can trail the app's week by a day or two
+// (the app moves on Tuesday 10:00; see sleeper.getState).
+async function sleeperLeg(lg) {
+  const st = await sleeper.getState().catch(() => null);
+  return Number(st?.sleeperWeek ?? lg.week);
+}
+
+/* ---------------- v3.9: waiver research (Hype Train) ---------------- */
+// Runs (or re-runs with force) the grounded Gemini search of this week's waiver articles, Reddit and X posts.
+// The league build only reads the cached result; the client rebuilds the league afterwards to show it.
+app.use("/api/waivers", requireAuth);
+app.post("/api/waivers/research", async (req, res) => {
+  if (!gemini.isConfigured()) return res.status(400).json({ error: "No Gemini key set (GEMINI_API_KEY)." });
+  try {
+    const st = await sleeper.getState();
+    const season = Number(st.season);
+    const week = Math.max(1, Number(req.body?.week) || Number(st.week) || 1);
+    const out = await gemini.waiverHype(season, week, { force: req.body?.force === true });
+    res.json({ ok: Boolean(out), at: out?.at ?? null, players: out?.players?.length ?? 0 });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "The waiver research failed." });
   }
 });
 

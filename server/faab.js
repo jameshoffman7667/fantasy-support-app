@@ -157,6 +157,7 @@ export async function getFaabSuggestions(freeAgents, leagueSummaries, sleeperPla
       .filter((b) => (faId != null ? String(b.playerId) === String(faId) : norm(b.playerName) === norm(fa.name) && (!fa.pos || b.pos === fa.pos)))
       .map((b) => ({ bid: b.bidAmount, budget: b.budget, pct: Math.round(b.bidPct * 10) / 10, leagueName: b.leagueName, at: b.at }));
     return {
+      id: faId != null ? String(faId) : null, // v3.9: the page matches suggestions to cards by id
       name: fa.name,
       pos: fa.pos,
       suggestion70Pct: percentile(useSample, 70),

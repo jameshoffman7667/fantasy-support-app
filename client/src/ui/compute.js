@@ -92,10 +92,11 @@ export function computeLineup(league) {
 //            a slot he could fill (flex included) — you'd start him;
 //  - yellow: a free agent projected higher than a bench player at his position.
 // Trending is shown on the card but no longer flags anything.
-export function computeWaiver(league, allLeagues) {
+// v3.9: the starter / bench comparison on its own, so every Available-page card (any category) gets it.
+export function compareToRoster(league, fa) {
   const eligible = (slot, pos) => (FLEX_ELIGIBLE[slot] ? FLEX_ELIGIBLE[slot].includes(pos) : slot === pos);
   const projOf = (p) => (p && p.proj != null ? p.proj : 0);
-  const rows = (league.freeAgents || []).map((fa) => {
+  {
     let rule = null;
     let note = null;
     let severity = "ok";
@@ -117,6 +118,13 @@ export function computeWaiver(league, allLeagues) {
         }
       }
     }
+    return { rule, note, severity };
+  }
+}
+
+export function computeWaiver(league, allLeagues) {
+  const rows = (league.freeAgents || []).map((fa) => {
+    const { rule, note, severity } = compareToRoster(league, fa);
     const crossLeagues = allLeagues
       .filter((l) => l.id !== league.id && !l.error)
       .filter((l) => (l.freeAgents || []).some((x) => x.id === fa.id || x.name === fa.name))

@@ -305,3 +305,87 @@ Reply with ONLY the JSON object.`;
     notes: out.notes ? String(out.notes).slice(0, 300) : null,
   };
 }
+
+/* ---------------- v3.9: waiver research ("Hype Train") ---------------- */
+/**
+ * One grounded search a week-half: this week's waiver-wire add articles (redraft AND dynasty), Reddit posts
+ * (r/fantasyfootball, r/DynastyFF — posts, not comments) and X/Twitter posts by fantasy analysts (posts, not
+ * replies). Gemini lists every recommended player with how many distinct sources recommend him, the source names,
+ * whether he's a one-week spot start, a rest-of-season add or a stash (dynasty / long-term), and a one-line summary
+ * of the argument. "mentions" is Gemini's count of what its search found, not an exhaustive census.
+ * Returns { at, model, players: [{ name, pos, team, mentions, sources, kind, dynasty, note }], sources } or null.
+ * Cached 12 hours per week. Unverified from the build sandbox: model id and response shape (see top).
+ */
+const HYPE_TTL = 12 * 60 * 60 * 1000;
+const hypeInFlight = new Map();
+export const hypeCacheKey = (season, week) => `gemini:waiverhype:v1:${season}:${week}`;
+
+export function parseHype(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const r of Array.isArray(arr) ? arr : []) {
+    if (!r?.name) continue;
+    const pos = String(r.pos || r.position || "").toUpperCase().replace("DST", "DEF").replace("D/ST", "DEF");
+    const key = `${String(r.name).toLowerCase()}|${pos}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const kind = ["spot", "ros", "stash"].includes(r.kind) ? r.kind : "ros";
+    out.push({
+      name: String(r.name).slice(0, 60),
+      pos: ["QB", "RB", "WR", "TE", "K", "DEF"].includes(pos) ? pos : null,
+      team: r.team ? String(r.team).toUpperCase().slice(0, 4) : null,
+      mentions: Math.max(1, Math.min(50, Math.round(Number(r.mentions) || 1))),
+      sources: Array.isArray(r.sources) ? r.sources.slice(0, 5).map((s) => String(s).slice(0, 60)) : [],
+      kind,
+      dynasty: Boolean(r.dynasty) || kind === "stash",
+      note: r.note ? String(r.note).slice(0, 240) : null,
+    });
+  }
+  return out.sort((a, b) => b.mentions - a.mentions);
+}
+
+export async function waiverHype(season, week, { force = false, cacheOnly = false } = {}) {
+  if (!isConfigured()) return null;
+  const cacheKey = hypeCacheKey(season, week);
+  const cached = cacheGet(cacheKey);
+  if (cached && !force) return cached;
+  if (cacheOnly && !force) return null;
+  if (hypeInFlight.has(cacheKey)) return hypeInFlight.get(cacheKey);
+  const run = (async () => {
+    const prompt = `You are researching the fantasy football waiver wire for the ${season} NFL season, week ${week}. Use pieces published in the last 7 days.
+Search for:
+1. Redraft waiver-wire "top adds" / pickups articles (e.g. FantasyPros, ESPN, Yahoo, CBS Sports, NFL.com, PFF, Rotoballer, The Athletic, 4for4, Fantasy Footballers).
+2. Dynasty waiver-wire and stash articles (e.g. Dynasty Nerds, Dynasty League Football, KeepTradeCut, FantasyPros dynasty, PFF dynasty).
+3. Reddit POSTS in r/fantasyfootball and r/DynastyFF about waiver adds (posts only, not comments).
+4. X/Twitter POSTS by fantasy football analysts about waiver adds (posts only, not replies).
+List every player recommended as a pickup (up to 60). For each: "mentions" = how many distinct articles/posts you found recommending him; "sources" = up to 4 outlet or account names; "kind" = "spot" (a one-week streamer or spot start), "ros" (should help for the rest of the season) or "stash" (longer-term: dynasty, rookies, handcuffs, injured players returning); "dynasty" = true if the recommendation came from dynasty coverage; "note" = the sources' argument in one sentence (max 30 words: role change, injury ahead of him, usage, schedule...).
+Do not invent players or sources. Reply with ONLY a JSON array, no prose:
+[{"name":"Full Name","pos":"WR","team":"NYJ","mentions":3,"sources":["FantasyPros","r/fantasyfootball"],"kind":"ros","dynasty":false,"note":"..."}]`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }),
+    });
+    if (!res.ok) throw new Error(`Gemini HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const json = await res.json();
+    const cand = json?.candidates?.[0];
+    const text = (cand?.content?.parts || []).map((p) => p.text || "").join("\n");
+    const arr = extractJson(text);
+    if (!Array.isArray(arr)) {
+      console.warn("[gemini] Waiver research: couldn't read a JSON array:", text.slice(0, 400));
+      return null;
+    }
+    const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 20);
+    const out = { at: Date.now(), model: MODEL(), players: parseHype(arr), sources };
+    console.log(`[gemini] Waiver research ${season} wk${week}: ${out.players.length} players, ${sources.length} sources.`);
+    cacheSet(cacheKey, out, HYPE_TTL);
+    return out;
+  })();
+  hypeInFlight.set(cacheKey, run);
+  try {
+    return await run;
+  } finally {
+    hypeInFlight.delete(cacheKey);
+  }
+}

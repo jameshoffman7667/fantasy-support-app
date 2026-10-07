@@ -532,6 +532,20 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 **Evidence export.** A CSV with every team's counted lineup per week (league, week, team, username, slot, player, id, position, points, multiplier, counted, final / current week), then one line per team with the sum of its counted slots, Sleeper's figure and the leaderboard value.
 
+### 8.2r v3.9 — Waiver categories, research notes, quick navigation, Tuesday week
+
+**Available page.** Under the Available tab header: the position filter (All, QB, RB, WR, TE, FLEX) and the $ / % entry switch; then the category tabs Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff. With All, each position shows its first 5 and the players are sorted together by the category's number (not grouped by position); a single position shows 15; FLEX shows 25 across RB, WR and TE. Only players who can be claimed in that league are listed.
+
+**Categories.** Hype Train — players recommended by this week's waiver articles, Reddit posts and X posts (redraft and dynasty), most mentions first. Spot Start — this week's projection (healthy, not on bye). ROS — rest-of-season projected points. Stashes — dynasty / stash recommendations from the research first, then the best dynasty values. Trending — Sleeper's most-added players (24 h). Handcuff — backups of injured starters (the injury-opportunity adds).
+
+**Notes on every card.** If the research mentions a player, his card (in any list) shows the source count and names, spot / rest of season / stash, and the sources' argument in one sentence. If he fills in for an injured starter, the card says for whom. FAAB suggested bids (70% / 95% of winning bids) load automatically and sit on each card; there is no separate FAAB section.
+
+**Research.** One grounded Gemini search (`GEMINI_API_KEY`) over the last 7 days of redraft and dynasty waiver articles, Reddit posts in r/fantasyfootball and r/DynastyFF, and analysts' X posts — posts only, not comments or replies. Cached 12 hours per week, started in the background by a league build (never awaited) or on demand with "Research again".
+
+**Navigation.** The league name and page name in the header are drop-downs (other leagues keep the current page; "League overview"; every page of the league). A tab strip under the League Management header lists Overview, Roster, Waivers, Trades, Injury, League, Outlook, with a dot where a page has open variances.
+
+**Week.** The app moves to the next week on Tuesday at 10:00 (Toronto) instead of waiting for Sleeper, then follows Sleeper again once it moves on; claims and trades are filed under Sleeper's own week.
+
 ---
 
 ## 8b. Pre-Kickoff Push Alerts (v2)
@@ -685,3 +699,8 @@ Collected here since they cut across multiple sections:
 92. **Charter status (v3.8):** yellow when an action is due within a month, red within a week; card shows the next date and every action due that day; the same colours on the league's dashboard "Commish" box.
 93. **Charter updates (v3.8):** Gemini drafts Markdown from approved rule changes to accept, modify or reject; the user pastes it back into the document.
 94. **Best ball leaderboards (v3.8):** Max PF by default with usernames, pot and payouts; optional combined leagues, hero multipliers and week ranges; rules entered in plain words via Gemini; the data behind every total exportable as CSV evidence.
+95. **Available categories (v3.9):** Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff; position filter and $/% on top; All = 5 per position sorted together, a position = 15, FLEX = 25.
+96. **Waiver research (v3.9):** Gemini synthesises waiver articles, Reddit posts and X posts (not comments), redraft and dynasty; research and injury notes appear on every card a player is on.
+97. **FAAB suggestions (v3.9):** on each card, loaded automatically; no separate section.
+98. **Navigation (v3.9):** league and page names are drop-downs; team pages as tabs under League Management.
+99. **Week change (v3.9):** Tuesday 10:00 Toronto time.

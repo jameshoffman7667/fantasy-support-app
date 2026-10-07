@@ -1,8 +1,10 @@
 import * as api from "../api.js";
 import { isLocked } from "../lineup.js";
 import { pushKeys } from "../variances.js";
+import { CATEGORIES, POSITION_FILTERS, categoryView, keyLabel } from "../waiverLists.js"; // v3.9
+import { compareToRoster } from "../ui/compute.js"; // v3.9
 import { claimKey, describeClaim, effectiveClaims, flatten, groupClaims, resetClaims, setBid, simulate, syncDrops, toDollars } from "../waiverPlan.js";
-import { ChevronRight, DollarSign, Loader2, X } from "lucide-react";
+import { ChevronRight, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BidBox, ConfirmPush, DragHandle, DragList, EntryModeToggle, Headshot, MatchupChip, PrivateGate, PushResults, SectionLabel, SourceTag, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
@@ -12,53 +14,6 @@ import { C, POS_COLOR, STATUS, fmtInt, fmtMoney, fmtPct, fmtWhen, inputStyle } f
 /*  WAIVERS (v2.9): Available page + Claims page                       */
 /* ------------------------------------------------------------------ */
 const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
-
-function FaabPanel({ faab, onRun }) {
-  const { loading, result, error } = faab;
-  const h = result?.history;
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg px-3.5 py-3 mb-3">
-      <div className="flex items-center justify-between mb-1">
-        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm flex items-center gap-1.5">
-          <DollarSign size={14} style={{ color: C.brand }} />
-          FAAB Suggestions
-        </div>
-        <button onClick={onRun} disabled={loading} style={{ color: C.brand }} className="text-xs font-medium flex items-center gap-1">
-          {loading ? <Loader2 size={12} className="animate-spin" /> : null}
-          {loading ? "Calculating…" : result ? "Refresh" : "Get suggestions"}
-        </button>
-      </div>
-      <div style={{ color: C.textMuted }} className="text-[11px] mb-2">
-        Based on winning waiver bids over the last 21 days in your tracked leagues and — when the opponent report is on (Opponents tab) — your opponents' other leagues of the same type. Not platform-wide (Sleeper's API doesn't expose that); treat it as a directional guide, not a confidence interval.
-      </div>
-      {error && <div style={{ color: C.major }} className="text-xs">{error}</div>}
-      {result?.note && <div style={{ color: C.textMuted }} className="text-xs">{result.note}</div>}
-      {h && (h.bids.length > 0 || Object.keys(h.byPosition || {}).length > 0) && (
-        <div className="mt-1 mb-2" data-faab-history>
-          <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide mb-1">Bid history · {h.windowLabel}</div>
-          {Object.entries(h.byPosition).length > 0 && (
-            <div className="flex flex-wrap gap-1 mb-1">
-              {Object.entries(h.byPosition).map(([pos, v]) => (
-                <span key={pos} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="text-[10px] rounded px-1.5 py-0.5">
-                  {pos}: median ${v.median} ({v.medianPct}%), max ${v.max}, n={v.n}
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="space-y-0.5">
-            {h.bids.map((b, i) => (
-              <div key={i} style={{ color: C.textMuted }} className="text-[11px] flex justify-between gap-2">
-                <span className="truncate">{b.playerName} <span style={{ color: C.textFaint }}>({b.pos}) · {b.leagueName}</span></span>
-                <span className="shrink-0">${b.bid} <span style={{ color: C.textFaint }}>({b.pct}%)</span></span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      {result?.players?.length > 0 && <div style={{ color: C.textFaint }} className="text-[10px]">Suggested bids (70% / 95% level) appear on each player below.</div>}
-    </div>
-  );
-}
 
 function DropSummary({ league }) {
   const d = league.dropSummary;
@@ -104,7 +59,7 @@ function TypeExtras({ p, leagueType }) {
   return <div style={{ color: C.brand }} className="text-[11px] mt-0.5" data-type-extras>{bits.join(" · ")}</div>;
 }
 
-function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile, leagueType }) {
+function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile, leagueType, keyText = null }) {
   const s = STATUS[p.severity] || STATUS.ok;
   const bid = (plan.bids || []).find((b) => b.id === p.id);
   return (
@@ -124,6 +79,7 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile,
             {p.proj != null ? `Proj ${p.proj.toFixed(1)}` : "No projection"}
             {p.topProj ? ` · #${p.projRank} projected at ${p.pos}` : ""}
             {p.trending ? ` · Trending add${p.trendCount ? ` (+${p.trendCount})` : ""}` : ""}
+            {keyText ? <span style={{ color: C.brand }}> · {keyText}</span> : null}
           </div>
           <TypeExtras p={p} leagueType={leagueType} />
           {p.status && p.status !== "Healthy" && <div style={{ color: C.minor }} className="text-[11px]">{p.status}</div>}
@@ -133,11 +89,17 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile,
               <WeatherChip player={p} />
             </div>
           )}
+          {p.fillIn && <div style={{ color: C.minor }} className="text-[11px] mt-1" data-fill-in>🩹 {p.fillIn}</div>}
+          {p.hype && (
+            <div style={{ color: C.textMuted }} className="text-[11px] mt-1 leading-snug" data-hype-note>
+              <span style={{ color: C.brand }}>📰 {p.hype.mentions} source{p.hype.mentions === 1 ? "" : "s"}{p.hype.sources?.length ? ` (${p.hype.sources.slice(0, 3).join(", ")})` : ""}{p.hype.kind ? ` · ${{ spot: "spot start", ros: "rest of season", stash: "stash" }[p.hype.kind] || p.hype.kind}` : ""}{p.hype.dynasty ? " · dynasty" : ""}:</span> {p.hype.note || "recommended as a pickup."}
+            </div>
+          )}
           {p.note && p.rule && <div style={{ color: s.color }} className="text-[11px] mt-1">{p.rule === "Free agent outprojects a starter" ? "Beats a starter" : "Beats a bench player"}: {p.note}</div>}
           {p.usage && <div className="mt-1"><UsageBadge usage={p.usage} /></div>}
           {p.crossLeagues?.length > 0 && <div style={{ color: C.brand }} className="text-[11px] mt-1">Also available in: {p.crossLeagues.join(", ")}</div>}
           {faabHint && (
-            <div style={{ color: C.textFaint }} className="text-[10px] mt-1">
+            <div style={{ color: C.textFaint }} className="text-[10px] mt-1" data-faab-hint>
               Suggested bid: {fmtMoney((budget * faabHint.suggestion70Pct) / 100)} (70%) · {fmtMoney((budget * faabHint.suggestion95Pct) / 100)} (95%) · n={faabHint.sampleSize}
               {faabHint.playerBids?.length ? ` · this player: ${faabHint.playerBids.map((b) => `$${b.bid}`).join(", ")}` : ""}
             </div>
@@ -159,105 +121,111 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile,
   );
 }
 
-// v3.1: pickups caused by injuries at relevant depth-chart slots (only players you can actually claim).
-function InjuryAddsSection({ league, plan, mode, budget, isFaab, onBid }) {
-  const events = (league.injuryOpportunities?.events || []).filter((e) => (e.freeAdds || []).length > 0 && (!e.questionable || e.flagged));
-  if (events.length === 0) return null;
-  const sevOf = (e) => {
-    const v = (league.variances || []).find((x) => x.page === "waiver" && x.subject === `${e.injured.name} (${e.injured.status})`);
-    return v && !v.cleared ? (v.severity === "major" ? "major" : "minor") : "ok";
+// v3.9: the Available page — position filter and $/% on top, then the categories (Hype Train, Spot Start, ROS,
+// Stashes, Trending, Handcuff). FAAB suggestions sit on each card. Caps: All = 5 per position sorted together,
+// QB/RB/WR/TE = 15, FLEX = 25 (waiverLists.js).
+function fallbackLists(league) {
+  // An older saved build without categories: Spot Start and Trending from the old list.
+  const rows = league.waiver?.rows || [];
+  const cards = Object.fromEntries(rows.map((r) => [r.id, r]));
+  const spot = rows.filter((r) => r.proj != null).map((r) => ({ id: r.id, key: r.proj })).sort((a, b) => b.key - a.key);
+  const trending = rows.filter((r) => r.trending).map((r) => ({ id: r.id, key: r.trendCount ?? 0 })).sort((a, b) => b.key - a.key);
+  return { lists: { spot, trending }, cards, hype: { state: "off" } };
+}
+
+function ResearchStatus({ hype, onRefresh }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const run = async (force) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.runWaiverResearch({ force });
+      onRefresh?.();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
+  if (!hype || hype.state === "off") return <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2">The research needs a Gemini key on the server (GEMINI_API_KEY).</div>;
   return (
-    <div className="mb-3" data-injury-adds>
-      <SectionLabel>Injury adds — {events.length}</SectionLabel>
-      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Starters and top backups who are out, doubtful or likely to miss (QB{league.superflex ? "1-2" : "1"}, RB1-2, WR1-3, TE1), and the next players on their depth chart. Only players you can claim are listed.
-      </div>
-      <div className="space-y-2.5">
-        {events.map((e) => {
-          const sev = sevOf(e);
-          const s = STATUS[sev];
-          return (
-            <div key={e.key} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-2.5 py-2.5 space-y-1.5" data-injury-event={e.key}>
-              <div style={{ color: C.text }} className="text-sm">
-                <span style={{ color: C.textFaint, fontFamily: "Oswald, sans-serif" }} className="text-xs mr-1.5">{e.injured.team} {e.injured.slot}</span>
-                <PlayerLink player={e.injured} className="inline">{e.injured.name}</PlayerLink> <span style={{ color: s.color }} className="text-xs">{e.injured.status}{e.injured.note ? ` — ${e.injured.note}` : ""}</span>
-                {e.mine === "active" && <span style={{ color: C.major }} className="text-[10px] ml-1.5">On your roster</span>}
-              </div>
-              {e.questionable && <div style={{ color: C.minor }} className="text-[11px]">News check: {(e.signals || []).join("; ")}{e.news?.note ? ` — ${e.news.note}` : ""}</div>}
-              <div className="space-y-1.5">
-                {e.freeAdds.map((p) => (
-                  <div key={p.id}>
-                    {p.pos !== e.injured.pos && <div style={{ color: C.textFaint }} className="text-[10px] px-1 pb-0.5">Also consider (top available {p.pos})</div>}
-                    <AvailableRow p={{ ...p, severity: "ok" }} plan={plan} mode={mode} budget={budget} isFaab={isFaab} faabHint={null} onBid={onBid} profile={league.scoringProfile} leagueType={league.leagueType} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+    <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2 flex items-center gap-2 flex-wrap" data-research-status>
+      <span>{hype.state === "ready" ? `Research from ${fmtWhen(hype.at)} · ${hype.players} players found` : "The research is running — refresh in a minute."}</span>
+      <button type="button" disabled={busy} onClick={() => run(hype.state === "ready")} style={{ color: C.brand }} className="underline" data-research-refresh>
+        {busy ? "Researching…" : hype.state === "ready" ? "Research again" : "Refresh"}
+      </button>
+      {err && <span style={{ color: C.major }}>{err}</span>}
     </div>
   );
 }
 
-function AvailablePage({ league, plan, setPlan, faab, onRunFaab }) {
+function AvailablePage({ league, plan, setPlan, faab, onRefresh }) {
   const budget = league.waiverInfo?.budget || 0;
   const isFaab = Boolean(league.waiverInfo?.faab);
   const mode = plan.entryMode;
-  const hints = new Map((faab.result?.players || []).map((x) => [x.name, x]));
-  const dynasty = league.leagueType === "dynasty";
-  // v3.7: sort by this week's projection, or by what matters for the league type (dynasty value / rest of season).
-  const [sortBy, setSortBy] = useState("week");
-  const keyOf = (r) => (sortBy === "week" ? r.proj : dynasty ? r.value : r.ros) ?? -1;
-  const groups = POS_ORDER.map((pos) => ({
-    pos,
-    rows: (league.waiver.rows || []).filter((r) => r.pos === pos).sort((a, b) => keyOf(b) - keyOf(a) || (b.proj ?? -1) - (a.proj ?? -1)),
-  })).filter((g) => g.rows.length);
-  const hasType = (league.waiver.rows || []).some((r) => (dynasty ? r.value != null : r.ros != null));
+  const wc = league.waiverCategories || fallbackLists(league);
+  const hypeReady = (wc.lists?.hype || []).length > 0;
+  const [filter, setFilter] = useState("ALL");
+  const [cat, setCat] = useState(hypeReady ? "hype" : "spot");
+  const hints = useMemo(() => {
+    const m = new Map();
+    for (const x of faab.result?.players || []) {
+      if (x.id) m.set(`id:${x.id}`, x);
+      m.set(`name:${x.name}`, x);
+    }
+    return m;
+  }, [faab.result]);
+  const rowsById = useMemo(() => new Map((league.waiver?.rows || []).map((r) => [r.id, r])), [league.waiver]);
   const onBid = (p, dollars) => setPlan((pl) => ({ ...pl, bids: setBid(pl.bids, p, dollars) }));
+  const view = categoryView(wc.lists, wc.cards, cat, filter);
+  const rowFor = (id) => {
+    const card = wc.cards[id];
+    const known = rowsById.get(id);
+    return known ? { ...card, ...known, hype: card.hype ?? known.hype, fillIn: card.fillIn ?? known.fillIn } : { ...card, ...compareToRoster(league, card) };
+  };
+  const meta = CATEGORIES.find((c) => c.key === cat);
+  const chip = (active) => ({ background: active ? C.brand : "transparent", color: active ? "#fff" : C.textMuted, border: `1px solid ${active ? C.brand : C.border}` });
   return (
     <div>
-      {isFaab && <FaabPanel faab={faab} onRun={onRunFaab} />}
-      <InjuryAddsSection league={league} plan={plan} mode={mode} budget={budget} isFaab={isFaab} onBid={onBid} />
-      <DropSummary league={league} />
-      <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap">
-        <div style={{ color: C.textMuted }} className="text-xs max-w-[60%]">
-          Top 5 projected and top 5 trending free agents at each position, by projection. {isFaab ? "Enter a bid (0 counts) to add a claim." : "Tap “Add claim” to add a claim."}
+      <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap" data-available-controls>
+        <div className="flex items-center gap-1 flex-wrap" data-pos-filter>
+          {POSITION_FILTERS.map((f) => (
+            <button key={f} type="button" onClick={() => setFilter(f)} style={chip(filter === f)} className="rounded-full px-2.5 py-0.5 text-[11px]" data-pos-filter-btn={f} aria-pressed={filter === f}>
+              {f === "ALL" ? "All" : f}
+            </button>
+          ))}
         </div>
         {isFaab && <EntryModeToggle mode={mode} onChange={(m) => setPlan((pl) => ({ ...pl, entryMode: m }))} />}
       </div>
-      {hasType && (
-        <div className="flex items-center gap-1.5 px-1 pb-2 text-[11px]" data-waiver-sort>
-          <span style={{ color: C.textMuted }}>Sort by</span>
-          {[["week", "This week"], ["type", dynasty ? "Dynasty value" : "Rest of season"]].map(([k, label]) => (
-            <button key={k} type="button" onClick={() => setSortBy(k)} style={{ background: sortBy === k ? C.brand : "transparent", color: sortBy === k ? "#fff" : C.textMuted, border: `1px solid ${C.border}` }} className="rounded-full px-2.5 py-0.5" data-waiver-sort-by={k}>{label}</button>
-          ))}
+      <div className="flex overflow-x-auto mb-2 -mx-1 px-1" style={{ borderBottom: `1px solid ${C.border}` }} data-category-tabs>
+        {CATEGORIES.map((c) => (
+          <button key={c.key} type="button" onClick={() => setCat(c.key)} aria-current={cat === c.key ? "page" : undefined} data-category={c.key} style={{ color: cat === c.key ? C.text : C.textMuted, borderBottom: `2px solid ${cat === c.key ? C.brand : "transparent"}` }} className="shrink-0 px-2 py-1.5 text-xs font-medium whitespace-nowrap">
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-1">
+        {meta?.blurb} {isFaab ? "Enter a bid (0 counts) to add a claim." : "Tap “Add claim” to add a claim."}
+      </div>
+      {cat === "hype" && <ResearchStatus hype={wc.hype} onRefresh={onRefresh} />}
+      {isFaab && (
+        <div style={{ color: faab.error ? C.major : C.textFaint }} className="text-[10px] px-1 pb-2" data-faab-status>
+          {faab.loading ? "Working out suggested bids…" : faab.error ? `Suggested bids unavailable: ${faab.error}` : faab.result?.note ? faab.result.note : faab.result ? `Suggested bids (70% / 95% of winning bids, ${faab.result.history?.windowLabel?.toLowerCase() || "last 21 days"}) are on each card.` : null}
         </div>
       )}
-      {dynasty && (league.dynastyStash || []).length > 0 && (
-        <div className="mb-2" data-dynasty-stash>
-          <SectionLabel>Dynasty stashes — best available by dynasty value</SectionLabel>
-          <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">Players who may not help this week but hold long-term value ({league.tradeBasis?.value || "trade values"}).</div>
-          <div className="space-y-1.5">
-            {league.dynastyStash.map((p) => (
-              <AvailableRow key={p.id} p={{ ...p, severity: "ok" }} plan={plan} mode={mode} budget={budget} isFaab={isFaab} faabHint={null} onBid={(pl, d) => setPlan((x) => ({ ...x, bids: setBid(x.bids, pl, d) }))} profile={league.scoringProfile} leagueType={league.leagueType} />
-            ))}
-          </div>
-        </div>
-      )}
-      {league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
-      {groups.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No notable free agents right now.</div>}
-      {groups.map((g) => (
-        <div key={g.pos} data-pos-group={g.pos}>
-          <SectionLabel>{g.pos}</SectionLabel>
-          <div className="space-y-1.5">
-            {g.rows.map((p) => (
-              <AvailableRow key={p.id || p.name} p={p} plan={plan} mode={mode} budget={budget} isFaab={isFaab} faabHint={isFaab && budget ? hints.get(p.name) : null} onBid={onBid} profile={league.scoringProfile} leagueType={league.leagueType} />
-            ))}
-          </div>
-        </div>
-      ))}
+      {view.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>{cat === "hype" && !hypeReady ? "No research yet for this week." : "Nobody available here right now."}</div>}
+      <div className="space-y-1.5" data-category-list={cat}>
+        {view.map((e) => {
+          const p = rowFor(e.id);
+          const hint = isFaab && budget ? hints.get(`id:${p.id}`) || hints.get(`name:${p.name}`) : null;
+          return <AvailableRow key={p.id} p={p} plan={plan} mode={mode} budget={budget} isFaab={isFaab} faabHint={hint} onBid={onBid} profile={league.scoringProfile} leagueType={league.leagueType} keyText={keyLabel(cat, p)} />;
+        })}
+      </div>
+      {league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
+      <div className="mt-3">
+        <DropSummary league={league} />
+      </div>
     </div>
   );
 }
@@ -957,14 +925,21 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount }) {
     [flush]
   );
 
-  const runFaab = async () => {
-    setFaab({ loading: true, result: faab.result, error: null });
-    try {
-      setFaab({ loading: false, result: await api.getFaabSuggestions(sessionId, leagueId), error: null });
-    } catch (err) {
-      setFaab({ loading: false, result: null, error: err.message });
-    }
-  };
+  // v3.9: suggested bids load by themselves (no button) and show on each Available card.
+  const isFaabLeague = Boolean(league.waiverInfo?.faab);
+  const builtAt = league.builtAt || league.cachedAt || null;
+  useEffect(() => {
+    if (!isFaabLeague || !sessionId) return;
+    let cancelled = false;
+    setFaab((f) => ({ ...f, loading: true, error: null }));
+    api
+      .getFaabSuggestions(sessionId, leagueId)
+      .then((result) => !cancelled && setFaab({ loading: false, result, error: null }))
+      .catch((err) => !cancelled && setFaab({ loading: false, result: null, error: err.message }));
+    return () => {
+      cancelled = true;
+    };
+  }, [isFaabLeague, sessionId, leagueId, builtAt]);
 
   const claimCount = plan ? effectiveClaims(plan, { openSpots: Math.max(0, (league.benchSlots ?? (league.bench || []).length) - (league.bench || []).length) }).claims.length : 0;
   const tab = (key, label) => (
@@ -985,7 +960,7 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount }) {
           <Loader2 size={16} className="animate-spin" /> <span className="text-sm">Loading your waiver plan…</span>
         </div>
       ) : sub === "available" ? (
-        <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRunFaab={runFaab} />
+        <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRefresh={onRefresh} />
       ) : sub === "opponents" ? (
         <OpponentsPage league={league} />
       ) : (

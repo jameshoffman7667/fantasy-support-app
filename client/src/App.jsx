@@ -13,7 +13,7 @@ import { RosterPage } from "./pages/RosterPage.jsx";
 import { SeasonOutlookTab } from "./pages/SeasonOutlook.jsx";
 import { TradeTab } from "./pages/TradePage.jsx";
 import { WaiverTab } from "./pages/WaiverPage.jsx";
-import { STATUS_BADGE_TABS, TAB_META, TabBar, TopBar, sourceStatusLabel } from "./ui/chrome.jsx";
+import { LeagueTabs, STATUS_BADGE_TABS, TAB_META, TabBar, TopBar, sourceStatusLabel } from "./ui/chrome.jsx";
 import { BootstrapScreen, CardCtx, ErrorScreen } from "./ui/common.jsx";
 import { computeInjury, computeLineup, computeRoster, computeTrade, computeWaiver } from "./ui/compute.js";
 import { DvpDetailModal, VarianceButton, VarianceReportModal, WeatherModal } from "./ui/modals.jsx";
@@ -541,10 +541,25 @@ export default function App() {
     if (view.screen === "admin") return [root, { label: "Account", onClick: () => navigate({ screen: "account" }) }, { label: "Manage users" }];
     if (view.screen === "select") return liveLeagues.length ? [root, { label: "Edit Leagues" }] : [{ label: "Choose Leagues" }];
     if (view.screen === "dashboard") return [{ label: root.label, root: true }];
-    if (view.screen === "league" && activeLeague) return [root, { label: activeLeague.name }];
-    if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, onClick: () => navigate({ screen: "league", leagueId: activeLeague.id }) }, { label: (TAB_META[view.tab] || TAB_META.roster).label }];
+    // v3.9: the league name and the page name are drop-downs — jump to another league (same page) or another page.
+    const tabKey = view.tab === "lineup" ? "roster" : view.tab;
+    const leagueOptions = (current) => [
+      ...(view.screen === "tab" ? [{ key: "overview", label: "League overview", onSelect: () => navigate({ screen: "league", leagueId: activeLeague.id }) }, { divider: true }] : []),
+      ...liveLeagues.map((l) => ({
+        key: l.id,
+        label: l.name || l.id,
+        current: l.id === current,
+        onSelect: () => navigate(view.screen === "tab" ? { screen: "tab", leagueId: l.id, tab: tabKey } : { screen: "league", leagueId: l.id }),
+      })),
+    ];
+    const pageOptions = () => [
+      { key: "overview", label: "Overview", onSelect: () => navigate({ screen: "league", leagueId: activeLeague.id }) },
+      ...Object.entries(TAB_META).map(([k, m]) => ({ key: k, label: m.label, current: k === tabKey, onSelect: () => navigate({ screen: "tab", leagueId: activeLeague.id, tab: k }) })),
+    ];
+    if (view.screen === "league" && activeLeague) return [root, { label: activeLeague.name, menuKey: "league", options: leagueOptions(activeLeague.id) }];
+    if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, menuKey: "league", options: leagueOptions(activeLeague.id) }, { label: (TAB_META[tabKey] || TAB_META.roster).label, menuKey: "page", options: pageOptions() }];
     return [root];
-  }, [view, sleeperUser, liveLeagues.length, activeLeague, navigate]);
+  }, [view, sleeperUser, liveLeagues, activeLeague, navigate]);
 
   const showRefresh = view.screen === "dashboard" || view.screen === "league" || view.screen === "tab";
   const showWeek = showRefresh && week != null;
@@ -594,6 +609,13 @@ export default function App() {
             else if (tab === "analytics") navigate({ screen: "analytics" });
             else navigate(liveLeagues.length ? { screen: "dashboard" } : { screen: "select" });
           }}
+        />
+      )}
+      {(view.screen === "league" || view.screen === "tab") && activeLeague && (
+        <LeagueTabs
+          active={view.screen === "league" ? "overview" : view.tab === "lineup" ? "roster" : view.tab}
+          statusOf={(k) => activeLeague[k]?.status}
+          onSelect={(k) => navigate(k === "overview" ? { screen: "league", leagueId: activeLeague.id } : { screen: "tab", leagueId: activeLeague.id, tab: k })}
         />
       )}
       {view.screen === "bootstrapping" && <BootstrapScreen />}

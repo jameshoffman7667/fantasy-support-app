@@ -16,6 +16,8 @@ import * as values from "./values.js"; // v3.5: trade values (Roster Audit / Fan
 import * as rosProjections from "./rosProjections.js"; // v3.5
 import * as tradeTools from "./tradeTools.js"; // v3.5
 import * as slp from "./sleeperProjections.js"; // v3.5: scores past stat lines (injury rule)
+import * as gemini from "./gemini.js"; // v3.9: waiver research (Hype Train)
+import * as waiverCats from "./waiverCategories.js"; // v3.9: Available page categories
 
 // Slot labels as they appear AFTER slotLabel() (SUPER_FLEX -> "SFLX"). Before
 // v2.1 this map was keyed "SUPERFLEX", which never matched the "SFLX" label the
@@ -664,13 +666,11 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const valueTable = await values
     .leagueValues({ dynasty: leagueType === "dynasty", superflex, ppr: pprSetting, tep: tepSetting, teams: rosters.length })
     .catch((err) => ({ source: null, error: err.message, valueOf: () => null, details: () => null, picks: [] }));
-  let ros = null;
-  if (leagueType !== "dynasty" || !valueTable.source) {
-    ros = await rosProjections.rosPoints({ season, week, settings: league.scoring_settings }).catch((err) => {
-      console.warn(`[buildLeague] Rest-of-season projections unavailable: ${err.message}`);
-      return null;
-    });
-  }
+  // v3.9: rest-of-season points for every league type (the Available page's ROS list).
+  const ros = await rosProjections.rosPoints({ season, week, settings: league.scoring_settings }).catch((err) => {
+    console.warn(`[buildLeague] Rest-of-season projections unavailable: ${err.message}`);
+    return null;
+  });
   const rosOf = (id) => (ros?.byId?.size ? ros.byId.get(String(id)) ?? null : null);
   let strengthOf;
   let strengthBasis;
@@ -908,6 +908,59 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     console.warn(`[buildLeague] Injury opportunities failed for league ${leagueId}, continuing without them: ${err.message}`);
   }
 
+  // --- v3.9: Available page categories (Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff) ---
+  let waiverCategories = null;
+  try {
+    let hype = null;
+    let hypeState = gemini.isConfigured() ? "pending" : "off";
+    try {
+      hype = await gemini.waiverHype(season, week, { cacheOnly: true });
+      if (hype) hypeState = "ready";
+      else if (gemini.isConfigured()) gemini.waiverHype(season, week).catch((err) => console.warn(`[buildLeague] Waiver research failed: ${err.message}`)); // runs in the background; the next build shows it
+    } catch {
+      hype = null;
+    }
+    const findId = waiverCats.nameIndex(sleeperPlayers);
+    const hypeById = waiverCats.matchHype(hype?.players || [], findId);
+    const events = injuryOpportunities?.events || [];
+    const fillIns = waiverCats.fillInNotes(events);
+    const handcuffs = [];
+    for (const e of events) for (const p of e.freeAdds || []) if (!handcuffs.some((h) => h.id === String(p.id))) handcuffs.push({ id: String(p.id), proj: p.proj ?? null });
+    const spotPool = [...projTop.values()].flat();
+    const lists = waiverCats.buildCategories({
+      isFree: (id) => faFree(id),
+      posOf: (id) => sleeperPlayers[id]?.position || null,
+      projOf: (id) => (projWeek ? hub.pick(projWeek, id)?.proj ?? null : null),
+      rosOf,
+      valueOf: (id) => (valueTable.source ? valueTable.valueOf(id) ?? null : null),
+      spotPool,
+      rosIds: ros?.byId ? ros.byId.keys() : [],
+      valueIds: leagueType === "dynasty" && valueTable.source ? Object.keys(sleeperPlayers).filter((id) => ["QB", "RB", "WR", "TE"].includes(sleeperPlayers[id]?.position)) : [],
+      trending: trending || [],
+      hype: hypeById,
+      handcuffs,
+    });
+    const trendBy = new Map((trending || []).map((t) => [String(t.player_id), Number(t.count) || 0]));
+    const ids = [...new Set(Object.values(lists).flatMap((l) => l.map((e) => e.id)))];
+    const cards = {};
+    await Promise.all(
+      ids.map(async (id) => {
+        const c = await enrich(id);
+        if (!c) return;
+        const m = sleeperPlayers[id];
+        cards[id] = {
+          id: String(id), name: c.name, pos: c.pos, team: c.team, status: c.status, matchup: c.matchup, weather: c.weather, projStats: c.projStats,
+          kickoff: c.kickoff, kickoffLabel: c.kickoffLabel, started: c.started, proj: c.proj, projSource: c.projSource, projFactor: c.projFactor ?? null, usage: c.usage,
+          value: valueTable.source ? valueTable.valueOf(id) ?? null : null, ros: rosOf(id), age: ageOf(m), bye: byeOf(m?.team), rookie: Number(m?.years_exp) === 0,
+          trendCount: trendBy.get(String(id)) ?? null, hype: hypeById.get(String(id)) || null, fillIn: fillIns.get(String(id)) || null, origin: "waiver",
+        };
+      })
+    );
+    waiverCategories = { lists, cards, hype: { state: hypeState, at: hype?.at ?? null, players: hype?.players?.length ?? 0, sourcesFound: hype?.sources?.length ?? 0 } };
+  } catch (err) {
+    console.warn(`[buildLeague] Waiver categories failed for league ${leagueId}: ${err.message}`);
+  }
+
   let dropSummary = { windowDays: 3, items: [], error: null };
   try {
     const activity = await transactions.getLeagueActivity(leagueId, { week });
@@ -1019,6 +1072,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     freeAgents,
     addCandidates, // v3.7
     dynastyStash, // v3.7
+    waiverCategories, // v3.9
     injuryOpportunities,
     weekOver,
     irAllowed: [...irAllowed],

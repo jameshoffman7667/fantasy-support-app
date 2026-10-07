@@ -337,3 +337,8 @@ export function parseBestBallRules(leagueId, prompt) {
   return jsonPost("/api/bestball/parse", { leagueId, prompt });
 }
 export const bestBallCsvUrl = (leagueId) => `/api/bestball/evidence.csv?leagueId=${encodeURIComponent(leagueId)}`;
+
+// v3.9: run (or re-run) the Gemini waiver research behind the Available page's Hype Train.
+export function runWaiverResearch({ force = false, week = null } = {}) {
+  return jsonPost(`/api/waivers/research`, { force, week });
+}

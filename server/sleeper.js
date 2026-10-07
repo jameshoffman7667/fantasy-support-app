@@ -61,11 +61,40 @@ export function getUser(username, opts = {}) {
   // R14: the Sleeper user id never changes — look it up at login/reconnect only.
   return cached(`sl:user:${String(username).toLowerCase()}`, TTL.user, () => sleeperFetch(`/user/${encodeURIComponent(username)}`), opts);
 }
+/**
+ * v3.9: the app moves to the next week on Tuesday at 10:00 Toronto time, without waiting for Sleeper's own week
+ * change (which comes later in the week). Week N counts as finished at the first Tuesday 10:00 that is at least a
+ * day after the app first saw Sleeper report week N (remembered in SQLite, so restarts don't reset it); from then
+ * on `week` is N + 1 until Sleeper itself moves on. Regular season only, never past week 18. `sleeperWeek` keeps
+ * Sleeper's own number (waiver claims and trades are filed under it).
+ */
+export function nextTuesday10(from) {
+  let t = Math.floor(from / (5 * MIN)) * 5 * MIN + 5 * MIN;
+  for (let i = 0; i < 8 * 24 * 12; i++, t += 5 * MIN) {
+    const p = Object.fromEntries(torontoParts.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    if (p.weekday === "Tue" && Number(p.hour) === 10 && Number(p.minute) < 5) return t;
+  }
+  return from + 7 * DAY;
+}
+export function advanceWeek(state, firstSeen, now) {
+  if (!state || state.season_type !== "regular") return state ? { ...state, sleeperWeek: state.week } : state;
+  const w = Number(state.week) || 0;
+  const done = w >= 1 && firstSeen != null && now >= nextTuesday10(firstSeen + DAY);
+  return { ...state, sleeperWeek: state.week, week: done ? Math.min(18, w + 1) : state.week, weekAdvanced: done && w < 18 };
+}
 export async function getState(opts = {}) {
   const fresh = opts.fresh || bootFresh;
   bootFresh = false;
   const now = nowFn();
-  return cached("sl:state", () => Math.max(MIN, nextStatePull(now) - now), () => sleeperFetch(`/state/nfl`), { fresh });
+  const st = await cached("sl:state", () => Math.max(MIN, nextStatePull(now) - now), () => sleeperFetch(`/state/nfl`), { fresh });
+  if (!st || !st.week) return st;
+  const seenKey = `sl:weekseen:${st.season}:${st.week}`;
+  let seen = cacheGet(seenKey);
+  if (seen == null) {
+    seen = now;
+    cacheSet(seenKey, seen, 60 * DAY);
+  }
+  return advanceWeek(st, Number(seen), now);
 }
 export function getUserLeagues(userId, season, opts = {}) {
   // R16: the league list changes once a season (opts.ttl lets cross-ownership use a weekly lifetime instead).

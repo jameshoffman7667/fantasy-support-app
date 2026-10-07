@@ -473,6 +473,13 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v3.9 additions
+- **Waivers → Available** has six categories — Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff — under a position filter (All, QB, RB, WR, TE, FLEX) and the $/% switch. All shows 5 per position sorted together; a position 15; FLEX 25.
+- **Hype Train** comes from a Gemini search of this week's waiver articles, Reddit and X posts (redraft and dynasty; `GEMINI_API_KEY`, the same key as Pick'em). It runs in the background the first time a league is built in a week; tap "Research again" to rerun it. Every card shows the research's argument for a player and, for injury fill-ins, whose spot he takes.
+- **FAAB suggestions** are on each player's card (no button any more).
+- **Header:** the league and page names are drop-downs; the team pages are tabs under League Management.
+- **Week:** moves on Tuesday at 10:00.
+
 ### v3.8 additions
 - **Commish tab** (fifth bottom tab) with **Charters** and **Best Ball**.
 - **Charters:** pick one of your Sleeper leagues (★ = you're the commissioner) and give it its charter — a Google Docs / Drive link shared as **"Anyone with the link can view"** (the app only reads it), or upload a PDF, Word, text or Markdown file (10 MB max). Gemini (`GEMINI_API_KEY`, the same key as Pick'em) reads it and builds the dated checklist; without a key you add actions by hand. Linked charters are re-read each July, and Gemini only runs again if the document changed (at most one Gemini read a day).
@@ -1018,6 +1025,7 @@ server/
   faabDb.js               FAAB database (won + lost bids), opponent bid report, waiver simulator, collection timing (v3.7)
   commish.js              Charters: link/upload reading, Gemini checklist, actions, status, settings-log auto-tick, July re-reads (v3.8)
   bestBall.js             Best ball leaderboards: Max PF, combined leagues, hero multipliers, exact best lineups, CSV evidence (v3.8)
+  waiverCategories.js     Available page categories (Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff) and research/injury notes (v3.9)
   rosProjections.js       Rest-of-season points from Sleeper weekly projections (v3.5)
   tradeTools.js           Position strength, strengths/weaknesses, pick slots, value fairness (v3.5)
   nflverseStats.js        nflverse CSV downloads (weekly, season, team, snaps, PFR, NGS, players), disk-cached (v3.5)
@@ -1034,7 +1042,7 @@ client/
                           playerCard.jsx (player pop-up), chrome.jsx (header, user menu, tab bar), compute.js (page status)
   src/pages/              Dashboard, RosterPage, WaiverPage, TradePage, InjuryPage, LeaguePage, SeasonOutlook,
                           Account, Analytics, GameDay, Pickem, Commish (v3.8)
-  src/lineup.js, rosterChanges.js, variances.js, waiverPlan.js   Pure logic (unit-tested)
+  src/lineup.js, rosterChanges.js, variances.js, waiverPlan.js, waiverLists.js   Pure logic (unit-tested)
   src/api.js              Calls our own backend, never external APIs directly
   public/manifest.webmanifest  PWA manifest (installable in Chrome)
   public/sw.js             Service worker (app-shell caching; never caches /api/*)

@@ -22,13 +22,46 @@ function WeekPicker({ week, onChange, disabled }) {
   );
 }
 
+// v3.9: a crumb with `options` (the league name, the page name) is a drop-down for quick navigation.
+function CrumbMenu({ c, current }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative min-w-0 shrink" data-crumb-menu={c.menuKey || c.label}>
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} className="flex items-center gap-0.5 min-w-0 max-w-full">
+        <span style={{ color: current ? C.text : C.textMuted, fontFamily: "Oswald, sans-serif", fontWeight: current ? 600 : 400 }} className="text-[15px] truncate">
+          {c.label}
+        </span>
+        <ChevronRight size={13} style={{ color: C.textFaint, transform: open ? "rotate(270deg)" : "rotate(90deg)" }} className="shrink-0" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div role="menu" className="absolute left-0 top-full mt-2 z-30 rounded-lg w-60 py-1 shadow-lg max-h-[70vh] overflow-y-auto" style={{ background: C.surfaceRaised, border: `1px solid ${C.border}` }}>
+            {c.options.map((o, i) =>
+              o.divider ? (
+                <div key={`d${i}`} style={{ borderTop: `1px solid ${C.border}` }} className="my-1" />
+              ) : (
+                <button key={o.key || o.label} type="button" role="menuitem" onClick={() => { setOpen(false); o.onSelect?.(); }} className="w-full text-left px-3 py-2 text-sm truncate" style={{ color: o.current ? C.brand : C.text, fontWeight: o.current ? 600 : 400 }} data-crumb-option={o.key || o.label}>
+                  {o.label}
+                </button>
+              )
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Breadcrumb({ crumbs }) {
   return (
-    <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
+    <div className="flex items-center gap-1 min-w-0">
       {crumbs.map((c, i) => (
         <React.Fragment key={i}>
           {i > 0 && <ChevronRight size={13} style={{ color: C.textFaint }} className="shrink-0" />}
-          {c.onClick ? (
+          {c.options?.length ? (
+            <CrumbMenu c={c} current={i === crumbs.length - 1} />
+          ) : c.onClick ? (
             <button
               onClick={c.onClick}
               style={{ color: C.textMuted, fontFamily: "Oswald, sans-serif" }}
@@ -118,6 +151,25 @@ export const TAB_META = {
   league: { label: "League", short: "League", Icon: Settings2 },
   odds: { label: "Season Outlook", short: "Outlook", Icon: Trophy },
 };
+
+// v3.9: the team pages as tabs under the League Management header (Overview, Roster, Waivers, …).
+export function LeagueTabs({ active, onSelect, statusOf }) {
+  const tabs = [{ key: "overview", short: "Overview" }, ...Object.entries(TAB_META).map(([key, m]) => ({ key, short: m.short }))];
+  const dotColor = { major: C.major, minor: C.minor };
+  return (
+    <div className="flex overflow-x-auto px-2" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }} data-league-tabs>
+      {tabs.map((t) => {
+        const st = statusOf?.(t.key);
+        return (
+          <button key={t.key} type="button" onClick={() => onSelect(t.key)} aria-current={active === t.key ? "page" : undefined} data-league-tab={t.key} style={{ color: active === t.key ? C.text : C.textMuted, borderBottom: `2px solid ${active === t.key ? C.brand : "transparent"}` }} className="relative shrink-0 px-3 py-2 text-xs font-medium whitespace-nowrap">
+            {t.short}
+            {dotColor[st] && <span className="absolute top-1.5 right-0.5 inline-block w-1.5 h-1.5 rounded-full" style={{ background: dotColor[st] }} aria-label={st === "major" ? "Needs action" : "Worth a look"} />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 // Season Outlook is fetched on demand (like FAAB), not derived from the
 // league build response, so it has no pass/fail "status" the way the

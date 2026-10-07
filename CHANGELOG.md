@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,28 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v3.9 — Waiver categories, research notes, quick navigation, Tuesday week
+
+**Commit (short):** `v3.9: feat: waiver categories, nav menus, Tue week`
+
+**Commit (extended):**
+v3.9 rebuilds the Waivers → Available page. Under the tab header sit the position filter (All, QB, RB, WR, TE, FLEX) and the $ / % switch, then six categories: Hype Train (players recommended in this week's redraft and dynasty waiver articles, Reddit posts and X posts, found and summarised by Gemini, most mentions first), Spot Start (this week's projection), ROS (rest-of-season points), Stashes (research-named dynasty stashes, then dynasty values), Trending (Sleeper adds) and Handcuff (injury fill-ins). All shows 5 per position sorted together; a position shows 15, FLEX 25. Every card carries the research's one-line argument when an article mentions the player and the fill-in note when he backs up an injured starter. FAAB suggestions now load on their own and sit on each card.
+
+The league name and page name in the header are drop-downs for jumping to another league or page, and a tab strip under League Management lists the team pages. The app moves to the next week on Tuesday at 10:00 instead of waiting for Sleeper.
+
+**Details**
+- Available page (`client/src/pages/WaiverPage.jsx`, `client/src/waiverLists.js` new): position filter + $/% on top; category tabs; a short line on what each list means; the research status with "Research again" on Hype Train; the old FAAB panel, the separate injury-adds section, the dynasty-stash section and the sort toggle are gone (their content lives in the categories). Caps: All = first 5 per position, merged and sorted by the category's number (not grouped); QB/RB/WR/TE = 15; FLEX = 25 across RB/WR/TE. Each card shows what the list is sorted by (mentions, adds, ROS points, dynasty value), the research note ("📰 6 sources (FantasyPros, r/fantasyfootball, Yahoo) · rest of season: …") and the injury note ("🩹 Fills in for … (Out — Ankle), DAL RB1"), plus the starter/bench comparison every card had before. "Dropped in the last 3 days" moved to the bottom.
+- Categories (`server/waiverCategories.js`, new; built with the league): only players available in that league (not rostered, game not started). Hype Train = research mentions; Spot Start = this week's projection (healthy, not on bye); ROS = rest-of-season points (now loaded for dynasty leagues too); Stashes = research "stash" or dynasty picks first, then dynasty values (dynasty leagues); Trending = Sleeper's 24-hour adds; Handcuff = the injury-opportunity adds. Up to 15 QBs, 25 RB/WR/TE, 5 K/DEF per list are sent.
+- Research (`gemini.waiverHype`): one grounded Gemini search for redraft waiver articles, dynasty waiver/stash articles, Reddit posts (r/fantasyfootball, r/DynastyFF) and X posts by analysts — posts, not comments or replies — from the last 7 days. Per player: mentions (distinct sources found), up to 4 source names, spot / rest of season / stash, dynasty flag, a one-sentence argument. Names are matched to Sleeper players by name and position (team breaks ties). Cached 12 hours per week; a league build never waits for it — it starts the search in the background and the next refresh shows it; `POST /api/waivers/research` runs it on demand ("Research again"). Needs `GEMINI_API_KEY` (same key as Pick'em).
+- FAAB suggestions (`POST /api/faab`): computed for every player the categories can show and matched by player id; loaded automatically when the page opens.
+- Navigation (`client/src/ui/chrome.jsx`, `App.jsx`): the league name in the header opens a list of your leagues (switching keeps the page you're on; "League overview" at the top) and the page name opens the league's pages. New tab strip under the League Management header: Overview, Roster, Waivers, Trades, Injury, League, Outlook, with a red/yellow dot where a page has open variances.
+- Week (`server/sleeper.js`): the app moves to the next week at Tuesday 10:00 Toronto time — week N is done at the first Tuesday 10:00 at least a day after the app first saw Sleeper report week N (remembered in SQLite) — and follows Sleeper again once Sleeper moves on. Regular season only, never past 18. Waiver claims and trades are still filed under Sleeper's own week.
+- Tests: new suite, 41 checks (research parsing, name matching incl. suffixes, ties and defences, every category's order and filters, server caps, fill-in notes, the page's All / position / FLEX caps, the Tuesday 10:00 rules incl. a Tuesday-morning Sleeper flip, week 18 and the off-season); integration 68 (61 with value sites down) incl. categories on a real build; earlier suites unchanged; browser harness over every page plus the new Available page (all tabs, filters, notes, suggested bids, Research again) and the header menus and league tabs, no page errors.
+- Not verified live: Gemini's research replies (counts are what its search found, not a census; model id as before), how often Sleeper's own week flip lands before Tuesday 10:00, response time of a league build with the larger waiver pool.
+- No manual step: no new environment variables or compose changes.
 
 ---
 
