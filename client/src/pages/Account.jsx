@@ -313,6 +313,92 @@ function CbsPanel() {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  v4.3 — AI sources: what each Gemini feature read, preferred / removed */
+/* ------------------------------------------------------------------ */
+function AiSourcesPanel({ isOwner }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [draft, setDraft] = useState({});
+  useEffect(() => {
+    api.getAiSources().then(setData).catch((e) => setErr(e.message));
+  }, []);
+  const act = async (feature, action, source) => {
+    setErr(null);
+    try {
+      setData(await api.updateAiSource(feature, action, source));
+      if (action === "add") setDraft((d) => ({ ...d, [feature]: "" }));
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+  if (!data) return <div style={{ color: err ? C.major : C.textMuted }} className="text-xs px-1">{err || "Loading…"}</div>;
+  const pill = (text, color, onX, xLabel, key) => (
+    <span key={key || text} style={{ border: `1px solid ${color}55`, color }} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]">
+      {text}
+      {onX && isOwner && (
+        <button type="button" onClick={onX} aria-label={xLabel} title={xLabel} style={{ color: C.textMuted }} className="leading-none">×</button>
+      )}
+    </span>
+  );
+  return (
+    <div className="space-y-2" data-ai-sources>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 leading-snug">
+        The web sources behind each AI (Gemini) feature. Added sources are named to the AI as the ones to start with; removed ones are named as not to use and are also filtered out of every result. Google Search grounding can't be locked to a list of sites, so an added source is a strong hint, not a guarantee.{!data.configured ? " No Gemini key is set (GEMINI_API_KEY), so nothing runs yet." : ""}
+      </div>
+      {err && <div style={{ color: C.major }} className="text-xs px-1">{err}</div>}
+      {data.features.map((f) => {
+        const isOpen = open === f.key;
+        const removedSet = (name) => f.removed.some((r) => r.toLowerCase() === name.toLowerCase());
+        return (
+          <div key={f.key} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2.5" data-ai-feature={f.key}>
+            <button type="button" onClick={() => setOpen(isOpen ? null : f.key)} className="w-full flex items-center justify-between gap-2 text-left" aria-expanded={isOpen}>
+              <span style={{ color: C.text }} className="text-sm">{f.label}</span>
+              <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">
+                {f.counts.length} seen · +{f.added.length} · −{f.removed.length} <ChevronRight size={13} className="inline" style={{ transform: isOpen ? "rotate(90deg)" : "none" }} />
+              </span>
+            </button>
+            {isOpen && (
+              <div className="mt-2 space-y-2 text-xs">
+                <div>
+                  <div style={{ color: C.textMuted }} className="mb-1">Used most {f.lastAt ? `(last run ${new Date(f.lastAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })})` : "(no run yet)"}</div>
+                  <div className="flex flex-wrap gap-1" data-ai-seen>
+                    {f.counts.length === 0 && <span style={{ color: C.textFaint }}>Nothing yet.</span>}
+                    {f.counts.filter((x) => !removedSet(x.name)).map((x) => pill(`${x.name} · ${x.n}`, C.text, () => act(f.key, "remove", x.name), `Remove ${x.name}`, x.name))}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: C.textMuted }} className="mb-1">Added (preferred)</div>
+                  <div className="flex flex-wrap gap-1" data-ai-added>
+                    {f.added.length === 0 && <span style={{ color: C.textFaint }}>None.</span>}
+                    {f.added.map((x) => pill(x, C.ok, () => act(f.key, "unadd", x), `Stop preferring ${x}`))}
+                  </div>
+                  {isOwner && (
+                    <div className="flex gap-1.5 mt-1.5">
+                      <input value={draft[f.key] || ""} onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && act(f.key, "add", draft[f.key])} placeholder="Add a site or account, e.g. fantasypros.com" style={inputStyle} className="flex-1 rounded px-2 py-1 text-xs outline-none" data-ai-add-input />
+                      <button type="button" onClick={() => act(f.key, "add", draft[f.key])} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="rounded px-2 text-xs" data-ai-add>Add</button>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <div style={{ color: C.textMuted }} className="mb-1">Removed (not used, filtered out)</div>
+                  <div className="flex flex-wrap gap-1" data-ai-removed>
+                    {f.removed.length === 0 && <span style={{ color: C.textFaint }}>None.</span>}
+                    {f.removed.map((x) => pill(x, C.major, () => act(f.key, "unremove", x), `Allow ${x} again`))}
+                  </div>
+                </div>
+                {!f.perItem && <div style={{ color: C.textFaint }}>This feature's notes don't name a source per player, so a removed source is dropped from the source list and the next searches, not from notes already written.</div>}
+                {!isOwner && <div style={{ color: C.textFaint }}>Only the owner can change sources.</div>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
   return (
     <div className="px-4 py-3 space-y-4">
@@ -327,6 +413,10 @@ export function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
       <div>
         <SectionLabel>CBS pick'em push (optional)</SectionLabel>
         <div className="pt-1.5"><CbsPanel /></div>
+      </div>
+      <div>
+        <SectionLabel>AI sources</SectionLabel>
+        <div className="pt-1.5"><AiSourcesPanel isOwner={authUser?.role === "owner"} /></div>
       </div>
       <div>
         <SectionLabel>Change password</SectionLabel>

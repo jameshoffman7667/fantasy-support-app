@@ -15,7 +15,7 @@ import * as faabDb from "./faabDb.js"; // v3.7: opponent bid collection 2 h befo
 import * as commish from "./commish.js"; // v3.8: charters re-read each July
 import * as gemini from "./gemini.js"; // v4.1: scheduled waiver research
 import { buildFullLeague } from "./buildLeague.js";
-import { getAllUserStates, getUser, setBuiltLeague, cacheGet, cacheSet } from "./db.js";
+import { getAllUserStates, getUser, setBuiltLeague, getBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
 
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // hourly, per the request this exists to satisfy
@@ -240,6 +240,50 @@ async function hypeTick() {
   console.log(`[scheduler] Waiver research (${slot}) for week ${week}: ${out?.players?.length ?? 0} players.`);
 }
 
+/**
+ * v4.3: start/sit research on Thursday 8:00, Saturday 10:00 and Sunday 9:00 Toronto (once per slot, checked every
+ * 10 minutes) for every player on an active user's tracked rosters whose game hasn't started. Each run researches
+ * them again (force), so Sunday morning's verdicts include the latest articles.
+ */
+export const SS_SLOTS = { Thu: 8, Sat: 10, Sun: 9 };
+export function startSitSlot(t) {
+  return SS_SLOTS[t.weekday] === t.hour ? `${t.date}:${t.hour}` : null;
+}
+/** Unique roster players (not started) across built leagues. Pure. */
+export function rosterPlayersOf(builtList, now = Date.now()) {
+  const out = new Map();
+  for (const b of builtList) {
+    for (const p of [...(b?.starters || []).map((x) => x.player), ...(b?.bench || []), ...(b?.ir || []), ...(b?.taxi || [])]) {
+      if (!p?.id || out.has(p.id)) continue;
+      if (p.started || (p.kickoff != null && p.kickoff <= now)) continue;
+      out.set(p.id, { id: p.id, name: p.name, pos: p.pos, team: p.team });
+    }
+  }
+  return [...out.values()];
+}
+async function startSitTick() {
+  if (!gemini.isConfigured()) return;
+  const slot = startSitSlot(sleeper.torontoNow());
+  if (!slot) return;
+  const k = `startsit-run:${slot}`;
+  if (cacheGet(k) !== null) return;
+  const built = [];
+  for (const st of getAllUserStates()) {
+    const user = getUser(st.username);
+    if (!user?.active || !st.leagueIds?.length || isInactive(user, st)) continue;
+    for (const id of st.leagueIds) {
+      const b = getBuiltLeague(st.username, id)?.data;
+      if (b) built.push(b);
+    }
+  }
+  if (!built.length) return;
+  cacheSet(k, true, 2 * 24 * 60 * 60 * 1000);
+  const state = await sleeper.getState();
+  const players = rosterPlayersOf(built);
+  const out = await gemini.startSit(Number(state.season), Number(state.week), players, { force: true });
+  console.log(`[scheduler] Start/sit research (${slot}): ${players.length} players, ${Object.keys(out?.byId || {}).length} with a verdict.`);
+}
+
 export function startScheduler() {
   // Run once shortly after boot (so a fresh deploy warms up quickly
   // rather than waiting a full hour), then on the regular interval.
@@ -276,6 +320,8 @@ export function startScheduler() {
     const users = getAllUserStates().filter((st) => getUser(st.username)?.active && st.leagueIds?.length && !isInactive(getUser(st.username), st)).map((st) => st.username);
     faabDb.tick({ users }).catch((err) => console.warn(`[scheduler] FAAB collection check failed: ${err.message}`));
   }, 10 * 60 * 1000);
+  // v4.3: scheduled start/sit research, Thu 8:00 / Sat 10:00 / Sun 9:00 Toronto.
+  setInterval(() => startSitTick().catch((err) => console.warn(`[scheduler] Start/sit research failed: ${err.message}`)), 10 * 60 * 1000);
   // v4.1: scheduled waiver research, Tue + Wed ~8:00 and ~16:00 Toronto.
   setInterval(() => hypeTick().catch((err) => console.warn(`[scheduler] Waiver research failed: ${err.message}`)), 10 * 60 * 1000);
   // v3.8: each July, linked charters are downloaded again and re-read by Gemini only if they changed (one Gemini read a day).

@@ -378,3 +378,14 @@ export function importStatsSheet(fileBase64) {
   return jsonPost(`/api/stats/config/import`, { fileBase64 });
 }
 export const statsSheetUrl = () => `/api/stats/config.xlsx`;
+
+// v4.3: start / sit research and AI sources.
+export function researchStartSit(leagueId) {
+  return jsonPost(`/api/startsit/research`, { leagueId });
+}
+export function getAiSources() {
+  return request(`/api/ai-sources`);
+}
+export function updateAiSource(feature, action, source) {
+  return jsonPost(`/api/ai-sources`, { feature, action, source });
+}

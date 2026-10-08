@@ -1,5 +1,5 @@
 {
- "version": "2026-10-07",
+ "version": "2026-10-07b",
  "rows": [
   {
    "id": "fpts",
@@ -10,7 +10,8 @@
    "positions": "All",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "Scored with each league's own settings",
-   "order": 0
+   "order": 0,
+   "abbrev": "FPTS"
   },
   {
    "id": "rostered_pct",
@@ -21,7 +22,8 @@
    "positions": "All",
    "dataFrom": "Current",
    "notes": "No week/season filter",
-   "order": 1
+   "order": 1,
+   "abbrev": "Rost %"
   },
   {
    "id": "age",
@@ -32,7 +34,8 @@
    "positions": "All",
    "dataFrom": "Current",
    "notes": "No week/season filter",
-   "order": 2
+   "order": 2,
+   "abbrev": "Age"
   },
   {
    "id": "proj_rank",
@@ -43,7 +46,8 @@
    "positions": "All",
    "dataFrom": "2025",
    "notes": "",
-   "order": 3
+   "order": 3,
+   "abbrev": "Pos Rk"
   },
   {
    "id": "ros_pts",
@@ -54,7 +58,8 @@
    "positions": "All",
    "dataFrom": "2026",
    "notes": "Current season only",
-   "order": 4
+   "order": 4,
+   "abbrev": "ROS"
   },
   {
    "id": "proj_source",
@@ -65,7 +70,8 @@
    "positions": "All",
    "dataFrom": "2025",
    "notes": "Text — sorts by source, not a number",
-   "order": 5
+   "order": 5,
+   "abbrev": "Src"
   },
   {
    "id": "ecr",
@@ -76,7 +82,8 @@
    "positions": "All",
    "dataFrom": "Current",
    "notes": "No week/season filter",
-   "order": 6
+   "order": 6,
+   "abbrev": "ECR"
   },
   {
    "id": "hype_mentions",
@@ -87,7 +94,8 @@
    "positions": "All",
    "dataFrom": "Current week",
    "notes": "No week/season filter",
-   "order": 7
+   "order": 7,
+   "abbrev": "Hype"
   },
   {
    "id": "trend_adds",
@@ -98,7 +106,8 @@
    "positions": "All",
    "dataFrom": "Current",
    "notes": "No week/season filter",
-   "order": 8
+   "order": 8,
+   "abbrev": "Trend"
   },
   {
    "id": "snaps",
@@ -109,7 +118,8 @@
    "positions": "QB, RB, WR, TE",
    "dataFrom": "2012",
    "notes": "",
-   "order": 9
+   "order": 9,
+   "abbrev": "Snaps"
   },
   {
    "id": "snap_pct",
@@ -120,7 +130,8 @@
    "positions": "QB, RB, WR, TE",
    "dataFrom": "2012",
    "notes": "Share",
-   "order": 10
+   "order": 10,
+   "abbrev": "Snap %"
   },
   {
    "id": "dynasty_value",
@@ -131,7 +142,8 @@
    "positions": "All",
    "dataFrom": "Current",
    "notes": "No week/season filter",
-   "order": 11
+   "order": 11,
+   "abbrev": "Dyn Val"
   },
   {
    "id": "st_td",
@@ -142,7 +154,8 @@
    "positions": "All",
    "dataFrom": "1999",
    "notes": "",
-   "order": 12
+   "order": 12,
+   "abbrev": "ST TD"
   },
   {
    "id": "pass_yd",
@@ -153,7 +166,8 @@
    "positions": "QB",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 13
+   "order": 13,
+   "abbrev": "Pass Yd"
   },
   {
    "id": "pass_td",
@@ -164,7 +178,8 @@
    "positions": "QB",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 14
+   "order": 14,
+   "abbrev": "Pass TD"
   },
   {
    "id": "pass_int",
@@ -175,7 +190,8 @@
    "positions": "QB",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 15
+   "order": 15,
+   "abbrev": "INT"
   },
   {
    "id": "pass_cmp",
@@ -186,7 +202,8 @@
    "positions": "QB",
    "dataFrom": "1999",
    "notes": "",
-   "order": 16
+   "order": 16,
+   "abbrev": "Cmp"
   },
   {
    "id": "pass_att",
@@ -197,7 +214,8 @@
    "positions": "QB",
    "dataFrom": "1999",
    "notes": "",
-   "order": 17
+   "order": 17,
+   "abbrev": "Att"
   },
   {
    "id": "sacks_taken",
@@ -208,7 +226,8 @@
    "positions": "QB",
    "dataFrom": "1999",
    "notes": "",
-   "order": 18
+   "order": 18,
+   "abbrev": "Sk"
   },
   {
    "id": "pass_air_yd",
@@ -219,7 +238,8 @@
    "positions": "QB",
    "dataFrom": "1999",
    "notes": "",
-   "order": 19
+   "order": 19,
+   "abbrev": "Pass AY"
   },
   {
    "id": "pass_2pt",
@@ -230,7 +250,8 @@
    "positions": "QB",
    "dataFrom": "1999",
    "notes": "",
-   "order": 20
+   "order": 20,
+   "abbrev": "Pass 2PT"
   },
   {
    "id": "epa_dropback",
@@ -241,7 +262,8 @@
    "positions": "QB",
    "dataFrom": "2016",
    "notes": "Rate",
-   "order": 21
+   "order": 21,
+   "abbrev": "EPA/DB"
   },
   {
    "id": "pressure_rate",
@@ -252,7 +274,8 @@
    "positions": "QB",
    "dataFrom": "2018",
    "notes": "Rate",
-   "order": 22
+   "order": 22,
+   "abbrev": "Press %"
   },
   {
    "id": "bad_throw",
@@ -263,7 +286,8 @@
    "positions": "QB",
    "dataFrom": "2018",
    "notes": "Rate",
-   "order": 23
+   "order": 23,
+   "abbrev": "Bad %"
   },
   {
    "id": "intended_air",
@@ -274,7 +298,8 @@
    "positions": "QB",
    "dataFrom": "2016",
    "notes": "Rate",
-   "order": 24
+   "order": 24,
+   "abbrev": "IAY"
   },
   {
    "id": "time_to_throw",
@@ -285,7 +310,8 @@
    "positions": "QB",
    "dataFrom": "2016",
    "notes": "Rate",
-   "order": 25
+   "order": 25,
+   "abbrev": "TTT"
   },
   {
    "id": "pass_epa",
@@ -296,7 +322,8 @@
    "positions": "QB",
    "dataFrom": "1999",
    "notes": "",
-   "order": 26
+   "order": 26,
+   "abbrev": "Pass EPA"
   },
   {
    "id": "cpoe",
@@ -307,7 +334,8 @@
    "positions": "QB",
    "dataFrom": "1999",
    "notes": "Rate — kept as a whole-season value",
-   "order": 27
+   "order": 27,
+   "abbrev": "CPOE"
   },
   {
    "id": "rec_tgt",
@@ -318,7 +346,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 28
+   "order": 28,
+   "abbrev": "Tgt"
   },
   {
    "id": "rec",
@@ -329,7 +358,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 29
+   "order": 29,
+   "abbrev": "Rec"
   },
   {
    "id": "rec_yd",
@@ -340,7 +370,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 30
+   "order": 30,
+   "abbrev": "Rec Yd"
   },
   {
    "id": "rec_td",
@@ -351,7 +382,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 31
+   "order": 31,
+   "abbrev": "Rec TD"
   },
   {
    "id": "target_share",
@@ -362,7 +394,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "1999",
    "notes": "Share",
-   "order": 32
+   "order": 32,
+   "abbrev": "Tgt %"
   },
   {
    "id": "rec_2pt",
@@ -373,7 +406,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "1999",
    "notes": "",
-   "order": 33
+   "order": 33,
+   "abbrev": "Rec 2PT"
   },
   {
    "id": "tprr",
@@ -384,7 +418,8 @@
    "positions": "WR, TE",
    "dataFrom": "2016",
    "notes": "Estimate; rate",
-   "order": 34
+   "order": 34,
+   "abbrev": "TPRR"
   },
   {
    "id": "yprr",
@@ -395,7 +430,8 @@
    "positions": "WR, TE",
    "dataFrom": "2016",
    "notes": "Estimate; rate",
-   "order": 35
+   "order": 35,
+   "abbrev": "YPRR"
   },
   {
    "id": "adot",
@@ -406,7 +442,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "2016",
    "notes": "Rate",
-   "order": 36
+   "order": 36,
+   "abbrev": "aDOT"
   },
   {
    "id": "separation",
@@ -417,7 +454,8 @@
    "positions": "WR, TE",
    "dataFrom": "2016",
    "notes": "Rate",
-   "order": 37
+   "order": 37,
+   "abbrev": "Sep"
   },
   {
    "id": "cushion",
@@ -428,7 +466,8 @@
    "positions": "WR, TE",
    "dataFrom": "2016",
    "notes": "Rate",
-   "order": 38
+   "order": 38,
+   "abbrev": "Cush"
   },
   {
    "id": "yac_oe",
@@ -439,7 +478,8 @@
    "positions": "WR, TE",
    "dataFrom": "2016",
    "notes": "Rate",
-   "order": 39
+   "order": 39,
+   "abbrev": "YACOE"
   },
   {
    "id": "drop_rate",
@@ -450,7 +490,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "2018",
    "notes": "Rate",
-   "order": 40
+   "order": 40,
+   "abbrev": "Drop %"
   },
   {
    "id": "rec_yac",
@@ -461,7 +502,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "1999",
    "notes": "",
-   "order": 41
+   "order": 41,
+   "abbrev": "YAC"
   },
   {
    "id": "rec_air_yd",
@@ -472,7 +514,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "1999",
    "notes": "",
-   "order": 42
+   "order": 42,
+   "abbrev": "Rec AY"
   },
   {
    "id": "rec_epa",
@@ -483,7 +526,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "1999",
    "notes": "",
-   "order": 43
+   "order": 43,
+   "abbrev": "Rec EPA"
   },
   {
    "id": "air_yd_share",
@@ -494,7 +538,8 @@
    "positions": "WR, TE",
    "dataFrom": "1999",
    "notes": "Share",
-   "order": 44
+   "order": 44,
+   "abbrev": "AY %"
   },
   {
    "id": "wopr",
@@ -505,7 +550,8 @@
    "positions": "WR, TE, RB",
    "dataFrom": "1999",
    "notes": "Share",
-   "order": 45
+   "order": 45,
+   "abbrev": "WOPR"
   },
   {
    "id": "racr",
@@ -516,7 +562,8 @@
    "positions": "WR, TE",
    "dataFrom": "1999",
    "notes": "Rate",
-   "order": 46
+   "order": 46,
+   "abbrev": "RACR"
   },
   {
    "id": "rush_att",
@@ -527,7 +574,8 @@
    "positions": "QB, RB, WR",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 47
+   "order": 47,
+   "abbrev": "Car"
   },
   {
    "id": "rush_yd",
@@ -538,7 +586,8 @@
    "positions": "QB, RB, WR",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 48
+   "order": 48,
+   "abbrev": "Rush Yd"
   },
   {
    "id": "rush_td",
@@ -549,7 +598,8 @@
    "positions": "QB, RB, WR",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 49
+   "order": 49,
+   "abbrev": "Rush TD"
   },
   {
    "id": "fum_lost",
@@ -560,7 +610,8 @@
    "positions": "QB, RB, WR, TE",
    "dataFrom": "1999",
    "notes": "Rushing + receiving + sack fumbles",
-   "order": 50
+   "order": 50,
+   "abbrev": "FL"
   },
   {
    "id": "ypc",
@@ -571,7 +622,8 @@
    "positions": "QB, RB",
    "dataFrom": "1999",
    "notes": "Rate",
-   "order": 51
+   "order": 51,
+   "abbrev": "YPC"
   },
   {
    "id": "rush_2pt",
@@ -582,7 +634,8 @@
    "positions": "QB, RB, WR",
    "dataFrom": "1999",
    "notes": "",
-   "order": 52
+   "order": 52,
+   "abbrev": "Rush 2PT"
   },
   {
    "id": "ryoe",
@@ -593,7 +646,8 @@
    "positions": "RB",
    "dataFrom": "2016",
    "notes": "Rate",
-   "order": 53
+   "order": 53,
+   "abbrev": "RYOE"
   },
   {
    "id": "yaco_per_carry",
@@ -604,7 +658,8 @@
    "positions": "RB",
    "dataFrom": "2018",
    "notes": "Rate",
-   "order": 54
+   "order": 54,
+   "abbrev": "YACo/Car"
   },
   {
    "id": "broken_tackles",
@@ -615,7 +670,8 @@
    "positions": "RB",
    "dataFrom": "2018",
    "notes": "Rate",
-   "order": 55
+   "order": 55,
+   "abbrev": "BTk/Car"
   },
   {
    "id": "stacked_box",
@@ -626,7 +682,8 @@
    "positions": "RB",
    "dataFrom": "2016",
    "notes": "Share",
-   "order": 56
+   "order": 56,
+   "abbrev": "8+ Box %"
   },
   {
    "id": "rush_epa",
@@ -637,7 +694,8 @@
    "positions": "QB, RB, WR",
    "dataFrom": "1999",
    "notes": "",
-   "order": 57
+   "order": 57,
+   "abbrev": "Rush EPA"
   },
   {
    "id": "carry_share",
@@ -648,7 +706,8 @@
    "positions": "RB",
    "dataFrom": "1999",
    "notes": "Share",
-   "order": 58
+   "order": 58,
+   "abbrev": "Car %"
   },
   {
    "id": "implied_total",
@@ -659,7 +718,8 @@
    "positions": "All",
    "dataFrom": "2025",
    "notes": "Same for every player on the team",
-   "order": 59
+   "order": 59,
+   "abbrev": "Imp Tot"
   },
   {
    "id": "spread",
@@ -670,7 +730,8 @@
    "positions": "All",
    "dataFrom": "2025",
    "notes": "Same for every player on the team",
-   "order": 60
+   "order": 60,
+   "abbrev": "Spread"
   },
   {
    "id": "prop_pass_yd",
@@ -681,7 +742,8 @@
    "positions": "QB",
    "dataFrom": "2025",
    "notes": "When a sportsbook line exists",
-   "order": 61
+   "order": 61,
+   "abbrev": "Pass Prop"
   },
   {
    "id": "prop_rush_yd",
@@ -692,7 +754,8 @@
    "positions": "QB, RB, WR",
    "dataFrom": "2025",
    "notes": "When a sportsbook line exists",
-   "order": 62
+   "order": 62,
+   "abbrev": "Rush Prop"
   },
   {
    "id": "prop_rec_yd",
@@ -703,7 +766,8 @@
    "positions": "RB, WR, TE",
    "dataFrom": "2025",
    "notes": "When a sportsbook line exists",
-   "order": 63
+   "order": 63,
+   "abbrev": "Rec Prop"
   },
   {
    "id": "prop_anytd",
@@ -714,7 +778,8 @@
    "positions": "RB, WR, TE, QB",
    "dataFrom": "2025",
    "notes": "Odds",
-   "order": 64
+   "order": 64,
+   "abbrev": "ATD"
   },
   {
    "id": "def_sack",
@@ -725,7 +790,8 @@
    "positions": "DEF",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 65
+   "order": 65,
+   "abbrev": "Sacks"
   },
   {
    "id": "def_int",
@@ -736,7 +802,8 @@
    "positions": "DEF",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 66
+   "order": 66,
+   "abbrev": "Def INT"
   },
   {
    "id": "def_fum_rec",
@@ -747,7 +814,8 @@
    "positions": "DEF",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 67
+   "order": 67,
+   "abbrev": "FR"
   },
   {
    "id": "def_td",
@@ -758,7 +826,8 @@
    "positions": "DEF",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 68
+   "order": 68,
+   "abbrev": "Def TD"
   },
   {
    "id": "pts_allow",
@@ -769,7 +838,8 @@
    "positions": "DEF",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 69
+   "order": 69,
+   "abbrev": "Pts All"
   },
   {
    "id": "yds_allow",
@@ -780,7 +850,8 @@
    "positions": "DEF",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 70
+   "order": 70,
+   "abbrev": "Yds All"
   },
   {
    "id": "fgm",
@@ -791,7 +862,8 @@
    "positions": "K",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 71
+   "order": 71,
+   "abbrev": "FGM"
   },
   {
    "id": "xpm",
@@ -802,7 +874,8 @@
    "positions": "K",
    "dataFrom": "2025 proj / 1999 stat",
    "notes": "",
-   "order": 72
+   "order": 72,
+   "abbrev": "XPM"
   },
   {
    "id": "fga",
@@ -813,7 +886,8 @@
    "positions": "K",
    "dataFrom": "1999",
    "notes": "",
-   "order": 73
+   "order": 73,
+   "abbrev": "FGA"
   },
   {
    "id": "xpa",
@@ -824,7 +898,8 @@
    "positions": "K",
    "dataFrom": "1999",
    "notes": "",
-   "order": 74
+   "order": 74,
+   "abbrev": "XPA"
   }
  ]
 }

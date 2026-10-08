@@ -95,7 +95,7 @@ function ColumnModal({ id, cfg, state, setState, rows, positions, onClose }) {
   const src = typeof def.src === "object" ? def.src[state.mode] || def.src.stat : def.src;
   const num = (v) => (v === "" || v == null ? "" : v);
   return (
-    <Modal title={meta.stat} onClose={onClose}>
+    <Modal title={meta.abbrev && meta.abbrev !== meta.stat ? `${meta.stat} (${meta.abbrev})` : meta.stat} onClose={onClose}>
       <div className="space-y-3 text-sm" data-column-modal={id}>
         <div style={{ color: C.text }}>{def.def || "—"}</div>
         <div style={{ color: C.textFaint }} className="text-xs">Source: {src || "—"}{def.rate ? " · a rate or share: Season average keeps the value over all the chosen games" : ""}</div>
@@ -320,6 +320,7 @@ export function ScoutingPage({ authUser, leagues = [] }) {
   const posForPickers = positions.length ? positions : POSITIONS;
   const view = { mode: state.mode, categories: state.categories, stats: state.stats, seasons: state.seasons, period: state.period, weeks: state.weeks };
   const statName = (id) => cfg.rows.find((r) => r.id === id)?.stat || id;
+  const statAbbrev = (id) => cfg.rows.find((r) => r.id === id)?.abbrev || statName(id); // v4.3: short column titles
   const list = state.players?.length ? table : table.slice(0, shown);
   const leagueOpts = tracked.map((l) => ({ value: l.id, label: l.name }));
 
@@ -359,8 +360,8 @@ export function ScoutingPage({ authUser, leagues = [] }) {
                 const flags = [(c.min !== "" && c.min != null) || (c.max !== "" && c.max != null) ? "min/max" : null, Object.values(c.bands || {}).some((b) => normBands(b).length) ? "bands" : null].filter(Boolean);
                 return (
                   <th key={id} className="text-right px-2 py-1.5 whitespace-nowrap">
-                    <button type="button" onClick={() => setColModal(id)} className="text-right" style={{ color: lvl ? C.brand : C.text }} data-col-header={id}>
-                      {statName(id)}
+                    <button type="button" onClick={() => setColModal(id)} className="text-right" style={{ color: lvl ? C.brand : C.text }} title={statName(id)} data-col-header={id}>
+                      {statAbbrev(id)}
                       {lvl ? <span data-sort-level={lvl}> {c.dir === "asc" ? "↑" : "↓"}{lvl}</span> : null}
                       {flags.length ? <span style={{ color: C.textFaint }} className="block text-[9px] font-normal">{flags.join(" · ")}</span> : null}
                     </button>

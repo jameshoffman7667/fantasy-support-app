@@ -1,4 +1,5 @@
 import { cacheGet, cacheSet } from "./db.js";
+import * as ai from "./aiSources.js"; // v4.3: sources per feature (preferred / removed), counted per run
 
 /**
  * v2.7: Gemini (Google AI) with Grounding with Google Search, used ONLY to
@@ -42,14 +43,14 @@ export async function upsetScan(season, week, games, { force = false } = {}) {
   if (!isConfigured() || !games.length) return null;
   const cacheKey = `gemini:upsets:v2:${season}:${week}`; // v2: notes are about twice as long as before
   const cached = cacheGet(cacheKey);
-  if (cached && !force) return cached;
+  if (cached && !force) return ai.applyRemovals("upsets", cached);
 
   const lines = games.map((g) => `- ${g.key} (favourite: ${g.favorite}, underdog: ${g.underdog}, ${g.kickoffLabel || ""})`).join("\n");
   const prompt = `You are helping with an NFL straight-up pick'em pool for ${season} week ${week}.
 Search the web for this week's public pick'em articles, expert picks, and "upset picks" columns.
 For EACH game below, count how many distinct articles/experts you found that pick the UNDERDOG to win outright, list up to 3 source names, and write a neutral note (max 70 words, same concise factual style) on injuries, weather, rest or motivation relevant to that game.
 Games:
-${lines}
+${lines}${ai.promptHints("upsets")}
 Reply with ONLY a JSON array, no prose: [{"game":"AWAY@HOME","upsetMentions":0,"sources":["..."],"note":"..."}]`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
@@ -80,7 +81,8 @@ Reply with ONLY a JSON array, no prose: [{"game":"AWAY@HOME","upsetMentions":0,"
   const out = { at: Date.now(), model: MODEL(), byGame, sources };
   console.log(`[gemini] Upset scan for ${season} wk${week}: ${Object.keys(byGame).length} games, ${sources.length} grounding sources.`);
   cacheSet(cacheKey, out, TTL);
-  return out;
+  ai.recordRun("upsets", out);
+  return ai.applyRemovals("upsets", out);
 }
 
 /**
@@ -103,7 +105,7 @@ export async function tradeNews(season, week, items, { force = false, cacheOnly 
   for (const ch of listKey) h = (h * 31 + ch.charCodeAt(0)) | 0;
   const cacheKey = `gemini:trade:${season}:${week}:${h}`;
   const cached = cacheGet(cacheKey);
-  if (cached && !force) return cached;
+  if (cached && !force) return ai.applyRemovals("trade", cached);
   if (cacheOnly && !force) return null; // v3.3 (R11): opening the page never starts a Gemini search by itself
 
   const who = (p) => `${p.name} (${p.pos}${p.team ? `, ${p.team}` : ""})`;
@@ -116,7 +118,7 @@ For EACH idea below reply with a flag and a note (max 40 words):
 - "ok": nothing relevant found.
 Do not suggest other trades. Do not invent news; if you find nothing, say "ok" with a short note saying so.
 Ideas:
-${lines}
+${lines}${ai.promptHints("trade")}
 Reply with ONLY a JSON array, no prose: [{"key":"<the key before the colon>","flag":"ok","note":"..."}]`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
@@ -144,7 +146,8 @@ Reply with ONLY a JSON array, no prose: [{"key":"<the key before the colon>","fl
   const out = { at: Date.now(), model: MODEL(), byKey, sources };
   console.log(`[gemini] Trade news for ${season} wk${week}: ${Object.keys(byKey).length}/${items.length} ideas, ${sources.length} sources.`);
   cacheSet(cacheKey, out, TRADE_TTL);
-  return out;
+  ai.recordRun("trade", out);
+  return ai.applyRemovals("trade", out);
 }
 
 /**
@@ -164,7 +167,7 @@ export async function injurySentiment(season, week, items, { force = false } = {
   for (const ch of listKey) h = (h * 31 + ch.charCodeAt(0)) | 0;
   const cacheKey = `gemini:injsent:${season}:${week}:${h}`;
   const cached = cacheGet(cacheKey);
-  if (cached && !force) return cached;
+  if (cached && !force) return ai.applyRemovals("injury", cached);
 
   const lines = items.map((i) => `- ${i.key}: ${i.name} (${i.pos}, ${i.team})${i.note ? ` — listed ${i.note}` : " — listed Questionable"}`).join("\n");
   const prompt = `You are checking NFL injury news for ${season} week ${week}. Each player below is listed Questionable.
@@ -174,7 +177,7 @@ For EACH player reply with:
 - "practice": a few words, for example "DNP, DNP, limited" or "unknown".
 - "note": max 30 words of what you found. Do not invent news; say "unclear" if you find nothing.
 Players:
-${lines}
+${lines}${ai.promptHints("injury")}
 Reply with ONLY a JSON array, no prose: [{"key":"<the key before the colon>","flag":"unclear","practice":"unknown","note":"..."}]`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
@@ -201,7 +204,8 @@ Reply with ONLY a JSON array, no prose: [{"key":"<the key before the colon>","fl
   const out = { at: Date.now(), model: MODEL(), byKey, sources };
   console.log(`[gemini] Injury sentiment ${season} wk${week}: ${Object.keys(byKey).length}/${items.length} players, ${sources.length} sources.`);
   cacheSet(cacheKey, out, TRADE_TTL);
-  return out;
+  ai.recordRun("injury", out);
+  return ai.applyRemovals("injury", out);
 }
 
 /* ---------------- v3.8: Commish (charters) and best ball rules ---------------- */
@@ -366,12 +370,13 @@ export async function waiverHype(season, week, { force = false, cacheOnly = fals
   if (!isConfigured()) return null;
   const cacheKey = hypeCacheKey(season, week);
   const cached = cacheGet(cacheKey);
-  if (cached && !force) return cached;
+  if (cached && !force) return ai.applyRemovals("hype", cached);
   if (cacheOnly && !force) return null;
   if (hypeInFlight.has(cacheKey)) return hypeInFlight.get(cacheKey);
   const run = (async () => {
-    const known = (cacheGet(HYPE_SOURCES_KEY) || []).slice(0, 15).map((x) => x.name);
-    const prompt = `You are researching the fantasy football waiver wire for the ${season} NFL season, week ${week}. Use pieces published in the last 7 days.${known.length ? `\nStart with these outlets and accounts, which published waiver pieces recently: ${known.join(", ")}. Then look for others.` : ""}
+    // v4.3: preferred / removed sources from Account → AI sources (the most used ones are preferred automatically)
+    migrateHypeSources();
+    const prompt = `You are researching the fantasy football waiver wire for the ${season} NFL season, week ${week}. Use pieces published in the last 7 days.${ai.promptHints("hype")}
 Search for:
 1. Redraft waiver-wire "top adds" / pickups articles (e.g. FantasyPros, ESPN, Yahoo, CBS Sports, NFL.com, PFF, Rotoballer, The Athletic, 4for4, Fantasy Footballers).
 2. Dynasty waiver-wire and stash articles (e.g. Dynasty Nerds, Dynasty League Football, KeepTradeCut, FantasyPros dynasty, PFF dynasty).
@@ -399,13 +404,144 @@ Do not invent players or sources. Reply with ONLY a JSON array, no prose:
     const out = { at: Date.now(), model: MODEL(), players: parseHype(arr), sources };
     console.log(`[gemini] Waiver research ${season} wk${week}: ${out.players.length} players, ${sources.length} sources.`);
     cacheSet(cacheKey, out, HYPE_TTL);
-    cacheSet(HYPE_SOURCES_KEY, rememberSources(cacheGet(HYPE_SOURCES_KEY) || [], out), 60 * 24 * 60 * 60 * 1000);
+    ai.recordRun("hype", out);
     return out;
   })();
   hypeInFlight.set(cacheKey, run);
   try {
-    return await run;
+    return ai.applyRemovals("hype", await run);
   } finally {
     hypeInFlight.delete(cacheKey);
+  }
+}
+// v4.3: the v4.1 remembered-sources list moves into the AI sources tally (once).
+function migrateHypeSources() {
+  const old = cacheGet(HYPE_SOURCES_KEY);
+  if (!old?.length || ai.getSeen("hype").counts.length) return;
+  ai.recordRun("hype", { players: [{ sources: old.flatMap((x) => Array.from({ length: Math.min(5, Number(x.n) || 1) }, () => x.name)) }] });
+}
+
+/* ---------------- v4.3: start / sit ---------------- */
+/**
+ * One grounded search per batch of players (up to 40): this week's start/sit articles, rankings columns and expert
+ * advice (last 7 days). For each player the sources discuss: how many say start and how many say sit, a verdict —
+ * "start" (clear majority start), "sit" (clear majority sit) or "mixed" — a short summary of the arguments, and the
+ * source names. Players nobody discusses are left out (no icon). Results are merged into one cache per week, keyed
+ * by Sleeper id, so the scheduled runs and the Roster page's "research" button add to each other.
+ * players: [{ id, name, pos, team }]. Returns { at, byId: { id: { verdict, start, sit, summary, sources, at } }, sources }.
+ */
+const SS_TTL = 8 * 24 * 60 * 60 * 1000;
+const SS_FRESH = 12 * 60 * 60 * 1000;
+export const startSitKey = (season, week) => `gemini:startsit:v1:${season}:${week}`;
+const ssInFlight = new Map();
+const ssPending = new Set(); // ids being researched right now (parallel league builds share them)
+let ssFailUntil = 0; // after a failure, background runs wait an hour (a button press still tries)
+const normName = (n) => String(n || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[.'`]/g, "").replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+/** Gemini's rows → { id: result } for the players asked about (matched by name + position). Pure. */
+export function parseStartSit(arr, players, at = Date.now()) {
+  const byKey = new Map();
+  for (const p of players) {
+    byKey.set(`${normName(p.name)}|${p.pos}`, p.id);
+    if (!byKey.has(`${normName(p.name)}|`)) byKey.set(`${normName(p.name)}|`, p.id);
+  }
+  const out = {};
+  for (const r of Array.isArray(arr) ? arr : []) {
+    if (!r?.name) continue;
+    const pos = String(r.pos || "").toUpperCase().replace("DST", "DEF").replace("D/ST", "DEF");
+    const id = byKey.get(`${normName(r.name)}|${pos}`) || byKey.get(`${normName(r.name)}|`);
+    if (!id) continue;
+    const start = Math.max(0, Math.round(Number(r.startVotes) || 0));
+    const sit = Math.max(0, Math.round(Number(r.sitVotes) || 0));
+    if (start + sit === 0) continue;
+    let verdict = ["start", "mixed", "sit"].includes(r.verdict) ? r.verdict : null;
+    // the counts decide when Gemini's label disagrees with them: 2/3 or more one way = clear
+    const share = start / (start + sit);
+    const byCount = share >= 2 / 3 ? "start" : share <= 1 / 3 ? "sit" : "mixed";
+    if (!verdict || verdict !== byCount) verdict = byCount;
+    out[id] = { verdict, start, sit, summary: r.summary ? String(r.summary).slice(0, 500) : null, sources: Array.isArray(r.sources) ? r.sources.slice(0, 5).map((s) => String(s).slice(0, 60)) : [], at };
+  }
+  return out;
+}
+
+export function startSitCached(season, week) {
+  const c = cacheGet(startSitKey(season, week));
+  return c ? ai.applyRemovals("startsit", c) : null;
+}
+
+/** Researches the players not looked at in the last 12 hours (all of them with force). */
+export async function startSit(season, week, players, { force = false } = {}) {
+  if (!isConfigured() || !players?.length) return startSitCached(season, week);
+  if (!force && Date.now() < ssFailUntil) return startSitCached(season, week);
+  const key = startSitKey(season, week);
+  const have = cacheGet(key) || { at: null, byId: {}, checked: {}, sources: [] };
+  const now = Date.now();
+  const todo = players.filter((p) => !ssPending.has(p.id) && (force || !have.checked?.[p.id] || now - have.checked[p.id] > SS_FRESH));
+  if (!todo.length) return ai.applyRemovals("startsit", have);
+  const flight = `${key}:${todo.map((p) => p.id).sort().join(",")}`;
+  if (ssInFlight.has(flight)) return ssInFlight.get(flight);
+  for (const p of todo) ssPending.add(p.id);
+  const run = (async () => {
+    const found = {};
+    const checked = {};
+    const removedIds = [];
+    let newSources = [];
+    for (let i = 0; i < todo.length; i += 40) {
+      const batch = todo.slice(i, i + 40);
+      const lines = batch.map((p) => `- ${p.name} (${p.pos}${p.team ? `, ${p.team}` : ""})`).join("\n");
+      const prompt = `You are researching fantasy football start/sit advice for the ${season} NFL season, week ${week}. Use pieces published in the last 7 days: start/sit articles, weekly rankings columns, "starts and sits" lists, expert advice on sites, Reddit posts and analysts' X posts (posts, not comments).${ai.promptHints("startsit")}
+For EACH player below that at least one source discusses for week ${week}: "startVotes" = how many distinct sources say start him, "sitVotes" = how many say sit him, "verdict" = "start" when the sources clearly favour starting, "sit" when they clearly favour sitting, "mixed" otherwise; "summary" = the arguments on both sides in at most 60 words (matchup, role, injuries, weather); "sources" = up to 4 source names.
+Leave out any player you find no start/sit advice for. Do not invent sources.
+Players:
+${lines}
+Reply with ONLY a JSON array, no prose: [{"name":"Full Name","pos":"WR","team":"NYJ","startVotes":3,"sitVotes":1,"verdict":"start","summary":"...","sources":["FantasyPros","ESPN"]}]`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }),
+      });
+      if (!res.ok) throw new Error(`Gemini HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      const json = await res.json();
+      const cand = json?.candidates?.[0];
+      const text = (cand?.content?.parts || []).map((p) => p.text || "").join("\n");
+      const arr = extractJson(text);
+      if (!Array.isArray(arr)) {
+        console.warn("[gemini] Start/sit: couldn't read a JSON array:", text.slice(0, 400));
+        continue;
+      }
+      const got = parseStartSit(arr, batch);
+      const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 20);
+      for (const p of batch) {
+        checked[p.id] = Date.now();
+        if (got[p.id]) found[p.id] = got[p.id];
+        else if (force) removedIds.push(p.id);
+      }
+      newSources = [...sources, ...newSources];
+      ai.recordRun("startsit", { byId: got, sources });
+      console.log(`[gemini] Start/sit ${season} wk${week}: ${Object.keys(got).length}/${batch.length} players discussed, ${sources.length} sources.`);
+    }
+    // merge into whatever is cached NOW (another league's run may have finished meanwhile)
+    const latest = cacheGet(key) || { at: null, byId: {}, checked: {}, sources: [] };
+    const byId = { ...latest.byId, ...found };
+    for (const id of removedIds) delete byId[id];
+    const merged = {
+      at: Date.now(),
+      byId,
+      checked: { ...(latest.checked || {}), ...checked },
+      sources: [...newSources, ...(latest.sources || [])].filter((x, j, all) => all.findIndex((y) => y.uri === x.uri) === j).slice(0, 40),
+    };
+    cacheSet(key, merged, SS_TTL);
+    return ai.applyRemovals("startsit", merged);
+  })();
+  ssInFlight.set(flight, run);
+  try {
+    return await run;
+  } catch (err) {
+    ssFailUntil = Date.now() + 3600e3;
+    throw err;
+  } finally {
+    ssInFlight.delete(flight);
+    for (const p of todo) ssPending.delete(p.id);
   }
 }

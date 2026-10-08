@@ -909,6 +909,22 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     console.warn(`[buildLeague] Injury opportunities failed for league ${leagueId}, continuing without them: ${err.message}`);
   }
 
+  // --- v4.3: start / sit verdicts (Gemini, cached per week) on every roster player ---
+  let startSit = { state: gemini.isConfigured() ? "pending" : "off", at: null };
+  try {
+    const ss = gemini.startSitCached(season, week);
+    const rosterPlayers = [...starters.map((x) => x.player), ...bench, ...ir, ...taxi].filter(Boolean);
+    for (const p of rosterPlayers) p.startSit = ss?.byId?.[p.id] || null;
+    const unchecked = rosterPlayers.filter((p) => !p.started && !ss?.checked?.[p.id]);
+    if (ss) startSit = { state: "ready", at: ss.at || null, checked: rosterPlayers.filter((p) => ss.checked?.[p.id]).length };
+    // First build of the week for these players: research them in the background; the next build shows it.
+    if (gemini.isConfigured() && unchecked.length) {
+      gemini.startSit(season, week, unchecked.map((p) => ({ id: p.id, name: p.name, pos: p.pos, team: p.team }))).catch((err) => console.warn(`[buildLeague] Start/sit research failed: ${err.message}`));
+    }
+  } catch (err) {
+    console.warn(`[buildLeague] Start/sit: ${err.message}`);
+  }
+
   // --- v3.9: Available page categories (Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff) ---
   let waiverCategories = null;
   try {
@@ -1074,6 +1090,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     addCandidates, // v3.7
     dynastyStash, // v3.7
     waiverCategories, // v3.9
+    startSit, // v4.3: research state (verdicts sit on each player as p.startSit)
     injuryOpportunities,
     weekOver,
     irAllowed: [...irAllowed],

@@ -21,9 +21,11 @@ db.exec(`
     positions TEXT, data_from TEXT, notes TEXT, sort_order INTEGER NOT NULL, updated_at INTEGER NOT NULL, updated_by TEXT
   );
 `);
+// v4.3: short column titles for Scouting ("Abbrev" in the spreadsheet)
+if (!db.prepare("PRAGMA table_info(stat_config)").all().some((c) => c.name === "abbrev")) db.exec("ALTER TABLE stat_config ADD COLUMN abbrev TEXT");
 
 export const TYPES = ["Projection", "Stat", "Both", "Neither"];
-export const HEADERS = ["ID", "Stat", "Category", "Type", "In drop-down", "Positions", "Data from", "Notes"];
+export const HEADERS = ["ID", "Stat", "Abbrev", "Category", "Type", "In drop-down", "Positions", "Data from", "Notes"];
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
 
 /** "QB, RB" / "All" → ["QB","RB"] (All = every position). */
@@ -50,12 +52,16 @@ function seed() {
     added++;
   }
   if (added) console.log(`[statConfig] Seeded ${added} stats from config/stats-config.json.`);
+  // v4.3: fill in abbreviations the table doesn't have yet (an upload's own abbreviations are never overwritten)
+  const fill = db.prepare("UPDATE stat_config SET abbrev = ? WHERE id = ? AND abbrev IS NULL");
+  for (const r of rows) if (r.abbrev) fill.run(r.abbrev, r.id);
 }
 seed();
 
 const toRow = (r) => ({
   id: r.id,
   stat: r.stat,
+  abbrev: r.abbrev || r.stat,
   category: r.category,
   type: r.type,
   inDropdown: Boolean(r.in_dropdown),
@@ -105,9 +111,11 @@ export function parseSheetRows(table) {
     if (!["yes", "no", "y", "n", "true", "false"].includes(yn)) errors.push(`Row ${line} (${id}): In drop-down must be Yes or No — "${get("In drop-down")}".`);
     const stat = String(get("Stat") ?? "").trim();
     if (!stat) errors.push(`Row ${line} (${id}): Stat (the name) is empty.`);
+    const abbrevCell = col.Abbrev >= 0 ? String(get("Abbrev") ?? "").trim().slice(0, 16) : null;
     rows.push({
       id,
       stat: stat.slice(0, 80),
+      abbrev: abbrevCell, // null = the sheet has no Abbrev column (keep what's there); "" = use the name
       category: String(get("Category") ?? "").trim().slice(0, 40) || "General",
       type: type || "Stat",
       inDropdown: ["yes", "y", "true"].includes(yn),
@@ -130,7 +138,7 @@ export function importXlsx(buf, username) {
   if (parsed.errors.length) return { ok: false, ...parsed, changed: 0 };
   const before = new Map(list().map((r) => [r.id, r]));
   const up = db.prepare(
-    "INSERT INTO stat_config (id, stat, category, type, in_dropdown, positions, data_from, notes, sort_order, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET stat=excluded.stat, category=excluded.category, type=excluded.type, in_dropdown=excluded.in_dropdown, positions=excluded.positions, data_from=excluded.data_from, notes=excluded.notes, sort_order=excluded.sort_order, updated_at=excluded.updated_at, updated_by=excluded.updated_by"
+    "INSERT INTO stat_config (id, stat, abbrev, category, type, in_dropdown, positions, data_from, notes, sort_order, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET stat=excluded.stat, abbrev=excluded.abbrev, category=excluded.category, type=excluded.type, in_dropdown=excluded.in_dropdown, positions=excluded.positions, data_from=excluded.data_from, notes=excluded.notes, sort_order=excluded.sort_order, updated_at=excluded.updated_at, updated_by=excluded.updated_by"
   );
   const off = db.prepare("UPDATE stat_config SET in_dropdown = 0, updated_at = ?, updated_by = ? WHERE id = ?");
   let changed = 0;
@@ -138,9 +146,11 @@ export function importXlsx(buf, username) {
   db.transaction(() => {
     for (const r of parsed.rows) {
       const b = before.get(r.id);
-      const same = b && b.stat === r.stat && b.category === r.category && b.type === r.type && b.inDropdown === r.inDropdown && b.positionsText === r.positions && b.dataFrom === r.dataFrom && b.notes === r.notes && b.order === r.order;
+      const rawAbbrev = b ? db.prepare("SELECT abbrev FROM stat_config WHERE id = ?").get(r.id)?.abbrev ?? null : null;
+      const abbrev = r.abbrev === null ? rawAbbrev : r.abbrev; // "" = use the full name (kept as "", never refilled)
+      const same = b && b.stat === r.stat && (rawAbbrev ?? null) === (abbrev ?? null) && b.category === r.category && b.type === r.type && b.inDropdown === r.inDropdown && b.positionsText === r.positions && b.dataFrom === r.dataFrom && b.notes === r.notes && b.order === r.order;
       if (same) continue;
-      up.run(r.id, r.stat, r.category, r.type, r.inDropdown ? 1 : 0, r.positions, r.dataFrom, r.notes, r.order, now, username || null);
+      up.run(r.id, r.stat, abbrev, r.category, r.type, r.inDropdown ? 1 : 0, r.positions, r.dataFrom, r.notes, r.order, now, username || null);
       changed++;
     }
     for (const id of parsed.missing) {
@@ -161,9 +171,9 @@ export function exportXlsx() {
       name: "Stats",
       header: true,
       freeze: true,
-      widths: [16, 42, 22, 12, 13, 18, 22, 36],
-      lists: [{ col: 3, values: TYPES }, { col: 4, values: ["Yes", "No"] }],
-      rows: [HEADERS, ...rows.map((r) => [r.id, r.stat, r.category, r.type, r.inDropdown ? "Yes" : "No", r.positionsText, r.dataFrom, r.notes])],
+      widths: [16, 42, 12, 22, 12, 13, 18, 22, 36],
+      lists: [{ col: 4, values: TYPES }, { col: 5, values: ["Yes", "No"] }],
+      rows: [HEADERS, ...rows.map((r) => [r.id, r.stat, r.abbrev, r.category, r.type, r.inDropdown ? "Yes" : "No", r.positionsText, r.dataFrom, r.notes])],
     },
     {
       name: "How to use",
@@ -173,7 +183,7 @@ export function exportXlsx() {
         ["How to use this sheet"],
         ["In drop-down: Yes = offered in the Waivers → All sort list and on Analytics → Scouting; No = left out."],
         ["Type: Projection, Stat, Both or Neither — which side of the Projection / Stats switch offers the stat."],
-        ["Stat (the name shown in the app), Category, Positions, Data from and Notes can be changed too. Row order = order in the drop-downs."],
+        ["Stat (the name shown in the app), Abbrev (the short column title on Scouting), Category, Positions, Data from and Notes can be changed too. Row order = order in the drop-downs."],
         ["Don't change the ID column — it's how the app matches each row. Unknown IDs are reported and ignored; a deleted row is switched to No."],
         ["Upload it again from Analytics → Scouting → Stats list."],
       ],

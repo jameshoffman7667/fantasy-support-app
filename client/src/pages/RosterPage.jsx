@@ -6,7 +6,8 @@ import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmPush, Headshot, MatchupChip, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
-import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, backupLine, formatStatLine } from "../ui/theme.js";
+import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, backupLine, fmtWhen, formatStatLine } from "../ui/theme.js";
+import { StartSitButton, StartSitIcon } from "../ui/startSit.jsx"; // v4.3
 
 /* ------------------------------------------------------------------ */
 /*  v3.6 ROSTER PAGE: "Current lineup" and "Proposed lineup" tabs        */
@@ -65,6 +66,7 @@ function PointsCol({ p }) {
         <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-lg font-semibold leading-tight">{p.proj != null ? p.proj.toFixed(1) : "—"}</div>
         <div style={{ color: live ? C.brand : C.textMuted }} className="text-[10px] font-semibold">{live ? "LIVE" : "FINAL"}</div>
         {p.preProj != null && <div style={{ color: C.textFaint }} className="text-[10px]">proj {p.preProj.toFixed(1)}</div>}
+        <StartSitButton player={p} />
       </div>
     );
   }
@@ -72,6 +74,7 @@ function PointsCol({ p }) {
     <div className="text-right shrink-0 min-w-[3.25rem]" data-points="proj">
       <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-lg font-semibold leading-tight">{p.proj != null ? p.proj.toFixed(1) : "—"}</div>
       <div style={{ color: SRC_COLOR[p.projSource] || C.textFaint }} className="text-[10px]">{SOURCE_TAG[p.projSource] || "no proj"}{p.projFactor ? ` ×${p.projFactor}` : ""}</div>
+      <StartSitButton player={p} />
     </div>
   );
 }
@@ -173,13 +176,42 @@ function rowNotes(league) {
   };
 }
 
-function CurrentLineup({ league, onOpenWaivers = null }) {
+// v4.3: where the start/sit research stands for this roster, and a button to run it again.
+function StartSitStatus({ league, onRefresh }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const st = league.startSit;
+  if (!st || st.state === "off") return null;
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.researchStartSit(league.id);
+      onRefresh?.();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-1 flex items-center gap-2 flex-wrap" data-start-sit-status>
+      <span className="inline-flex items-center gap-1"><StartSitIcon verdict="start" size={13} /><StartSitIcon verdict="mixed" size={13} /><StartSitIcon verdict="sit" size={13} /></span>
+      <span>{st.state === "ready" ? `Start/sit articles read ${st.at ? fmtWhen(st.at) : ""} · tap an icon for the summary` : "Reading this week's start/sit articles — refresh in a minute."}</span>
+      <button type="button" onClick={run} disabled={busy} style={{ color: C.brand }} className="underline" data-start-sit-refresh>{busy ? "Reading…" : "Read again"}</button>
+      {err && <span style={{ color: C.major }}>{err}</span>}
+    </div>
+  );
+}
+
+function CurrentLineup({ league, onOpenWaivers = null, onRefresh = null }) {
   const notesFor = rowNotes(league);
   const starterRows = league.roster.rows.filter((r) => r.slot !== "BN");
   const benchRows = league.roster.rows.filter((r) => r.slot === "BN");
   const bench = league.bench || [];
   return (
     <div data-current-lineup>
+      <StartSitStatus league={league} onRefresh={onRefresh} />
       <SectionLabel>Starters</SectionLabel>
       <div className="space-y-1.5">
         {(league.starters || []).map((s, i) => (
@@ -701,7 +733,7 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
       </div>
       {sub === "current" ? (
         <>
-          <CurrentLineup league={league} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
+          <CurrentLineup league={league} onRefresh={onRefresh} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
           <SuggestedChanges league={league} changes={changes} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />
         </>
       ) : (

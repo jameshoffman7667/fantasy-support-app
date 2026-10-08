@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -33,6 +33,23 @@ instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
 
 ---
+
+## v4.3 — Start/sit signals, AI sources, Scouting abbreviations
+
+**Manual step required: none.** No docker-compose.yml or environment changes (GEMINI_API_KEY is already used by the other AI features).
+
+**Commit (short):** `v4.3: feat: start/sit signals, AI sources, abbrevs`
+
+**Commit (extended):**
+v4.3 adds start/sit signals, source control for the AI features, and shorter Scouting headers.
+
+Roster page: Gemini reads start/sit articles, rankings columns and posts and gives each rostered player a verdict, shown under the score as a green traffic light (strong start), a yield sign (mixed) or a STOP sign (strong sit). The verdict comes from the vote counts it reports (start share 2/3 or more = start, 1/3 or less = sit), not from its own label. Tapping the icon opens the summary, counts and sources. Research runs in the background on first load and on a schedule (Thu 8:00, Sat 10:00, Sun 9:00 Toronto); "Read again" forces it.
+
+Account → AI sources: for each Gemini feature (waiver research, start/sit, upsets, trade news, injury news) see the sources it used, add preferred ones, or remove ones. Added = named as a starting point; removed = "do not use" in the prompt and filtered out of every result when read. Google Search grounding can't be locked to a site list, so this is a strong hint, not a guarantee.
+
+Scouting: column headers use abbreviations (FPTS, Rec Yd, TPRR); the full name is in the pop-up and tooltip. The stats spreadsheet has an Abbrev column, editable on re-upload.
+
+**Unverified:** nothing ran against the live Gemini API (reply format, vote counts, whether source hints are honoured); per-run research cost is one grounded search per 40 players.
 
 ## v4.2 — Waivers "All" tab, Analytics → Scouting, own stats table
 

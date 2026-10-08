@@ -474,6 +474,12 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.3 additions
+- **Start/sit on the Roster page:** under each player's score, a green traffic light (strong start), yield sign (mixed) or STOP sign (strong sit) from Gemini's reading of start/sit articles. Tap it for the summary and sources. **Read again** at the top of the lineup refreshes it; it also refreshes by itself Thursday, Saturday and Sunday mornings. Needs `GEMINI_API_KEY`.
+- **Account → AI sources:** see the sources each AI feature used, add preferred ones, or remove ones. Removed sources are filtered out of results; added ones are a hint (Google Search can't be locked to a list).
+- **Scouting:** column headings use abbreviations; the full name shows in the pop-up. The stats spreadsheet has an Abbrev column.
+- No compose or environment changes in this release.
+
 ### v4.2 additions
 - **Waivers → Available → All** (now the first tab): every free agent, sorted by any stat. The button next to the search bar opens Filters & sort: Projection or Stats, Category, Stat, up/down, Season and Week / Season.
 - **Analytics → Scouting:** pick positions, stats, seasons and weeks (multi-select), search and pick players, and compare them in a table. Tap a column header for its definition, Min/Max, sort and sort bands. Bookmarks save a setup by name.
@@ -1052,6 +1058,7 @@ server/
   waiverCategories.js     Available page categories (Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff) and research/injury notes (v3.9)
   androidApp.js           /.well-known/assetlinks.json for the Android app, from ANDROID_APP_SHA256 / ANDROID_APP_PACKAGE (v4.0)
   playerSearch.js         Available-page search: any free agent in a league (v4.1)
+  aiSources.js            Sources behind each Gemini feature: preferred / removed / seen (v4.3)
   statConfig.js           Stats list (table stat_config), seeded from config/stats-config.json; .xlsx download/upload (v4.2)
   statDefs.js             How each stat is worked out, its definition and source (v4.2)
   statsStore.js           Own weekly stats/projections table (stat_lines) from Sleeper + nflverse (v4.2)

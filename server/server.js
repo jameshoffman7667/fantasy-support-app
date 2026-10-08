@@ -49,6 +49,7 @@ import * as tank01 from "./tank01.js";
 import { getLastSummary, cachedPick } from "./projectionHub.js";
 import { searchFreeAgents } from "./playerSearch.js"; // v4.1
 import { registerStatsRoutes } from "./statsApi.js"; // v4.2: stats list, Waivers → All, Analytics → Scouting
+import * as aiSources from "./aiSources.js"; // v4.3: AI sources per feature
 import { simulateSeason } from "./simulate.js";
 import { isPushConfigured, getPublicKey, saveSubscription, removeSubscription } from "./push.js";
 import {
@@ -697,6 +698,35 @@ app.get("/api/waivers/search", async (req, res) => {
 
 // v4.2: stats list (spreadsheet), stats query, saved views and bookmarks.
 registerStatsRoutes(app, { requireAuth, requireOwner, builtLeague: (u, id) => getBuiltLeague(u, id)?.data || null, trackedLeagueIds: (u) => (getUserState(u)?.leagueIds || []).map(String), jsonBig });
+
+/* ---------------- v4.3: start / sit research and AI sources ---------------- */
+// Researches (again) every player on this league's roster whose game hasn't started; the client rebuilds afterwards.
+app.use("/api/startsit", requireAuth);
+app.post("/api/startsit/research", async (req, res) => {
+  if (!gemini.isConfigured()) return res.status(400).json({ error: "No Gemini key set (GEMINI_API_KEY)." });
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    const now = Date.now();
+    const players = [...(lg.starters || []).map((x) => x.player), ...(lg.bench || []), ...(lg.ir || []), ...(lg.taxi || [])]
+      .filter((p) => p?.id && !(p.started || (p.kickoff != null && p.kickoff <= now)))
+      .map((p) => ({ id: p.id, name: p.name, pos: p.pos, team: p.team }));
+    const out = await gemini.startSit(Number(lg.season), Number(lg.week), players, { force: true });
+    res.json({ ok: true, at: out?.at ?? null, players: players.length, verdicts: players.filter((p) => out?.byId?.[p.id]).length });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "The start/sit research failed." });
+  }
+});
+app.use("/api/ai-sources", requireAuth);
+app.get("/api/ai-sources", (req, res) => res.json({ configured: gemini.isConfigured(), features: aiSources.overview() }));
+app.post("/api/ai-sources", requireOwner, (req, res) => {
+  try {
+    aiSources.update(String(req.body?.feature || ""), String(req.body?.action || ""), req.body?.source);
+    res.json({ configured: gemini.isConfigured(), features: aiSources.overview() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 /* ---------------- v3.7: FAAB database, opponent bid report, waiver simulator ---------------- */
 const trackedLeague = (req, res, leagueId) => {

@@ -576,6 +576,16 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2u v4.3 — Start/sit signals, AI sources, Scouting abbreviations
+
+**Start/sit (Roster page).** Gemini (Google Search grounding) reads this week's start/sit articles, rankings columns and posts for rostered players that haven't started, in batches of 40. For each it reports start and sit vote counts, a summary and sources. The verdict is derived from the counts: start share ≥ 2/3 strong start, ≤ 1/3 strong sit, otherwise mixed; unmentioned players get no icon. Shown under the score on each card: green traffic light, yield sign, STOP sign. Tapping opens the verdict, counts, summary, sources and a note that it reads the coverage and doesn't make the call. A strip at the top of the lineup shows the three icons, when the articles were read, and "Read again". Results are fresh for 12 hours (8-day cache); a failed run backs off one hour. Scheduled forced re-reads: Thu 8:00, Sat 10:00, Sun 9:00 (Toronto), once per slot.
+
+**AI sources (Account).** For hype, start/sit, upsets, trade news and injury news: sources used (counted per run), Added (preferred) and Removed. Added are named in the prompt as starting points; removed are named as "do not use" and filtered from every result at read time (source names, grounding links, and any item whose only sources were removed). Only the owner changes them. Grounding can't be restricted to a list of sites, so added is a hint, not a guarantee.
+
+**Abbreviations.** Scouting headers use the stat's abbreviation; the full name is in the column pop-up and tooltip. The stats spreadsheet has an Abbrev column (blank = full name; a sheet without the column keeps existing ones).
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -755,3 +765,7 @@ Collected here since they cut across multiple sections:
 117. **Sorting (v4.2):** levels in the order set; banded columns sort by band first (level order), then by value (level order); suggested bands per position from the card thresholds or thirds.
 118. **Saving (v4.2):** last setup kept per user, plus named bookmarks.
 119. **Stats table (v4.2):** own SQLite table of weekly stat and projection lines.
+120. **Start/sit verdict (v4.3):** derived from vote counts (start share ≥ 2/3 start, ≤ 1/3 sit, else mixed), not from Gemini's label.
+121. **Start/sit timing (v4.3):** background on first load, 12 h freshness, Thu/Sat/Sun scheduled re-reads, one-hour back-off after a failure.
+122. **AI sources (v4.3):** added = preferred hint; removed = "do not use" plus read-time filtering. Owner edits; everyone can view.
+123. **Abbreviations (v4.3):** per-stat Abbrev column in the stats list; full name in pop-up and tooltip.
