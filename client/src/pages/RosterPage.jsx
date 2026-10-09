@@ -1,10 +1,10 @@
 import * as api from "../api.js";
 import { GROUP_LABEL, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
-import { arrangement, buildPush, proposeChanges, toggle as toggleChange } from "../rosterChanges.js";
+import { arrangement, buildPush, customChange, proposeChanges, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
 import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ConfirmPush, Headshot, MatchupChip, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
+import { ConfirmPush, Headshot, MatchupChip, Modal, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, backupLine, fmtWhen, formatStatLine } from "../ui/theme.js";
 import { StartSitButton, StartSitIcon } from "../ui/startSit.jsx"; // v4.3
@@ -85,7 +85,9 @@ function PointsCol({ p }) {
  * actual stat lines, usage, projected and actual points. `notes` are coloured lines under it; `highlight`
  * ("in" | "out" | "ir") marks a change on the Proposed lineup tab.
  */
-function RosterPlayerRow({ slot, player: p, profile, severity = null, notes = [], highlight = null, sub = null, emptyLabel = "(empty)", onTapEmpty = null }) {
+function RosterPlayerRow({ slot, player: p, profile, severity = null, notes = [], highlight = null, sub = null, emptyLabel = "(empty)", onTapEmpty = null, onSlotTap = null }) {
+  // v4.4: on the Proposed lineup the position box is a button that opens the swap list
+  const pos = (onSlotTap ? <button type="button" onClick={onSlotTap} className="rounded" style={{ outline: `1px dashed ${C.brand}88`, outlineOffset: 2 }} aria-label={`${slot}: choose who plays here`} data-slot-edit={slot}><PosBox label={slot} /></button> : <PosBox label={slot} />);
   const sev = severity ? STATUS[severity] : null;
   const edge = highlight === "in" ? C.ok : highlight === "out" ? C.minor : highlight === "ir" ? C.major : sev ? sev.color : C.border;
   const bg = highlight === "in" ? C.okBg : highlight === "out" ? C.minorBg : C.surface;
@@ -94,7 +96,7 @@ function RosterPlayerRow({ slot, player: p, profile, severity = null, notes = []
     const Tag = onTapEmpty ? "button" : "div";
     return (
       <Tag {...(onTapEmpty ? { type: "button", onClick: onTapEmpty, "aria-label": `${emptyLabel} — open Waivers`, "data-open-waivers": true } : {})} style={{ background: bg, border: `1px solid ${C.border}`, borderLeft: `3px solid ${edge}` }} className="w-full text-left rounded-md px-2.5 py-2.5 flex items-center gap-2.5" data-roster-row="empty" data-slot={slot}>
-        <PosBox label={slot} />
+        {pos}
         <div className="min-w-0 flex-1">
           <div style={{ color: C.textMuted }} className="text-sm">{emptyLabel}</div>
           {sub}
@@ -109,7 +111,7 @@ function RosterPlayerRow({ slot, player: p, profile, severity = null, notes = []
   return (
     <div style={{ background: bg, border: `1px solid ${C.border}`, borderLeft: `3px solid ${edge}` }} className="rounded-md px-2.5 py-2.5 flex items-start gap-2" data-roster-row={p.id} data-slot={slot}>
       <div className="flex flex-col items-center gap-1.5 shrink-0">
-        <PosBox label={slot} />
+        {pos}
         <PlayerLink player={p} className="rounded-full">
           <Headshot player={p} size={40} />
         </PlayerLink>
@@ -700,7 +702,11 @@ function LineupTab({ league, onSaveRanking, hideWeather = false }) {
 /* ------------------------------------------------------------------ */
 export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, onOpenTab = null }) {
   const [sub, setSub] = useState("current");
-  const changes = useMemo(() => proposeChanges(league), [league]);
+  const suggested = useMemo(() => proposeChanges(league), [league]);
+  // v4.4: hand-made changes from the Proposed lineup (tap a position box), applied after the ticked suggestions
+  const [customs, setCustoms] = useState([]);
+  useEffect(() => setCustoms([]), [league]);
+  const changes = useMemo(() => [...suggested, ...customs], [suggested, customs]);
   const [checked, setChecked] = useState(() => new Set());
   useEffect(() => {
     setChecked((prev) => {
@@ -709,8 +715,13 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
       return next.size === prev.size ? prev : next;
     });
   }, [changes]);
-  const onToggle = (key, on) => setChecked((prev) => toggleChange(changes, prev, key, on));
-  const acceptAll = () => setChecked(new Set(changes.filter((c) => !c.blocked).map((c) => c.key)));
+  // Changing the ticked suggestions would change what the custom changes were made against, so they are undone.
+  const onToggle = (key, on) => (setCustoms((c) => (c.length ? [] : c)), setChecked((prev) => toggleChange(suggested, new Set([...prev].filter((k) => suggested.some((c) => c.key === k))), key, on)));
+  const acceptAll = () => (setCustoms([]), setChecked(new Set(suggested.filter((c) => !c.blocked).map((c) => c.key))));
+  const addCustom = (c) => {
+    setCustoms((prev) => [...prev.filter((x) => x.key !== c.key), c]);
+    setChecked((prev) => new Set([...prev, c.key]));
+  };
   const tab = (key, label) => (
     <button key={key} onClick={() => setSub(key)} aria-current={sub === key ? "page" : undefined} data-roster-tab={key} style={{ color: sub === key ? C.text : C.textMuted, borderBottom: `2px solid ${sub === key ? C.brand : "transparent"}` }} className="flex-1 py-2.5 text-sm font-medium">
       {label}
@@ -734,17 +745,17 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
       {sub === "current" ? (
         <>
           <CurrentLineup league={league} onRefresh={onRefresh} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
-          <SuggestedChanges league={league} changes={changes} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />
+          <SuggestedChanges league={league} changes={suggested} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />
         </>
       ) : (
-        <ProposedLineup league={league} changes={changes} checked={checked} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={() => setChecked(new Set())} onGoCurrent={() => setSub("current")} />
+        <ProposedLineup league={league} changes={changes} checked={checked} customs={customs} onAddCustom={addCustom} onUndoCustoms={() => (setChecked((prev) => new Set([...prev].filter((k) => !customs.some((c) => c.key === k)))), setCustoms([]))} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={() => (setChecked(new Set()), setCustoms([]))} onGoCurrent={() => setSub("current")} />
       )}
     </div>
   );
 }
 
 function changeText(c) {
-  if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span></>, sub: c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null };
+  if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, c.altNote || null].filter(Boolean).join(" · ") || null };
   if (c.type === "swap")
     return {
       title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><b>{c.nameB}</b> to {c.slot}, {c.nameA} to {c.slotB_label}</span></>,
@@ -801,8 +812,9 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onS
   );
 }
 
-function ProposedLineup({ league, changes, checked, onRefresh, onOpenAccount, onDone, onGoCurrent }) {
+function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, onUndoCustoms, onRefresh, onOpenAccount, onDone, onGoCurrent }) {
   const arr = useMemo(() => arrangement(league, changes, checked), [league, changes, checked]);
+  const [picker, setPicker] = useState(null); // v4.4: { kind: "starter", index } | { kind: "bench"|"taxi", id }
   const pushRef = useRef(null);
   // The floating "Review & push" button hides once the push panel itself is on screen.
   const [panelVisible, setPanelVisible] = useState(false);
@@ -833,18 +845,23 @@ function ProposedLineup({ league, changes, checked, onRefresh, onOpenAccount, on
           <button type="button" onClick={onGoCurrent} style={{ color: C.brand }} className="underline">Current lineup</button>.
         </div>
       )}
+      <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2 flex items-center justify-between gap-2" data-swap-hint>
+        <span>Tap a position box (QB, RB, BN, TAXI…) to swap that player with anyone on your roster who fits.</span>
+        {customs.length > 0 && <button type="button" onClick={onUndoCustoms} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2 py-0.5 shrink-0" data-undo-customs>Undo custom ({customs.length})</button>}
+      </div>
       <SectionLabel>Starters</SectionLabel>
       <div className="space-y-1.5">
         {arr.starters.map((s, i) => (
           <RosterPlayerRow
             key={i}
             slot={s.slot}
+            onSlotTap={() => setPicker({ kind: "starter", index: i })}
             player={s.player}
             profile={league.scoringProfile}
             highlight={s.changed ? "in" : null}
             sub={
               !s.changed ? null : s.swapFrom ? (
-                <div style={{ color: C.ok }} className="text-xs mt-0.5" data-was>Moved from {s.swapFrom} — timing swap with {s.was?.name || "(empty)"}</div>
+                <div style={{ color: C.ok }} className="text-xs mt-0.5" data-was>Moved from {s.swapFrom} — {s.custom ? "custom swap" : "timing swap"} with {s.was?.name || "(empty)"}</div>
               ) : (
                 <div style={{ color: C.ok }} className="text-xs mt-0.5" data-was>In for {s.was?.name || "(empty)"}{s.was?.proj != null && s.player?.proj != null ? ` (${s.player.proj - s.was.proj >= 0 ? "+" : ""}${(s.player.proj - s.was.proj).toFixed(1)} pts)` : ""}</div>
               )
@@ -855,7 +872,7 @@ function ProposedLineup({ league, changes, checked, onRefresh, onOpenAccount, on
       <SectionLabel>Bench</SectionLabel>
       <div className="space-y-1.5">
         {arr.bench.map((b, i) => (
-          <RosterPlayerRow key={i} slot="BN" player={b.player} profile={league.scoringProfile} highlight={b.change === "benched" ? "out" : null} sub={b.change === "benched" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved to the bench</div> : null} />
+          <RosterPlayerRow key={i} slot="BN" player={b.player} profile={league.scoringProfile} onSlotTap={b.player?.id != null ? () => setPicker({ kind: "bench", id: b.player.id }) : null} highlight={b.change === "benched" || b.change === "from taxi" ? "out" : null} sub={b.change === "benched" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved to the bench</div> : b.change === "from taxi" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved from the taxi squad to the bench</div> : null} />
         ))}
       </div>
       {arr.ir.length > 0 && (
@@ -871,9 +888,10 @@ function ProposedLineup({ league, changes, checked, onRefresh, onOpenAccount, on
       {arr.taxi.length > 0 && (
         <>
           <SectionLabel>Taxi Squad</SectionLabel>
-          <div className="space-y-1.5">{arr.taxi.map((b, i) => <RosterPlayerRow key={i} slot="TAXI" player={b.player} profile={league.scoringProfile} />)}</div>
+          <div className="space-y-1.5">{arr.taxi.map((b, i) => <RosterPlayerRow key={i} slot="TAXI" player={b.player} profile={league.scoringProfile} onSlotTap={b.player?.id != null ? () => setPicker({ kind: "taxi", id: b.player.id }) : null} />)}</div>
         </>
       )}
+      {picker && <SwapPicker league={league} arr={arr} target={picker} onClose={() => setPicker(null)} onPick={(opt) => { const c = customChange(arr, picker, opt); if (c) onAddCustom(c); setPicker(null); }} />}
       <div ref={pushRef} className="mt-4">
         <PushPanel league={league} changes={changes} checked={checked} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onDone} />
       </div>
@@ -885,6 +903,32 @@ function ProposedLineup({ league, changes, checked, onRefresh, onOpenAccount, on
         </div>
       )}
     </div>
+  );
+}
+
+/** v4.4: the swap list for one position box — everyone who can trade places with that player, best projection first. */
+function SwapPicker({ league, arr, target, onClose, onPick }) {
+  const info = useMemo(() => swapOptions(league, arr, target), [league, arr, target]);
+  const group = (o) => (o.group === "starter" ? `Starting${o.otherSlot != null ? ` · ${arr.starters[o.otherSlot].slot}` : o.slotLabel ? ` · ${o.slotLabel}` : ""}` : GROUP_LABEL[o.group] || o.group);
+  return (
+    <Modal title={target.kind === "taxi" ? `Taxi squad — ${info.title}` : target.kind === "bench" ? `Start ${info.title} instead of…` : `Swap — ${info.title}`} onClose={onClose}>
+      <div className="space-y-1.5 text-sm" data-swap-picker={target.kind}>
+        {info.locked && <div style={{ color: C.minor }} data-swap-locked>His game has started, so he can't be moved.</div>}
+        {!info.locked && info.options.length === 0 && <div style={{ color: C.textMuted }}>Nobody on your roster fits here.</div>}
+        {target.kind === "taxi" && <div style={{ color: C.textMuted }} className="text-xs">Taxi players can only be moved to the bench — this keeps them from leaving the taxi squad by accident.</div>}
+        {info.options.map((o, i) => (
+          <button key={`${o.player.id ?? "e"}-${i}`} type="button" disabled={!o.enabled} onClick={() => onPick(o)} style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: o.enabled ? 1 : 0.55 }} className="w-full text-left rounded-md px-3 py-2 flex items-center gap-2" data-swap-option={o.player.id ?? "empty"} data-enabled={o.enabled ? "1" : "0"}>
+            <span className="min-w-0 flex-1">
+              <span style={{ color: C.text }} className="font-medium">{o.toBench ? `Move ${o.player.name} to the bench` : o.player.name}</span>{" "}
+              <span style={{ color: POS_COLOR[o.player.pos] || C.textMuted }} className="text-[11px] font-semibold">{o.player.pos}</span>{" "}
+              <span style={{ color: C.textFaint }} className="text-[11px]">{o.player.team || ""}{o.toBench ? "" : ` · ${group(o)}`}</span>
+              {!o.enabled && o.reason && <span style={{ color: C.minor }} className="block text-[11px]">{o.reason}</span>}
+            </span>
+            <span style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-sm shrink-0">{o.player.proj != null ? `${Number(o.player.proj).toFixed(1)}` : "—"}</span>
+          </button>
+        ))}
+      </div>
+    </Modal>
   );
 }
 
@@ -903,6 +947,14 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
           out.push({ label: "Starting lineup", ok: r.ok, verified: r.verified, detail: r.detail });
         } catch (e) {
           out.push({ label: "Starting lineup", ok: false, detail: e.message });
+        }
+      }
+      if (push.taxi) {
+        try {
+          const r = await api.pushTaxi(league.id, push.taxi);
+          out.push({ label: "Taxi squad", ok: r.ok, verified: r.verified, detail: r.detail });
+        } catch (e) {
+          out.push({ label: "Taxi squad", ok: false, detail: e.message });
         }
       }
       if (push.reserve) {
@@ -943,7 +995,7 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
                   </button>
                 )}
                 {confirming && (
-                  <ConfirmPush title="Send these changes to Sleeper?" lines={push.summary} buttonLabel="Yes, update my roster" busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note="Sleeper is then asked for the roster back to check it. The lineup is written to both your roster and this week's matchup. Moving a player to IR is an untested Sleeper call — it is reported honestly if it doesn't take." />
+                  <ConfirmPush title="Send these changes to Sleeper?" lines={push.summary} buttonLabel="Yes, update my roster" busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note="Sleeper is then asked for the roster back to check it. The lineup is written to both your roster and this week's matchup. Moving a player to IR or off the taxi squad is an untested Sleeper call — it is reported honestly if it doesn't take." />
                 )}
               </>
             )}

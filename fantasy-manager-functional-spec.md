@@ -586,6 +586,20 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2v v4.4 — Scouting sort and colours, bench options, custom swaps, Auto mode
+
+**Scouting header taps.** A tap sorts. A column that isn't a sort level becomes the BOTTOM level, descending; a column that already is one cycles descending → ascending → off (off removes just that level), also inside a multi-level sort. Press-and-hold (about half a second, touch or mouse), right-click, a ⋮ button shown while the mouse is over the header, or Shift+Enter / the menu key open the column pop-up (definition, source, Min/Max, sort, bands). "Clear this stat" closes the pop-up.
+
+**Conditional formatting.** A button beside Bookmarks and Clear cycles Colours off → Band → Gradient. Band: each cell is tinted by its sort band (Good green, OK yellow, Poor red; unnamed bands by place, flipped when low is better; no bands = no colour). Gradient: red through yellow to green from the worst to the best value of that column over every player matching the filters (lower-is-better stats flip); blanks stay uncoloured. Default Band (the earlier behaviour). Saved with the last setup and bookmarks.
+
+**Bench option on waiver suggestions (Roster → Current lineup).** When a suggested change puts a free agent in a slot, the best bench player eligible for the slot who is not locked and is projected for more points than the player in the slot is offered as a second suggestion for the same slot ("Bench option — X has to be added from Waivers first"). The two are alternatives: ticking one unticks the other.
+
+**Custom swaps (Roster → Proposed lineup).** Tapping a position box (a starting slot, BN or TAXI) opens a list. Starting slot: starters who fit both ways (they trade places) and bench players who fit the slot, best projection first; IR players are listed greyed (needs a roster move first); taxi players are listed greyed ("Taxi players can only be moved to the bench"); locked players are left out. Bench box: the starters this player could replace. Taxi box: only "Move to the bench". Custom changes are applied after the ticked suggestions, go through the same review-and-push step, and are undone with "Undo custom" or when a suggestion is ticked or unticked. A taxi → bench move is pushed as a roster_update_taxi call (unverified).
+
+**Auto mode (Waivers page, per league, every type except best ball).** A check box with a pause-all box. Each roster check (the hourly background refresh): an empty IR spot is filled by an IR-eligible bench player, an empty taxi spot by a bench player the league's taxi rule allows (rookies up to taxi_years, or anyone when taxi_allow_vets; no rule found = nobody is moved), best trade value first. One hour before the league's waivers process (once per waiver run, FAAB leagues only): every empty bench spot gets a $0 claim with no drop — trending free agents first (by trend count), then trade value; QB/RB/WR/TE only, not Out/IR/PUP/Suspended/Doubtful, not started; at most 5 claims; pending claims count as filled spots. Claims go only to the bench. Needs "Roster changes" / "Waiver claims" on; with a switch off the step is skipped and logged. A failed move isn't retried for a day. Every action is logged on the Waivers page and sent as a push notification.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -769,3 +783,11 @@ Collected here since they cut across multiple sections:
 121. **Start/sit timing (v4.3):** background on first load, 12 h freshness, Thu/Sat/Sun scheduled re-reads, one-hour back-off after a failure.
 122. **AI sources (v4.3):** added = preferred hint; removed = "do not use" plus read-time filtering. Owner edits; everyone can view.
 123. **Abbreviations (v4.3):** per-stat Abbrev column in the stats list; full name in pop-up and tooltip.
+124. **Header tap (v4.4):** a tap sorts (new column = bottom level descending; existing level cycles desc → asc → off); hold, right-click, ⋮ or Shift+Enter open the pop-up.
+125. **Colours (v4.4):** None / Band / Gradient button; gradient scale over all players matching the filters; default Band.
+126. **Bench option (v4.4):** offered whenever a suggestion is a waiver add and a bench player beats the starter; alternatives exclude each other.
+127. **Custom swaps (v4.4):** position box opens a list sorted by projection; locked players left out; taxi players only to the bench; IR players shown disabled.
+128. **Custom changes are cleared (v4.4)** when a suggestion is ticked or unticked, so they never rest on a lineup that changed.
+129. **Auto mode scope (v4.4):** every league type except best ball; claims only in FAAB leagues; claims only to the bench; never drops.
+130. **Auto mode timing (v4.4):** moves at each hourly roster check; claims one hour before the league's waivers process.
+131. **Auto mode safety (v4.4):** own check box per league, pause-all, log and notifications, 5-claim cap, failed moves not retried for a day.

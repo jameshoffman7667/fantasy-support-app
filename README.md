@@ -474,6 +474,13 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.4 additions
+- **Scouting:** tap a column header to sort (a new column is added as the bottom sort level; tapping a sorted column cycles descending, ascending, off). Hold, right-click, the ⋮ button or Shift+Enter open the column pop-up. A colour button beside Bookmarks and Clear switches cell colours off, to bands, or to a red-to-green gradient.
+- **Roster → Current lineup:** a waiver-add suggestion now also offers the best bench player who is projected higher than the starter.
+- **Roster → Proposed lineup:** tap a position box to swap that player with anyone on your roster who fits (best projection first). Taxi players can only be moved to the bench. **Undo custom** clears your hand-made changes.
+- **Auto mode** (Waivers page, check box per league, not best ball): fills empty IR and taxi spots from your bench at each roster check, and an hour before waivers places $0 claims for empty bench spots in FAAB leagues (trending first, then trade value). Needs "Roster changes" and "Waiver claims" on in Account → Sleeper access. It logs what it does and sends a notification.
+- No compose or environment changes in this release.
+
 ### v4.3 additions
 - **Start/sit on the Roster page:** under each player's score, a green traffic light (strong start), yield sign (mixed) or STOP sign (strong sit) from Gemini's reading of start/sit articles. Tap it for the summary and sources. **Read again** at the top of the lineup refreshes it; it also refreshes by itself Thursday, Saturday and Sunday mornings. Needs `GEMINI_API_KEY`.
 - **Account → AI sources:** see the sources each AI feature used, add preferred ones, or remove ones. Removed sources are filtered out of results; added ones are a hint (Google Search can't be locked to a list).
@@ -1058,6 +1065,7 @@ server/
   waiverCategories.js     Available page categories (Hype Train, Spot Start, ROS, Stashes, Trending, Handcuff) and research/injury notes (v3.9)
   androidApp.js           /.well-known/assetlinks.json for the Android app, from ANDROID_APP_SHA256 / ANDROID_APP_PACKAGE (v4.0)
   playerSearch.js         Available-page search: any free agent in a league (v4.1)
+  autoMode.js             Auto mode: IR / taxi fills and $0 bench claims (v4.4)
   aiSources.js            Sources behind each Gemini feature: preferred / removed / seen (v4.3)
   statConfig.js           Stats list (table stat_config), seeded from config/stats-config.json; .xlsx download/upload (v4.2)
   statDefs.js             How each stat is worked out, its definition and source (v4.2)

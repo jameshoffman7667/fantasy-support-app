@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -33,6 +33,23 @@ instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
 
 ---
+
+## v4.4 — Scouting sort and colours, bench options, custom swaps, Auto mode
+
+**Manual step required: none.** No docker-compose.yml or environment changes. (Auto mode needs the "Roster changes" and "Waiver claims" switches on in Account → Sleeper access to act.)
+
+**Commit (short):** `v4.4: feat: sort taps, swaps, bench options, Auto mode`
+
+**Commit (extended):**
+v4.4 changes how Scouting sorts and colours, adds bench options and hand-made swaps on the Roster page, and adds Auto mode.
+
+Scouting: tapping a column header sorts — a new column becomes the bottom sort level (descending); one already sorted cycles descending, ascending, off, even inside a multi-level sort. Hold (touch or mouse), right-click, the ⋮ button on hover, or Shift+Enter open the old pop-up; "Clear this stat" now closes it. A colour button beside Bookmarks and Clear cycles off, bands (red/yellow/green by sort band) and gradient (worst to best value).
+
+Roster: when a suggestion is a waiver add, the best bench player projected above the starter is offered too (the two are alternatives). On Proposed lineup, tap a position box to swap with anyone on the roster who fits, best projection first; taxi players can only be moved to the bench.
+
+Auto mode (Waivers page, per league, not best ball): each roster check fills empty IR and taxi spots from the bench; one hour before waivers, FAAB leagues get $0 bench claims (trending first, then value). Logged and notified; never drops anyone.
+
+**Unverified:** the Sleeper call for moving players on and off the taxi squad (roster_update_taxi) and the league setting names for taxi rules (taxi_slots, taxi_years, taxi_allow_vets) — nothing here could be tried against Sleeper. Moving a player to IR is still the earlier unverified call. Auto mode has not run against a real league.
 
 ## v4.3 — Start/sit signals, AI sources, Scouting abbreviations
 

@@ -243,6 +243,9 @@ export function pushLineup(leagueId, starters, marks = {}) {
 export function pushReserve(leagueId, reserve) {
   return jsonPost(`/api/private/reserve`, { leagueId, reserve, confirm: true });
 }
+export function pushTaxi(leagueId, taxi) {
+  return jsonPost(`/api/private/taxi`, { leagueId, taxi, confirm: true });
+}
 export function pushClaim(leagueId, claim, marks = {}) {
   return jsonPost(`/api/private/claim`, { leagueId, addId: claim.addId, dropId: claim.dropId || null, bid: claim.bid, confirm: true, keys: marks.keys });
 }
@@ -388,4 +391,12 @@ export function getAiSources() {
 }
 export function updateAiSource(feature, action, source) {
   return jsonPost(`/api/ai-sources`, { feature, action, source });
+}
+
+// v4.4: Auto mode (per league check box, pause-all switch, the log of what it did).
+export function getAutoMode(leagueId = null) {
+  return request(`/api/automode${leagueId ? `?leagueId=${encodeURIComponent(leagueId)}` : ""}`);
+}
+export function setAutoMode(patch) {
+  return jsonPost(`/api/automode`, patch);
 }

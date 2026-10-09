@@ -229,6 +229,66 @@ export function setSort(state, id, dir) {
   if (dir && !order.includes(id)) order = [...order, id];
   return { ...state, cols, order };
 }
+/**
+ * v4.4: a plain header tap. A column that isn't a sort level yet is added as the BOTTOM level, descending; one that
+ * already is (even inside a multi-level sort) cycles descending → ascending → off (off removes just that level).
+ */
+export function cycleSort(state, id) {
+  const d = state.cols?.[id]?.dir;
+  if (d !== "asc" && d !== "desc") return setSort(state, id, "desc");
+  return setSort(state, id, d === "desc" ? "asc" : null);
+}
+
+/* ---------------- conditional formatting (v4.4) ---------------- */
+/** none → band → gradient → none. */
+export const FORMATS = ["none", "band", "gradient"];
+export const FORMAT_LABEL = { none: "Colours off", band: "Colour: bands", gradient: "Colour: gradient" };
+export const nextFormat = (f) => FORMATS[(Math.max(0, FORMATS.indexOf(f)) + 1) % FORMATS.length];
+/** { min, max } of the numeric values of one stat over the rows (null when there are none). */
+export function columnRange(rows, id) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const r of rows) {
+    const v = r.values?.[id];
+    if (v == null || !Number.isFinite(Number(v))) continue;
+    min = Math.min(min, Number(v));
+    max = Math.max(max, Number(v));
+  }
+  return min <= max ? { min, max } : null;
+}
+/** 0 (worst) … 1 (best) of a value inside the column's range; "low is better" stats flip. null = no colour. */
+export function gradientT(value, range, better = "high") {
+  if (value == null || !Number.isFinite(Number(value)) || !range || range.max === range.min) return null;
+  const t = (Number(value) - range.min) / (range.max - range.min);
+  return better === "low" ? 1 - t : t;
+}
+/** 0 (worst) … 1 (best) for a band: by its label (good / ok / poor), else by its place among the bands. */
+export function bandT(bands, band, better = "high") {
+  if (!band) return null;
+  if (/good|great|elite|top/i.test(band.label)) return 1;
+  if (/poor|bad|weak/i.test(band.label)) return 0;
+  if (/ok|avg|average|mid/i.test(band.label)) return 0.5;
+  const list = normBands(bands);
+  const i = list.findIndex((b) => b.min === band.min && b.max === band.max);
+  if (i < 0) return null;
+  if (list.length === 1) return 0.5;
+  const t = i / (list.length - 1);
+  return better === "low" ? 1 - t : t;
+}
+/** Red (0) through yellow to green (1), as a see-through cell background. */
+export const heatColor = (t) => (t == null ? null : `hsla(${Math.round(Math.max(0, Math.min(1, t)) * 120)}, 70%, 45%, 0.32)`);
+/** The cell background for one value: format "band" | "gradient" (anything else = none). Pure. */
+export function cellColor({ format, value, bands, range, better }) {
+  if (format === "gradient") return heatColor(gradientT(value, range, better));
+  if (format === "band") {
+    if (value == null || !Number.isFinite(Number(value)) || !bands) return null;
+    const v = Number(value);
+    const band = normBands(bands).find((x) => (x.min == null || v >= x.min) && (x.max == null || v < x.max));
+    return heatColor(bandT(bands, band, better));
+  }
+  return null;
+}
+
 /** Clears one column's min/max, bands and sort. */
 export function clearColumn(state, id) {
   const cols = { ...(state.cols || {}) };

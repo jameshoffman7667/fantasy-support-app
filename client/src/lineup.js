@@ -64,6 +64,8 @@ export function playerKey(player) {
 function isEligible(slot, pos) {
   return FLEX_ELIGIBLE[slot] ? FLEX_ELIGIBLE[slot].includes(pos) : pos === slot;
 }
+/** v4.4: can a player at this position fill this starting slot? */
+export const slotEligible = isEligible;
 
 /** A projection of exactly 0 (not missing, and not a finished game's actual score) — the "red" case. */
 export function isZeroProjection(player) {

@@ -1,11 +1,11 @@
 import * as api from "../api.js";
-import { Bookmark, Download, Loader2, RotateCcw, Search, Upload, X } from "lucide-react";
+import { Bookmark, Download, Loader2, MoreVertical, Palette, RotateCcw, Search, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, SectionLabel } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { Dropdown, StatPickers } from "../ui/statPickers.jsx";
 import { C, POS_COLOR, inputStyle } from "../ui/theme.js";
-import { POSITIONS, applyMinMax, bandsFor, clearColumn, fmtValue, leagueStatus, normBands, normalizeView, setSort, sortLevel, sortRows, suggestBands } from "../statsView.js";
+import { FORMAT_LABEL, POSITIONS, applyMinMax, bandsFor, cellColor, clearColumn, columnRange, cycleSort, fmtValue, leagueStatus, normBands, nextFormat, normalizeView, setSort, sortLevel, sortRows, suggestBands } from "../statsView.js";
 import { loadStatsConfig, resetStatsConfig } from "./WaiverPage.jsx";
 
 /**
@@ -15,7 +15,7 @@ import { loadStatsConfig, resetStatsConfig } from "./WaiverPage.jsx";
  * the server, and setups can be saved as named bookmarks.
  */
 const PAGE = 20;
-const EMPTY = (cur) => ({ positions: [], scoringLeagueId: null, mode: "stat", categories: [], stats: ["fpts"], seasons: [cur?.season].filter(Boolean), period: "season", weeks: [], players: [], cols: {}, order: [] });
+const EMPTY = (cur) => ({ positions: [], scoringLeagueId: null, mode: "stat", categories: [], stats: ["fpts"], seasons: [cur?.season].filter(Boolean), period: "season", weeks: [], players: [], cols: {}, order: [], format: "band" });
 
 function PositionChips({ value, onChange }) {
   const all = !value.length;
@@ -153,11 +153,77 @@ function ColumnModal({ id, cfg, state, setState, rows, positions, onClose }) {
           <div style={{ color: C.textFaint }} className="text-[11px] mt-1">Leave "from" or "to" empty for an open end. A position's own bands win over "All positions".</div>
         </div>
         <div className="flex gap-2 pt-1">
-          <button type="button" onClick={() => setState((s) => clearColumn(s, id))} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="flex-1 rounded-md py-2 text-sm" data-col-clear>Clear this stat</button>
+          <button type="button" onClick={() => (setState((s) => clearColumn(s, id)), onClose())} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="flex-1 rounded-md py-2 text-sm" data-col-clear>Clear this stat</button>
           <button type="button" onClick={onClose} style={{ background: C.brand, color: "#fff" }} className="flex-1 rounded-md py-2 text-sm">Done</button>
         </div>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * v4.4: a column header. A tap sorts (new column → bottom level descending; an existing level cycles descending →
+ * ascending → off). Press-and-hold (touch or mouse, ~0.5 s), right-click, the ⋮ button that shows when the mouse is
+ * over the header, or Shift+Enter / the menu key opens the column pop-up (definition, Min/Max, sort, bands).
+ */
+const HOLD_MS = 500;
+function ColumnHeader({ id, label, title, lvl, dir, flags, onSort, onMenu }) {
+  const timer = useRef(null);
+  const held = useRef(false);
+  const [hover, setHover] = useState(false);
+  const stop = () => clearTimeout(timer.current);
+  useEffect(() => stop, []);
+  return (
+    <th className="text-right px-2 py-1.5 whitespace-nowrap" onPointerEnter={(e) => e.pointerType === "mouse" && setHover(true)} onPointerLeave={() => setHover(false)}>
+      <span className="inline-flex items-start gap-0.5">
+        {hover && (
+          <button type="button" onClick={onMenu} style={{ color: C.textMuted }} className="mt-0.5" aria-label={`${title}: definition, Min / Max, sort and bands`} title="Definition, Min / Max, sort and bands" data-col-menu={id}>
+            <MoreVertical size={12} />
+          </button>
+        )}
+        <button
+          type="button"
+          className="text-right select-none"
+          style={{ color: lvl ? C.brand : C.text, WebkitTouchCallout: "none", touchAction: "manipulation" }}
+          title={`${title} — tap to sort; hold, right-click or ⋮ for more`}
+          data-col-header={id}
+          onPointerDown={() => {
+            held.current = false;
+            stop();
+            timer.current = setTimeout(() => {
+              held.current = true;
+              onMenu();
+            }, HOLD_MS);
+          }}
+          onPointerUp={stop}
+          onPointerLeave={stop}
+          onPointerCancel={stop}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            stop();
+            if (!held.current) onMenu();
+            held.current = true;
+          }}
+          onClick={() => {
+            if (held.current) {
+              held.current = false;
+              return;
+            }
+            onSort();
+          }}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" && e.shiftKey) || e.key === "ContextMenu") {
+              e.preventDefault();
+              onMenu();
+            } else held.current = false;
+          }}
+        >
+          {label}
+          {lvl ? <span data-sort-level={lvl}> {dir === "asc" ? "↑" : "↓"}{lvl}</span> : null}
+          {flags.length ? <span style={{ color: C.textFaint }} className="block text-[9px] font-normal">{flags.join(" · ")}</span> : null}
+        </button>
+      </span>
+    </th>
   );
 }
 
@@ -314,6 +380,9 @@ export function ScoutingPage({ authUser, leagues = [] }) {
     return sortRows(applyMinMax(picked, cols), state.order.filter((id) => state.stats.includes(id)), cols);
   }, [data.rows, state]);
 
+  // v4.4: the gradient runs worst → best over every player matching the filters (not just the rows shown)
+  const ranges = useMemo(() => (state?.format === "gradient" ? Object.fromEntries((state.stats || []).map((id) => [id, columnRange(table, id)])) : {}), [table, state?.format, state?.stats]);
+
   if (!state || !cfg) return <div className="flex items-center gap-2 px-4 py-6 text-sm" style={{ color: C.textMuted }}>{data.error ? <span style={{ color: C.major }}>{data.error}</span> : <><Loader2 size={16} className="animate-spin" /> Loading Scouting…</>}</div>;
 
   const positions = state.positions;
@@ -329,6 +398,9 @@ export function ScoutingPage({ authUser, leagues = [] }) {
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Scouting</SectionLabel>
         <div className="flex items-center gap-2 pt-2">
+          <button type="button" onClick={() => setState((s) => ({ ...s, format: nextFormat(s.format) }))} style={{ color: state.format === "none" ? C.textMuted : C.brand, border: `1px solid ${state.format === "none" ? C.border : `${C.brand}66`}` }} className="rounded-md px-2.5 py-1 text-xs flex items-center gap-1" title="Tap to switch: colours off, band colours, gradient" data-format-toggle={state.format}>
+            <Palette size={13} /> {FORMAT_LABEL[state.format] || FORMAT_LABEL.none}
+          </button>
           <button type="button" onClick={() => setBookmarks(true)} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="rounded-md px-2.5 py-1 text-xs flex items-center gap-1" data-bookmarks-open>
             <Bookmark size={13} /> Bookmarks
           </button>
@@ -344,7 +416,7 @@ export function ScoutingPage({ authUser, leagues = [] }) {
         <Dropdown label="Fantasy points scored with" testId="scoring" options={leagueOpts} value={scoringLeagueId} onChange={(v) => setState((s) => ({ ...s, scoringLeagueId: v }))} />
       )}
       <div style={{ color: C.textFaint }} className="text-[11px]" data-scout-count>
-        {data.loading ? "Loading…" : `${table.length} player${table.length === 1 ? "" : "s"}${state.players?.length ? " picked" : ""}`} · tap a column for its definition, Min / Max, sort and bands
+        {data.loading ? "Loading…" : `${table.length} player${table.length === 1 ? "" : "s"}${state.players?.length ? " picked" : ""}`} · tap a column to sort · hold, right-click or ⋮ for its definition, Min / Max, sort and bands
       </div>
       {data.error && <div style={{ color: C.major }} className="text-xs">{data.error}</div>}
       {data.note && <div style={{ color: C.textFaint }} className="text-[10px]">Some weeks couldn't load: {data.note}</div>}
@@ -358,15 +430,7 @@ export function ScoutingPage({ authUser, leagues = [] }) {
                 const c = state.cols?.[id] || {};
                 const lvl = sortLevel(state, id);
                 const flags = [(c.min !== "" && c.min != null) || (c.max !== "" && c.max != null) ? "min/max" : null, Object.values(c.bands || {}).some((b) => normBands(b).length) ? "bands" : null].filter(Boolean);
-                return (
-                  <th key={id} className="text-right px-2 py-1.5 whitespace-nowrap">
-                    <button type="button" onClick={() => setColModal(id)} className="text-right" style={{ color: lvl ? C.brand : C.text }} title={statName(id)} data-col-header={id}>
-                      {statAbbrev(id)}
-                      {lvl ? <span data-sort-level={lvl}> {c.dir === "asc" ? "↑" : "↓"}{lvl}</span> : null}
-                      {flags.length ? <span style={{ color: C.textFaint }} className="block text-[9px] font-normal">{flags.join(" · ")}</span> : null}
-                    </button>
-                  </th>
-                );
+                return <ColumnHeader key={id} id={id} label={statAbbrev(id)} title={statName(id)} lvl={lvl} dir={c.dir} flags={flags} onSort={() => setState((s) => cycleSort(s, id))} onMenu={() => setColModal(id)} />;
               })}
             </tr>
           </thead>
@@ -388,11 +452,9 @@ export function ScoutingPage({ authUser, leagues = [] }) {
                   </td>
                   {state.stats.map((id) => {
                     const v = r.values?.[id];
-                    const b = bandsFor(state.cols?.[id], r.pos);
-                    const band = b ? normBands(b).find((x) => v != null && (x.min == null || v >= x.min) && (x.max == null || v < x.max)) : null;
-                    const color = band ? (/good/i.test(band.label) ? C.ok : /poor|bad/i.test(band.label) ? C.major : /ok/i.test(band.label) ? C.minor : C.text) : C.text;
+                    const bg = cellColor({ format: state.format, value: v, bands: bandsFor(state.cols?.[id], r.pos), range: ranges[id], better: cfg.defs[id]?.better });
                     return (
-                      <td key={id} className="px-2 py-1.5 text-right" style={{ color, fontVariantNumeric: "tabular-nums" }} title={band?.label || undefined}>
+                      <td key={id} className="px-2 py-1.5 text-right" style={{ background: bg || undefined, fontVariantNumeric: "tabular-nums" }} data-cell-format={bg ? state.format : undefined}>
                         {fmtValue(id, v)}
                       </td>
                     );

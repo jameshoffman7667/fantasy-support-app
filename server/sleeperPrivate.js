@@ -344,6 +344,22 @@ export async function updateReserve(username, { leagueId, rosterId, reserve, con
   });
 }
 
+/**
+ * v4.4: set the taxi squad (a player moved from taxi to the bench is left out of the list). UNVERIFIED: the mutation
+ * name roster_update_taxi follows roster_update_reserve's pattern but has never been seen working — it is judged only
+ * by Sleeper's response (the taxi it lists must not hold the players that were meant to leave).
+ */
+export async function updateTaxi(username, { leagueId, rosterId, taxi, confirm }) {
+  guardWrite(username, confirm, "roster");
+  const list = (Array.isArray(taxi) ? taxi : []).map(String);
+  return doWrite(username, leagueId, "update_taxi", { rosterId, taxi: list }, async () => {
+    const d = await call(username, `mutation($l:Snowflake!,$r:Int!,$s:[String]){ roster_update_taxi(league_id:$l, roster_id:$r, taxi:$s){ roster_id taxi } }`, { l: String(leagueId), r: Number(rosterId), s: list });
+    const got = (d.roster_update_taxi?.taxi || []).map(String);
+    const ok = got.length === list.length && list.every((id) => got.includes(id));
+    return { ok, verified: ok, readBack: got, detail: ok ? "taxi squad updated and verified" : "Sleeper's response didn't match the new taxi squad — check Sleeper." };
+  });
+}
+
 /** Submit ONE waiver claim. Verified by reading pending claims back.
  *  v4.1: `legs` = every leg the claim may be filed under. A claim Sleeper hands back with a transaction id counts as
  *  sent (ok) even when the read-back can't see it — it is then "sent, not verified" rather than a failure. */

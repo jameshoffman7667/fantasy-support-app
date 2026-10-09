@@ -166,6 +166,64 @@ function ResearchStatus({ hype, onRefresh }) {
   );
 }
 
+// v4.4: Auto mode check box (every league except best ball) and what it has done lately.
+function AutoModeCard({ league, onOpenAccount }) {
+  const [st, setSt] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api.getAutoMode(league.id).then((r) => alive && setSt(r)).catch((e) => alive && setErr(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [league.id]);
+  const act = async (patch) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      setSt(await api.setAutoMode({ leagueId: league.id, ...patch }));
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const on = Boolean(st?.leagues?.[league.id]);
+  const faab = Boolean(league.waiverInfo?.faab) && (league.waiverInfo.type == null || Number(league.waiverInfo.type) === 2);
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2.5 mb-3 text-xs space-y-1.5" data-auto-mode>
+      <label className="flex items-start gap-2.5">
+        <input type="checkbox" checked={on} disabled={busy || !st} onChange={(e) => act({ on: e.target.checked })} className="mt-0.5" data-auto-mode-toggle />
+        <span>
+          <span style={{ color: C.text }} className="text-sm font-medium">Auto mode</span>
+          <span style={{ color: C.textMuted }} className="block">
+            Each roster check, empty IR and taxi spots are filled from your bench (never by a claim, nothing is dropped).
+            {faab ? " One hour before waivers process, every empty bench spot gets a $0 claim — top trending free agents first, then trade value." : " This league uses waiver priority, so no claims are placed."}
+            {" "}Needs "Roster changes"{faab ? " and \"Waiver claims\"" : ""} on in <button type="button" onClick={onOpenAccount} style={{ color: C.brand }} className="underline">Account → Sleeper access</button>.
+          </span>
+        </span>
+      </label>
+      {on && (
+        <label className="flex items-center gap-2" style={{ color: C.textMuted }}>
+          <input type="checkbox" checked={Boolean(st?.paused)} disabled={busy} onChange={(e) => act({ paused: e.target.checked })} data-auto-mode-pause />
+          Pause Auto mode in every league
+        </label>
+      )}
+      {on && st?.log?.length > 0 && (
+        <div style={{ color: C.textFaint }} className="space-y-0.5" data-auto-mode-log>
+          {st.log.slice(0, 5).map((e, i) => (
+            <div key={i} style={{ color: e.ok ? C.textMuted : C.minor }}>
+              {fmtWhen(e.at)} · {e.kind === "ir" ? "IR" : e.kind === "taxi" ? "Taxi" : "$0 claim"}{e.player ? ` · ${e.player}` : ""} · {e.ok ? "done" : "not done"}{e.detail ? ` — ${e.detail}` : ""}
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <div style={{ color: C.major }}>{err}</div>}
+    </div>
+  );
+}
+
 // v4.1: roster warnings at the top of the Waivers screen (Available and Claims).
 function RosterWarnings({ league }) {
   const w = waiverRosterWarnings(league);
@@ -1333,6 +1391,7 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
         {league.waiverInfo?.faab && tab("opponents", "Opponents")}
       </div>
       {planError && <div style={{ color: C.major }} className="text-xs px-1 pb-2">{planError}</div>}
+      {sub !== "opponents" && !league.bestBall && <AutoModeCard league={league} onOpenAccount={onOpenAccount} />}
       {sub !== "opponents" && <RosterWarnings league={league} />}
       {!plan ? (
         <div className="flex items-center gap-2 px-1 py-4" style={{ color: C.textMuted }}>

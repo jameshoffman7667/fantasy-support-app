@@ -14,6 +14,8 @@ import * as gameday from "./gameday.js"; // v3.5: Game Day baselines before the 
 import * as faabDb from "./faabDb.js"; // v3.7: opponent bid collection 2 h before each league's waivers
 import * as commish from "./commish.js"; // v3.8: charters re-read each July
 import * as gemini from "./gemini.js"; // v4.1: scheduled waiver research
+import * as autoMode from "./autoMode.js"; // v4.4
+import * as priv from "./sleeperPrivate.js"; // v4.4: Auto mode writes
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, getBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -117,6 +119,8 @@ async function refreshUser(state) {
         setBuiltLeague(state.username, leagueSummary.league_id, built);
         performance.record(state.username, built); // v3.3: timeline of the app's suggestions (for My performance)
         await scanForAlerts(state.username, built).catch((err) => console.warn(`[scheduler] Alert scan failed for league ${leagueSummary.league_id}: ${err.message}`));
+        // v4.4: Auto mode — every roster check fills empty IR / taxi spots with players already on the bench
+        await autoMode.runMoves(state.username, built, autoDeps()).catch((err) => console.warn(`[scheduler] Auto mode moves failed for league ${leagueSummary.league_id}: ${err.message}`));
       } catch (err) {
         console.warn(`[scheduler] Background refresh failed for ${state.username} / league ${leagueSummary.league_id}: ${err.message}`);
       }
@@ -125,6 +129,15 @@ async function refreshUser(state) {
   } catch (err) {
     console.warn(`[scheduler] Background refresh cycle failed for ${state.username}: ${err.message}`);
   }
+}
+
+/** v4.4: what Auto mode needs from Sleeper, and how it tells you. */
+function autoDeps() {
+  return {
+    priv,
+    getLeg: async (b) => Number((await sleeper.getState().catch(() => null))?.sleeperWeek ?? b.week),
+    notify: (username, title, body) => (isPushConfigured() ? sendPushToUser(username, { title, body }).catch(() => {}) : undefined),
+  };
 }
 
 let refreshing = null;
@@ -284,6 +297,46 @@ async function startSitTick() {
   console.log(`[scheduler] Start/sit research (${slot}): ${players.length} players, ${Object.keys(out?.byId || {}).length} with a verdict.`);
 }
 
+/**
+ * v4.4: Auto mode's claims. One hour before each switched-on FAAB league's waivers process (once per waiver run) the
+ * league is read fresh, any empty IR / taxi spots are filled from the bench, and every remaining empty bench spot gets a
+ * $0 claim. Checked every 10 minutes; the waiver time comes from faabDb.waiverSchedule (league settings or your setting).
+ */
+export const AUTO_CLAIM_LEAD_MS = 60 * 60 * 1000;
+async function autoClaimTick(now = Date.now()) {
+  for (const state of getAllUserStates()) {
+    const user = getUser(state.username);
+    if (!user?.active || !state.leagueIds?.length || isInactive(user, state)) continue;
+    const settings = autoMode.getSettings(state.username);
+    if (settings.paused) continue;
+    for (const leagueId of state.leagueIds) {
+      if (settings.leagues[String(leagueId)] !== true) continue;
+      try {
+        const league = await sleeper.getLeague(leagueId);
+        if (!faabDb.isFaab(league) || faabDb.isBestBall(league)) continue;
+        const sched = faabDb.waiverSchedule(league, faabDb.getSettings(state.username).waiverTimes[String(leagueId)], now);
+        if (now < sched.next - AUTO_CLAIM_LEAD_MS || now >= sched.next) continue;
+        const k = `automode:run:claims:${state.username}:${leagueId}:${sched.next}`;
+        if (cacheGet(k) !== null) continue;
+        cacheSet(k, true, 3 * 24 * 60 * 60 * 1000);
+        const sleeperUser = await sleeper.getUser(state.username);
+        const sleeperState = await sleeper.getState();
+        const summary = (await sleeper.getUserLeagues(sleeperUser.user_id, sleeperState.season)).find((l) => l.league_id === leagueId);
+        if (!summary) continue;
+        const trending = await sleeper.getTrendingAdds(200, 24);
+        const built = await buildFullLeague(sleeperUser.user_id, summary, state.week || sleeperState.week, trending, []);
+        setBuiltLeague(state.username, leagueId, built);
+        const deps = autoDeps();
+        const moved = await autoMode.runMoves(state.username, built, deps, now);
+        const sent = await autoMode.runClaims(state.username, built, deps, { moved: moved.length, now });
+        console.log(`[scheduler] Auto mode (${built.name}): ${moved.length} move(s), ${sent.length} $0 claim(s).`);
+      } catch (err) {
+        console.warn(`[scheduler] Auto mode claims failed for league ${leagueId}: ${err.message}`);
+      }
+    }
+  }
+}
+
 export function startScheduler() {
   // Run once shortly after boot (so a fresh deploy warms up quickly
   // rather than waiting a full hour), then on the regular interval.
@@ -320,6 +373,8 @@ export function startScheduler() {
     const users = getAllUserStates().filter((st) => getUser(st.username)?.active && st.leagueIds?.length && !isInactive(getUser(st.username), st)).map((st) => st.username);
     faabDb.tick({ users }).catch((err) => console.warn(`[scheduler] FAAB collection check failed: ${err.message}`));
   }, 10 * 60 * 1000);
+  // v4.4: Auto mode claims, one hour before each switched-on league's waivers process.
+  setInterval(() => autoClaimTick().catch((err) => console.warn(`[scheduler] Auto mode check failed: ${err.message}`)), 10 * 60 * 1000);
   // v4.3: scheduled start/sit research, Thu 8:00 / Sat 10:00 / Sun 9:00 Toronto.
   setInterval(() => startSitTick().catch((err) => console.warn(`[scheduler] Start/sit research failed: ${err.message}`)), 10 * 60 * 1000);
   // v4.1: scheduled waiver research, Tue + Wed ~8:00 and ~16:00 Toronto.
@@ -331,4 +386,4 @@ export function startScheduler() {
   }, 6 * 60 * 60 * 1000);
 }
 
-export { preKickoffCheck as _preKickoffCheckForTests };
+export { preKickoffCheck as _preKickoffCheckForTests, autoClaimTick as _autoClaimTickForTests };

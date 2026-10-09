@@ -425,6 +425,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
       injuryDetail: meta?.injury_body_part || null,
       bye: byeOf(meta?.team), // v3.5: bye week for the card
       age: ageOf(meta),
+      yearsExp: Number.isFinite(Number(meta?.years_exp)) ? Number(meta.years_exp) : null, // v4.4: taxi eligibility (Auto mode)
       // Supplemental context from nflverse (last week's usage), not a
       // projection input — null fields mean no match/no data this week,
       // not zero usage.
@@ -1076,6 +1077,9 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     starterIds: (myRoster.starters || []).map(String),
     reserveIds: (myRoster.reserve || []).map(String),
     rosterIds: (myRoster.players || []).map(String),
+    taxiIds: taxiIds.map(String), // v4.4: Auto mode
+    taxiSlots: Number(league.settings?.taxi_slots) || 0,
+    taxiRules: { years: Number.isFinite(Number(league.settings?.taxi_years)) && Number(league.settings?.taxi_years) > 0 ? Number(league.settings.taxi_years) : null, allowVets: Number(league.settings?.taxi_allow_vets) === 1 }, // unverified setting names
     scoringProfile: store.profileOf(league.scoring_settings).key, // v2.8: which matchup-difficulty table to colour with
     superflex,
     lockLabel: weekSchedule ? `Week ${week} — live kickoff times from ESPN` : "Live from Sleeper",

@@ -49,6 +49,7 @@ import * as tank01 from "./tank01.js";
 import { getLastSummary, cachedPick } from "./projectionHub.js";
 import { searchFreeAgents } from "./playerSearch.js"; // v4.1
 import { registerStatsRoutes } from "./statsApi.js"; // v4.2: stats list, Waivers → All, Analytics → Scouting
+import * as autoMode from "./autoMode.js";
 import * as aiSources from "./aiSources.js"; // v4.3: AI sources per feature
 import { simulateSeason } from "./simulate.js";
 import { isPushConfigured, getPublicKey, saveSubscription, removeSubscription } from "./push.js";
@@ -564,6 +565,33 @@ app.post("/api/private/reserve", async (req, res) => {
   if (!lg) return;
   try {
     res.json(await priv.updateReserve(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, reserve: req.body?.reserve, confirm: req.body?.confirm }));
+  } catch (e) {
+    privError(res, e);
+  }
+});
+// v4.4: Auto mode — per-league check box, a pause-all switch, and the log of what it did.
+app.use("/api/automode", requireAuth);
+app.get("/api/automode", (req, res) => {
+  const s = autoMode.getSettings(req.user.username);
+  res.json({ paused: s.paused, leagues: s.leagues, log: autoMode.getLog(req.user.username, req.query.leagueId || null).slice(0, 20) });
+});
+app.post("/api/automode", (req, res) => {
+  const u = req.user.username;
+  if (typeof req.body?.paused === "boolean") autoMode.setPaused(u, req.body.paused);
+  if (req.body?.leagueId != null && typeof req.body?.on === "boolean") {
+    const lg = req.body.on ? ownBuilt(req, res, req.body.leagueId) : true;
+    if (!lg) return;
+    if (req.body.on && !autoMode.eligibleLeague(lg)) return res.status(400).json({ error: "Auto mode isn't available for best ball leagues." });
+    autoMode.setLeague(u, req.body.leagueId, req.body.on);
+  }
+  const s = autoMode.getSettings(u);
+  res.json({ paused: s.paused, leagues: s.leagues, log: autoMode.getLog(u, req.body?.leagueId || null).slice(0, 20) });
+});
+app.post("/api/private/taxi", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    res.json(await priv.updateTaxi(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, taxi: req.body?.taxi, confirm: req.body?.confirm }));
   } catch (e) {
     privError(res, e);
   }
