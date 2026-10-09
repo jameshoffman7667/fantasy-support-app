@@ -399,6 +399,50 @@ function AiSourcesPanel({ isOwner }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  v4.4.1 — API call presets (app-wide; the owner switches them)       */
+/* ------------------------------------------------------------------ */
+function ApiPresetsPanel({ isOwner }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [showList, setShowList] = useState(false);
+  useEffect(() => {
+    api.getApiPresets().then(setData).catch((e) => setErr(e.message));
+  }, []);
+  const pick = async (key) => {
+    setErr(null);
+    try { setData(await api.setApiPreset(key)); } catch (e) { setErr(e.message); }
+  };
+  if (!data || !Array.isArray(data.presets)) return <div style={{ color: err ? C.major : C.textMuted }} className="text-xs px-1">{err || "Loading…"}</div>;
+  return (
+    <div className="space-y-2" data-api-presets>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 leading-snug">
+        How often the app asks Sleeper and the other data sources for fresh data. The setting is for everyone who uses this app; only the owner changes it.
+      </div>
+      {err && <div style={{ color: C.major }} className="text-xs px-1">{err}</div>}
+      {data.presets.map((p) => {
+        const on = data.active === p.key;
+        return (
+          <label key={p.key} style={{ background: C.surface, border: `1px solid ${on ? C.brand : C.border}` }} className="flex items-start gap-2.5 rounded-md px-3 py-2.5" data-api-preset={p.key}>
+            <input type="radio" name="api-preset" checked={on} disabled={!isOwner} onChange={() => pick(p.key)} className="mt-1" />
+            <span className="min-w-0">
+              <span style={{ color: C.text }} className="text-sm">{p.label}{p.key === data.default ? " (default)" : ""}</span>
+              <span style={{ color: C.textMuted }} className="block text-xs leading-snug mt-0.5">{p.summary}</span>
+            </span>
+          </label>
+        );
+      })}
+      {!isOwner && <div style={{ color: C.textFaint }} className="text-xs px-1">Only the owner can change this.</div>}
+      <button type="button" onClick={() => setShowList((v) => !v)} style={{ color: C.brand }} className="text-xs px-1" data-api-baseline-toggle>{showList ? "Hide" : "Show"} what Minimal includes</button>
+      {showList && (
+        <ul style={{ color: C.textMuted }} className="text-xs leading-snug list-disc pl-6 space-y-1" data-api-baseline>
+          {(data.baseline || []).map((b) => <li key={b}>{b}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
   return (
     <div className="px-4 py-3 space-y-4">
@@ -413,6 +457,10 @@ export function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
       <div>
         <SectionLabel>CBS pick'em push (optional)</SectionLabel>
         <div className="pt-1.5"><CbsPanel /></div>
+      </div>
+      <div>
+        <SectionLabel>API call presets</SectionLabel>
+        <div className="pt-1.5"><ApiPresetsPanel isOwner={authUser?.role === "owner"} /></div>
       </div>
       <div>
         <SectionLabel>AI sources</SectionLabel>

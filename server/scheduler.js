@@ -16,6 +16,7 @@ import * as commish from "./commish.js"; // v3.8: charters re-read each July
 import * as gemini from "./gemini.js"; // v4.1: scheduled waiver research
 import * as autoMode from "./autoMode.js"; // v4.4
 import * as priv from "./sleeperPrivate.js"; // v4.4: Auto mode writes
+import * as pendingMoves from "./pendingMoves.js"; // v4.4.1: add a player, then the matching lineup move
 import { buildFullLeague } from "./buildLeague.js";
 import { getAllUserStates, getUser, setBuiltLeague, getBuiltLeague, cacheGet, cacheSet } from "./db.js";
 import { sendPushToUser, isPushConfigured } from "./push.js";
@@ -337,6 +338,44 @@ async function autoClaimTick(now = Date.now()) {
   }
 }
 
+/** v4.4.1: what the pending add-then-lineup moves need: roster ids (live), a fresh build, a notification. */
+export function pendingDeps(username) {
+  return {
+    priv,
+    notify: autoDeps().notify,
+    rosterPlayerIds: async (leagueId, rosterId) => {
+      const rosters = await sleeper.getRosters(leagueId, { fresh: true });
+      const r = (rosters || []).find((x) => Number(x.roster_id) === Number(rosterId));
+      return [...(r?.players || [])];
+    },
+    build: async (leagueId) => {
+      const state = getAllUserStates().find((s) => s.username === username);
+      const sleeperUser = await sleeper.getUser(username);
+      const sleeperState = await sleeper.getState();
+      const summary = (await sleeper.getUserLeagues(sleeperUser.user_id, sleeperState.season)).find((l) => l.league_id === leagueId);
+      if (!summary) throw new Error("League not found on Sleeper.");
+      const trending = await sleeper.getTrendingAdds(200, 24);
+      const built = await buildFullLeague(sleeperUser.user_id, summary, state?.week || sleeperState.week, trending, []);
+      setBuiltLeague(username, leagueId, built);
+      return built;
+    },
+  };
+}
+/** Every 5 minutes: look at each waiting add-then-lineup move whose time has come (one live roster read each). */
+async function pendingMovesTick(now = Date.now()) {
+  for (const state of getAllUserStates()) {
+    if (!pendingMoves.list(state.username).length) continue;
+    const user = getUser(state.username);
+    if (!user?.active) continue;
+    try {
+      const done = await pendingMoves.runPending(state.username, pendingDeps(state.username), now);
+      if (done.length) console.log(`[scheduler] Pending lineup moves for ${state.username}: ${done.map((d) => d.status).join(", ")}.`);
+    } catch (err) {
+      console.warn(`[scheduler] Pending lineup moves failed for ${state.username}: ${err.message}`);
+    }
+  }
+}
+
 export function startScheduler() {
   // Run once shortly after boot (so a fresh deploy warms up quickly
   // rather than waiting a full hour), then on the regular interval.
@@ -375,6 +414,8 @@ export function startScheduler() {
   }, 10 * 60 * 1000);
   // v4.4: Auto mode claims, one hour before each switched-on league's waivers process.
   setInterval(() => autoClaimTick().catch((err) => console.warn(`[scheduler] Auto mode check failed: ${err.message}`)), 10 * 60 * 1000);
+  // v4.4.1: waiting "add a player, then move him into the lineup" moves, checked every 5 minutes.
+  setInterval(() => pendingMovesTick().catch((err) => console.warn(`[scheduler] Pending moves check failed: ${err.message}`)), pendingMoves.CHECK_EVERY_MS);
   // v4.3: scheduled start/sit research, Thu 8:00 / Sat 10:00 / Sun 9:00 Toronto.
   setInterval(() => startSitTick().catch((err) => console.warn(`[scheduler] Start/sit research failed: ${err.message}`)), 10 * 60 * 1000);
   // v4.1: scheduled waiver research, Tue + Wed ~8:00 and ~16:00 Toronto.
@@ -386,4 +427,4 @@ export function startScheduler() {
   }, 6 * 60 * 60 * 1000);
 }
 
-export { preKickoffCheck as _preKickoffCheckForTests, autoClaimTick as _autoClaimTickForTests };
+export { pendingMovesTick as _pendingMovesTickForTests, preKickoffCheck as _preKickoffCheckForTests, autoClaimTick as _autoClaimTickForTests };

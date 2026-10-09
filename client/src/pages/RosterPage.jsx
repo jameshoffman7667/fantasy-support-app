@@ -1,6 +1,6 @@
 import * as api from "../api.js";
 import { GROUP_LABEL, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
-import { arrangement, buildPush, customChange, proposeChanges, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
+import { arrangement, buildPush, customChange, dropOptions, openSpotsForAdd, proposeChanges, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
 import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -706,7 +706,12 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
   // v4.4: hand-made changes from the Proposed lineup (tap a position box), applied after the ticked suggestions
   const [customs, setCustoms] = useState([]);
   useEffect(() => setCustoms([]), [league]);
-  const changes = useMemo(() => [...suggested, ...customs], [suggested, customs]);
+  // v4.4.1: the drop / bid chosen in the pop-up for each ticked free agent / waiver add
+  const [plans, setPlans] = useState({});
+  const [planFor, setPlanFor] = useState(null);
+  useEffect(() => setPlans({}), [league]);
+  const suggestedP = useMemo(() => suggested.map((c) => (c.type === "add" ? { ...c, plan: plans[c.key] } : c)), [suggested, plans]);
+  const changes = useMemo(() => [...suggestedP, ...customs], [suggestedP, customs]);
   const [checked, setChecked] = useState(() => new Set());
   useEffect(() => {
     setChecked((prev) => {
@@ -716,7 +721,13 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
     });
   }, [changes]);
   // Changing the ticked suggestions would change what the custom changes were made against, so they are undone.
-  const onToggle = (key, on) => (setCustoms((c) => (c.length ? [] : c)), setChecked((prev) => toggleChange(suggested, new Set([...prev].filter((k) => suggested.some((c) => c.key === k))), key, on)));
+  const onToggle = (key, on) => (setCustoms((c) => (c.length ? [] : c)), !on && setPlans(({ [key]: _gone, ...rest }) => rest), setChecked((prev) => toggleChange(suggested, new Set([...prev].filter((k) => suggested.some((c) => c.key === k))), key, on)));
+  // A ticked add with no plan yet (ticked directly, by a cascade or by Accept all) opens its pop-up, one at a time.
+  useEffect(() => {
+    if (planFor) return;
+    const m = suggested.find((c) => c.type === "add" && checked.has(c.key) && !plans[c.key]);
+    if (m) setPlanFor(m);
+  }, [checked, plans, planFor, suggested]);
   const acceptAll = () => (setCustoms([]), setChecked(new Set(suggested.filter((c) => !c.blocked).map((c) => c.key))));
   const addCustom = (c) => {
     setCustoms((prev) => [...prev.filter((x) => x.key !== c.key), c]);
@@ -738,12 +749,22 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
           </div>
         </div>
       )}
-      <div className="flex mt-2 sticky top-0 z-10" style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+      <div className="flex mt-2 sticky z-10" style={{ top: "var(--topbar-h, 0px)", background: C.bg, borderBottom: `1px solid ${C.border}` }}>
         {tab("current", "Current lineup")}
         {tab("proposed", `Proposed lineup${checked.size ? ` (${checked.size})` : ""}`)}
       </div>
+      {planFor && (
+        <AddPlanModal
+          league={league}
+          change={planFor}
+          plans={plans}
+          onSave={(plan) => (setPlans((p) => ({ ...p, [planFor.key]: plan })), setPlanFor(null))}
+          onCancel={() => (onToggle(planFor.key, false), setPlanFor(null))}
+        />
+      )}
       {sub === "current" ? (
         <>
+          <PendingMoves league={league} onRefresh={onRefresh} />
           <CurrentLineup league={league} onRefresh={onRefresh} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
           <SuggestedChanges league={league} changes={suggested} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />
         </>
@@ -756,6 +777,7 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
 
 function changeText(c) {
   if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, c.altNote || null].filter(Boolean).join(" · ") || null };
+  if (c.type === "add") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span> <span style={{ color: C.minor, border: `1px solid ${C.minor}66` }} className="ml-2 rounded px-1.5 text-[10px]">add from FA / waivers</span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, "Ticking asks who to drop (and the bid on waivers); he is added, then started once he is on your roster."].filter(Boolean).join(" · ") };
   if (c.type === "swap")
     return {
       title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><b>{c.nameB}</b> to {c.slot}, {c.nameA} to {c.slotB_label}</span></>,
@@ -780,10 +802,10 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onS
             const t = changeText(c);
             return (
               <label key={c.key} style={{ background: checked.has(c.key) ? C.okBg : C.surface, border: `1px solid ${checked.has(c.key) ? `${C.ok}66` : C.border}`, opacity: c.blocked ? 0.7 : 1 }} className="rounded-md px-3 py-2.5 flex items-start gap-3" data-change={c.key} data-change-type={c.type}>
-                <input type="checkbox" disabled={Boolean(c.blocked)} checked={checked.has(c.key)} onChange={(e) => onToggle(c.key, e.target.checked)} className="mt-1" aria-label={c.type === "lineup" ? `Start ${c.toName} at ${c.slot}` : c.type === "swap" ? `Swap ${c.nameA} and ${c.nameB}` : `Move ${c.name} to IR`} />
+                <input type="checkbox" disabled={Boolean(c.blocked)} checked={checked.has(c.key)} onChange={(e) => onToggle(c.key, e.target.checked)} className="mt-1" aria-label={c.type === "lineup" || c.type === "add" ? `Start ${c.toName} at ${c.slot}` : c.type === "swap" ? `Swap ${c.nameA} and ${c.nameB}` : `Move ${c.name} to IR`} />
                 <div className="min-w-0 flex-1">
                   <div style={{ color: C.text }} className="text-sm flex items-center flex-wrap gap-y-1">{t.title}</div>
-                  {t.sub && <div style={{ color: c.type === "lineup" ? C.ok : C.textMuted }} className="text-xs mt-0.5">{t.sub}</div>}
+                  {t.sub && <div style={{ color: c.type === "lineup" || c.type === "add" ? C.ok : C.textMuted }} className="text-xs mt-0.5">{t.sub}</div>}
                   {c.blocked && <div style={{ color: C.minor }} className="text-xs mt-0.5">{c.blocked}</div>}
                 </div>
               </label>
@@ -855,12 +877,14 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
           <RosterPlayerRow
             key={i}
             slot={s.slot}
-            onSlotTap={() => setPicker({ kind: "starter", index: i })}
+            onSlotTap={s.adding ? null : () => setPicker({ kind: "starter", index: i })}
             player={s.player}
             profile={league.scoringProfile}
             highlight={s.changed ? "in" : null}
             sub={
-              !s.changed ? null : s.swapFrom ? (
+              !s.changed ? null : s.adding ? (
+                <div style={{ color: C.minor }} className="text-xs mt-0.5" data-was data-adding>Added from FA / waivers, in for {s.was?.name || "(empty)"}{s.was?.proj != null && s.player?.proj != null ? ` (${s.player.proj - s.was.proj >= 0 ? "+" : ""}${(s.player.proj - s.was.proj).toFixed(1)} pts)` : ""} — started once he is on your roster</div>
+              ) : s.swapFrom ? (
                 <div style={{ color: C.ok }} className="text-xs mt-0.5" data-was>Moved from {s.swapFrom} — {s.custom ? "custom swap" : "timing swap"} with {s.was?.name || "(empty)"}</div>
               ) : (
                 <div style={{ color: C.ok }} className="text-xs mt-0.5" data-was>In for {s.was?.name || "(empty)"}{s.was?.proj != null && s.player?.proj != null ? ` (${s.player.proj - s.was.proj >= 0 ? "+" : ""}${(s.player.proj - s.was.proj).toFixed(1)} pts)` : ""}</div>
@@ -949,6 +973,14 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
           out.push({ label: "Starting lineup", ok: false, detail: e.message });
         }
       }
+      for (const a of push.adds || []) {
+        try {
+          const r = await api.pushAddMove(league.id, a);
+          out.push({ label: `Add ${a.addName}`, ok: r.ok, verified: r.claim?.verified, detail: r.detail });
+        } catch (e) {
+          out.push({ label: `Add ${a.addName}`, ok: false, detail: e.message });
+        }
+      }
       if (push.taxi) {
         try {
           const r = await api.pushTaxi(league.id, push.taxi);
@@ -978,6 +1010,7 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
   return (
     <div data-update-roster>
       <PrivateGate league={league} group="roster" onOpenAccount={onOpenAccount}>
+        <PrivateGate league={league} group={push.adds.length ? "claims" : null} onOpenAccount={onOpenAccount}>
         {checked.size === 0 && !results ? null : (
           <div className="space-y-2">
             {checked.size > 0 && (
@@ -1002,7 +1035,95 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
             <PushResults results={results} />
           </div>
         )}
+        </PrivateGate>
       </PrivateGate>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  v4.4.1 — add a free agent / waiver player, then the lineup move     */
+/* ------------------------------------------------------------------ */
+function AddPlanModal({ league, change, plans, onSave, onCancel }) {
+  const isFaab = Boolean(league.waiverInfo?.faab);
+  const remaining = Number(league.waiverInfo?.remaining) || 0;
+  const open = openSpotsForAdd(league, plans, change.key);
+  const mustDrop = open != null && open <= 0;
+  const options = useMemo(() => dropOptions(league, change, plans, change.key), [league, change, plans]);
+  const [kind, setKind] = useState("fa");
+  const [bid, setBid] = useState("0");
+  const [dropId, setDropId] = useState("");
+  const bidN = Math.max(0, Math.min(Math.round(Number(bid) || 0), remaining));
+  const drop = options.find((o) => o.id === dropId) || null;
+  const ready = !mustDrop || Boolean(drop);
+  const seg = (k, label, sub) => (
+    <button type="button" onClick={() => setKind(k)} aria-pressed={kind === k} data-add-kind={k} style={{ border: `1px solid ${kind === k ? C.brand : C.border}`, background: kind === k ? C.surfaceRaised : "transparent", color: C.text }} className="flex-1 rounded-md px-2.5 py-2 text-left">
+      <div className="text-sm">{label}</div>
+      <div style={{ color: C.textMuted }} className="text-[11px] leading-snug">{sub}</div>
+    </button>
+  );
+  return (
+    <Modal title={`Add ${change.toName}`} onClose={onCancel}>
+      <div className="space-y-3 text-sm" data-add-plan>
+        <div style={{ color: C.textMuted }} className="text-xs leading-snug">
+          {change.toName} would start at {change.slot} in place of {change.fromName ?? "(empty)"}. He is added first; the lineup move is made once he is on your roster.
+        </div>
+        <div className="flex gap-2">
+          {seg("fa", "Free agent", "Add now. The lineup move follows right away.")}
+          {seg("waiver", "On waivers", isFaab ? "Claim with a bid. The lineup move follows after waivers process." : "Claim. The lineup move follows after waivers process.")}
+        </div>
+        {kind === "waiver" && isFaab && (
+          <label className="block text-xs" style={{ color: C.textMuted }}>
+            FAAB bid (you have ${remaining})
+            <input type="number" min="0" max={remaining} value={bid} onChange={(e) => setBid(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="block w-28 rounded px-2 py-1 mt-1 text-sm" data-add-bid />
+          </label>
+        )}
+        {kind === "waiver" && !isFaab && <div style={{ color: C.textMuted }} className="text-xs">This league uses waiver priority — there is no bid.</div>}
+        <div>
+          <div style={{ color: C.textMuted }} className="text-xs mb-1">{mustDrop ? "Your roster is full — who should be dropped?" : "Drop someone to make room? (optional)"}</div>
+          <div className="max-h-56 overflow-y-auto space-y-1" role="listbox" aria-label="Player to drop">
+            {!mustDrop && (
+              <button type="button" onClick={() => setDropId("")} aria-pressed={dropId === ""} data-drop-none style={{ border: `1px solid ${dropId === "" ? C.brand : C.border}`, color: C.text }} className="w-full text-left rounded px-2.5 py-1.5 text-xs">Don't drop anyone</button>
+            )}
+            {options.length === 0 && <div style={{ color: C.major }} className="text-xs">No one can be dropped right now (everyone is locked).</div>}
+            {options.map((o) => (
+              <button key={o.id} type="button" onClick={() => setDropId(o.id)} aria-pressed={dropId === o.id} data-drop-option={o.id} style={{ border: `1px solid ${dropId === o.id ? C.brand : C.border}`, color: C.text }} className="w-full text-left rounded px-2.5 py-1.5 text-xs flex items-center justify-between gap-2">
+                <span className="truncate">{o.name} <span style={{ color: C.textMuted }}>{o.pos} {o.team}</span></span>
+                <span style={{ color: C.textMuted }} className="shrink-0">{o.where}{o.proj != null ? ` · ${Number(o.proj).toFixed(1)}` : ""}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onCancel} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-sm" data-add-cancel>Cancel</button>
+          <button type="button" disabled={!ready} onClick={() => onSave({ kind, bid: kind === "waiver" && isFaab ? bidN : 0, isFaab, dropId: drop?.id || null, dropName: drop?.name || null })} style={{ background: C.brand, color: C.text, opacity: ready ? 1 : 0.5 }} className="rounded-md px-3 py-1.5 text-sm" data-add-save>Use these settings</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Waiting "add, then lineup move" items for this league (cancellable), plus what finished lately. */
+function PendingMoves({ league, onRefresh }) {
+  const [data, setData] = useState(null);
+  const load = useCallback(() => api.getPendingMoves(league.id).then(setData).catch(() => {}), [league.id]);
+  useEffect(() => { load(); }, [load, league]);
+  if (!data || !Array.isArray(data.moves) || (data.moves.length === 0 && !(data.log || []).length)) return null;
+  const cancel = async (id) => { await api.cancelPendingMove(id).catch(() => {}); load(); onRefresh?.(); };
+  return (
+    <div className="mt-3 space-y-1.5" data-pending-moves>
+      {data.moves.map((m) => (
+        <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.minor}55` }} className="rounded-md px-3 py-2 flex items-start justify-between gap-2" data-pending-move={m.id}>
+          <div className="min-w-0 text-xs" style={{ color: C.text }}>
+            <b>{m.addName}</b> {m.kind === "waiver" ? `waiver claim${m.bid ? ` · $${m.bid}` : ""}` : "free agent add"}{m.dropName ? `, dropping ${m.dropName}` : ""}.
+            <div style={{ color: C.textMuted }}>Waiting — he starts at {m.slot} once he is on your roster.{m.kind === "waiver" && m.checkFrom > Date.now() ? ` Waivers process about ${new Date(m.checkFrom).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}.` : ""}</div>
+          </div>
+          <button type="button" onClick={() => cancel(m.id)} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded px-2 py-0.5 text-[11px] shrink-0" data-pending-cancel>Cancel lineup move</button>
+        </div>
+      ))}
+      {(data.log || []).slice(0, 2).map((e, i) => (
+        <div key={i} style={{ color: e.status === "done" ? C.ok : C.minor }} className="text-[11px] px-1">{new Date(e.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })} · {e.player}: {e.detail}</div>
+      ))}
     </div>
   );
 }

@@ -474,6 +474,12 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.4.1 additions
+- **Roster:** suggestions that start a free agent or waiver player can now be ticked. A pop-up asks free agent or waivers, the FAAB bid and which player to drop; the app adds him (as a claim) and makes the lineup move once he is on your roster. Waiting moves are listed and cancellable. Needs "Waiver claims" and "Roster changes" on.
+- **Account → API call presets** (owner switches, applies to everyone): Minimal (fewest calls) or Medium (default — also reads rosters, matchups and free agents live every time the app is opened).
+- **Fix:** the Roster tabs no longer cover the league drop-down.
+- No compose or environment changes in this release.
+
 ### v4.4 additions
 - **Scouting:** tap a column header to sort (a new column is added as the bottom sort level; tapping a sorted column cycles descending, ascending, off). Hold, right-click, the ⋮ button or Shift+Enter open the column pop-up. A colour button beside Bookmarks and Clear switches cell colours off, to bands, or to a red-to-green gradient.
 - **Roster → Current lineup:** a waiver-add suggestion now also offers the best bench player who is projected higher than the starter.
@@ -1066,6 +1072,8 @@ server/
   androidApp.js           /.well-known/assetlinks.json for the Android app, from ANDROID_APP_SHA256 / ANDROID_APP_PACKAGE (v4.0)
   playerSearch.js         Available-page search: any free agent in a league (v4.1)
   autoMode.js             Auto mode: IR / taxi fills and $0 bench claims (v4.4)
+  pendingMoves.js         waiting "add a player, then move him into the lineup" moves (v4.4.1)
+  apiPresets.js           API call presets Minimal / Medium (v4.4.1)
   aiSources.js            Sources behind each Gemini feature: preferred / removed / seen (v4.3)
   statConfig.js           Stats list (table stat_config), seeded from config/stats-config.json; .xlsx download/upload (v4.2)
   statDefs.js             How each stat is worked out, its definition and source (v4.2)

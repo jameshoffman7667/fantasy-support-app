@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,25 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.4.1 — Nav-bar fix, add free agents / waiver players from Roster suggestions, API call presets
+
+**Manual step required: none.** No docker-compose.yml or environment changes. (Adding a player from a Roster suggestion needs both "Waiver claims" and "Roster changes" on in Account → Sleeper access.)
+
+**Commit (short):** `v4.4.1: feat: FA/waiver adds, API presets, nav fix`
+
+**Commit (extended):**
+v4.4.1 fixes the Roster tab bar covering the navigation bar, makes free agent / waiver suggestions selectable, and adds API call presets.
+
+Fix: the header now sits above page content, so the league drop-down is never covered; the Current lineup / Proposed lineup tabs stick just below it (the header's height is published as --topbar-h).
+
+Roster: a suggestion that starts a free agent or waiver player can be ticked. A pop-up asks Free agent or On waivers, the FAAB bid (FAAB leagues, waivers only; none in priority leagues) and, when there is no empty bench spot, which player to drop (weakest first; locked players left out). Pushing sends the add to Sleeper as a claim and stores a pending lineup move; every 5 minutes the server checks your roster and, once the player is on it, makes the lineup move (immediately for a free agent that lands at once, after the waiver run for a claim). Moves that no longer fit (slot changed, game started, claim lost, switch off) are dropped and you are notified. Waiting moves are listed on Current lineup and can be cancelled.
+
+Account → API call presets (app-wide, owner switches): Minimal = the v3.3 reductions as they run; Medium (default) = Minimal plus a live read of rosters, matchups, trending adds and free agents when the app is opened or returned to after 5+ minutes (at most once a minute per league).
+
+**Unverified:** whether Sleeper adds a free agent through a claim at once or only at the next waiver run (the move waits either way); the claim and lineup calls are the earlier ones. Nothing ran against live Sleeper.
 
 ---
 

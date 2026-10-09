@@ -25,7 +25,8 @@ import {
   cacheGet,
   cacheSet,
 } from "./db.js";
-import { startScheduler } from "./scheduler.js";
+import { startScheduler, pendingDeps } from "./scheduler.js";
+import * as pendingMoves from "./pendingMoves.js";
 import { computeAccuracy } from "./accuracy.js";
 import * as backfill from "./backfill.js";
 import * as gameday from "./gameday.js";
@@ -33,6 +34,7 @@ import * as pickem from "./pickem.js";
 import * as cbs from "./cbs.js";
 import * as performance from "./performance.js";
 import * as dvp from "./dvp.js";
+import * as apiPresets from "./apiPresets.js";
 import * as weather from "./weather.js";
 import { getImage } from "./images.js";
 import * as varianceAcks from "./varianceAcks.js";
@@ -421,7 +423,7 @@ app.get("/api/leagues/cached", (req, res) => {
 // list to remember (defaults to leagueIds). Results are merged into the
 // session, not replaced.
 app.post("/api/leagues/build", async (req, res) => {
-  const { sessionId, leagueIds, week, trackedIds, manual } = req.body || {};
+  const { sessionId, leagueIds, week, trackedIds, manual, opened } = req.body || {};
   const session = ownSession(req, res, sessionId);
   if (!session) return;
   if (!Array.isArray(leagueIds) || leagueIds.length === 0) {
@@ -436,6 +438,12 @@ app.post("/api/leagues/build", async (req, res) => {
 
   try {
     const chosen = session.leaguesRaw.filter((l) => leagueIds.includes(l.league_id));
+    // v4.4.1 (Medium preset): the app was just opened — read rosters, matchups and trending live (once a minute per league at most).
+    if (opened === true) {
+      let any = false;
+      for (const l of chosen) if (apiPresets.shouldFreshOnOpen(req.user.username, l.league_id)) { sleeper.markFreshOnce(l.league_id); any = true; }
+      if (any) sleeper.markTrendingFreshOnce();
+    }
     const trending = await sleeper.getTrendingAdds(200, 24);
     const built = [];
     // Sequential within one request — FantasyPros' free/personal tiers have
@@ -608,6 +616,49 @@ app.post("/api/private/claim", async (req, res) => {
     privError(res, e);
   }
 });
+// v4.4.1: add a free agent / waiver player (claim), then make the matching lineup move once he is on the roster.
+app.post("/api/private/add-move", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    const u = req.user.username;
+    const b = req.body || {};
+    const perms = priv.status(u).perms || {};
+    if (!perms.claims || !perms.roster) return res.status(403).json({ error: `Switch on both "Waiver claims" and "Roster changes" in Account → Sleeper access first — the add needs the first, the lineup move the second.`, kind: "writes_off" });
+    const slotIndex = Number(b.change?.slotIndex);
+    const fromId = b.change?.fromId != null && b.change.fromId !== "" ? String(b.change.fromId) : null;
+    const dropId = b.dropId != null && b.dropId !== "" ? String(b.dropId) : null;
+    const problem = pendingMoves.checkAdd(lg, { addId: b.addId, dropId, slotIndex, fromId });
+    if (problem) return res.status(400).json({ error: problem, kind: "invalid" });
+    const onWaivers = b.kind === "waiver";
+    const bid = onWaivers && lg.waiverInfo?.faab ? Math.max(0, Math.min(Math.round(Number(b.bid) || 0), Number(lg.waiverInfo.remaining) || 0)) : 0;
+    const leg = await sleeperLeg(lg);
+    const claim = await priv.submitClaim(u, { leagueId: lg.id, rosterId: lg.myRosterId, leg, legs: [leg, leg + 1, Number(lg.week)], addId: b.addId, dropId, bid, confirm: b.confirm });
+    if (!claim?.ok) return res.json({ ok: false, claim, detail: claim?.detail || "Sleeper didn't take the claim." });
+    privateData.recordPush(u, lg.id, "waiver", { keys: b.keys });
+    let next = null;
+    try { next = faabDb.waiverSchedule(await sleeper.getLeague(lg.id), faabDb.getSettings(u).waiverTimes[String(lg.id)], Date.now()).next; } catch { /* unknown waiver time */ }
+    const now = Date.now();
+    const base = next && next > now ? next : now;
+    const move = pendingMoves.add(u, { leagueId: lg.id, leagueName: lg.name, rosterId: lg.myRosterId, addId: String(b.addId), addName: b.addName || "Player", dropId, dropName: b.dropName || null, bid, kind: onWaivers ? "waiver" : "fa", slotIndex, slot: b.change?.slot || "", fromId, fromName: b.change?.fromName || null, txId: claim.transactionId ?? null, checkFrom: onWaivers && next && next > now ? next : now, expires: base + pendingMoves.GIVE_UP_AFTER_RUN_MS });
+    // A plain free agent may land at once: look straight away.
+    let after = [];
+    if (!onWaivers) after = await pendingMoves.runPending(u, pendingDeps(u)).catch(() => []);
+    const finished = after.find((x) => x.id === move.id);
+    res.json({ ok: true, claim, pending: finished ? null : move, finished: finished || null, detail: finished ? finished.detail : onWaivers ? `Claim sent. ${b.addName} is started at ${move.slot} after the waivers process and he is on your roster (checked every 5 minutes).` : `Add sent. ${b.addName} is started at ${move.slot} as soon as he is on your roster (checked every 5 minutes).` });
+  } catch (e) {
+    privError(res, e);
+  }
+});
+app.use("/api/pending-moves", requireAuth);
+app.get("/api/pending-moves", (req, res) => {
+  const leagueId = req.query.leagueId ? String(req.query.leagueId) : null;
+  res.json({ moves: pendingMoves.list(req.user.username, leagueId), log: pendingMoves.getLog(req.user.username, leagueId).slice(0, 5) });
+});
+app.post("/api/pending-moves/cancel", (req, res) => {
+  const m = pendingMoves.remove(req.user.username, String(req.body?.id || ""));
+  res.json({ ok: Boolean(m), note: m ? "The lineup move is cancelled. The claim itself stays in Sleeper — cancel it on the Waivers page if you don't want it." : "Not found." });
+});
 // v4.1: "I can see it in Sleeper" — the user confirms a sent-but-unverified claim, which unlocks pushing every claim at once.
 app.post("/api/private/claim/confirm", (req, res) => {
   const v = priv.markClaimsProven(req.user.username, "manual");
@@ -744,6 +795,11 @@ app.post("/api/startsit/research", async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: err.message || "The start/sit research failed." });
   }
+});
+app.use("/api/api-presets", requireAuth);
+app.get("/api/api-presets", (req, res) => res.json(apiPresets.overview()));
+app.post("/api/api-presets", requireOwner, (req, res) => {
+  try { res.json(apiPresets.setActive(String(req.body?.preset || ""))); } catch (err) { res.status(400).json({ error: err.message }); }
 });
 app.use("/api/ai-sources", requireAuth);
 app.get("/api/ai-sources", (req, res) => res.json({ configured: gemini.isConfigured(), features: aiSources.overview() }));

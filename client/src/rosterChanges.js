@@ -9,9 +9,10 @@
 //   custom  v4.4: a hand-made swap on the Proposed lineup — put player X in starting slot i; when X already starts in
 //           slot j he and slot i's player trade places (otherSlot)  → roster_update_starters
 //   taxi    v4.4: move a taxi-squad player to the bench              → roster_update_taxi (unverified)
-// Changes that can't be pushed (the better player is a free agent, or sits on
-// IR/taxi and needs a roster move first) are listed as `blocked` with the reason
-// and can't be ticked.
+//   add     v4.4.1: the better player is a free agent / on waivers — add him (claim, with a drop and a FAAB bid chosen in
+//           a pop-up: `plan`), then the server makes the lineup move once he is on the roster
+// Changes that can't be pushed (the better player sits on IR/taxi and needs a
+// roster move first) are listed as `blocked` with the reason and can't be ticked.
 
 import { isLocked, FLEX_ELIGIBLE, slotEligible } from "./lineup.js";
 
@@ -24,9 +25,11 @@ export function proposeChanges(league) {
     const toId = r.optimal?.id != null ? String(r.optimal.id) : null;
     const fromId = r.current?.id != null ? String(r.current.id) : null;
     if (!r.optimal) return; // nothing better to put there
+    const isAdd = r.optimal.origin === "waiver";
     const c = {
       key: `L:${i}:${toId}`,
-      type: "lineup",
+      type: isAdd ? "add" : "lineup",
+      toPlayer: isAdd ? r.optimal : undefined,
       slotIndex: i,
       slot: r.slot,
       fromId,
@@ -36,7 +39,7 @@ export function proposeChanges(league) {
       delta: r.delta ?? 0,
       blocked: null,
     };
-    if (r.optimal.origin === "waiver") c.blocked = `${r.optimal.name} is a free agent — add him on Waivers first.`;
+    if (isAdd) { if (!toId) c.blocked = "No player id for this suggestion."; }
     else if (r.optimal.group === "ir" || r.optimal.group === "taxi") c.blocked = `${r.optimal.name} is on your ${r.optimal.group === "ir" ? "IR" : "taxi squad"} — needs a roster move before he can start.`;
     else if (!toId) c.blocked = "No player id for this suggestion.";
     out.push(c);
@@ -45,7 +48,7 @@ export function proposeChanges(league) {
       const alt = benchAlternative(league, r, i, usedAlt, out);
       if (alt) {
         usedAlt.add(alt.toId);
-        out.push({ ...alt, key: `L:${i}:${alt.toId}`, type: "lineup", slotIndex: i, slot: r.slot, fromId, fromName: r.current?.name ?? null, alt: true, altNote: `Bench option — ${r.optimal.name} has to be added from Waivers first`, blocked: null });
+        out.push({ ...alt, key: `L:${i}:${alt.toId}`, type: "lineup", slotIndex: i, slot: r.slot, fromId, fromName: r.current?.name ?? null, alt: true, altNote: `Bench option — no add needed (instead of adding ${r.optimal.name})`, blocked: null });
       }
     }
   });
@@ -115,7 +118,7 @@ function benchAlternative(league, row, i, usedAlt, out) {
 /** change A needs change B when A puts a player into a slot he is still starting in elsewhere (B moves him out). */
 function needs(changes, a) {
   if (a.type !== "lineup" || !a.toId) return [];
-  return changes.filter((b) => b.type === "lineup" && b !== a && b.fromId === a.toId);
+  return changes.filter((b) => (b.type === "lineup" || b.type === "add") && b !== a && b.fromId === a.toId);
 }
 
 /** Ticking a change also ticks what it needs; unticking one also unticks whatever needed it. */
@@ -126,7 +129,7 @@ export function toggle(changes, checked, key, on) {
   if (!target || target.blocked) return next;
   if (on) {
     // v4.4: two suggestions for the same slot (the waiver add and its bench option) are alternatives — ticking one unticks the other
-    if (target.type === "lineup") for (const o of changes) if (o !== target && o.type === "lineup" && o.slotIndex === target.slotIndex) next.delete(o.key);
+    if (target.type === "lineup" || target.type === "add") for (const o of changes) if (o !== target && (o.type === "lineup" || o.type === "add") && o.slotIndex === target.slotIndex) next.delete(o.key);
     const stack = [target];
     while (stack.length) {
       const c = stack.pop();
@@ -194,6 +197,14 @@ export function buildPush(league, changes, checked) {
     const real = starters.filter((x) => x && x !== "0");
     if (new Set(real).size !== real.length) errors.push("These changes would start the same player twice — tick the matching swap too.");
   }
+  // v4.4.1: free agent / waiver adds — the claim is sent now, the lineup move follows when he is on the roster
+  const adds = [];
+  for (const c of picked.filter((x) => x.type === "add")) {
+    if (!c.plan) { errors.push(`Choose how to add ${c.toName} — untick and tick the suggestion again.`); continue; }
+    const pl = c.plan;
+    adds.push({ key: c.key, addId: c.toId, addName: c.toName, dropId: pl.dropId || null, dropName: pl.dropName || null, bid: pl.kind === "waiver" ? Number(pl.bid) || 0 : 0, kind: pl.kind, change: { slotIndex: c.slotIndex, slot: c.slot, fromId: c.fromId, fromName: c.fromName } });
+    summary.push(`Add ${c.toName} (${pl.kind === "waiver" ? `waiver claim${pl.bid != null && pl.isFaab ? ` · $${Number(pl.bid) || 0}` : ""}` : "free agent"})${pl.dropName ? `, drop ${pl.dropName}` : ""} — then ${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName} once he is on your roster${c.delta ? ` (${c.delta > 0 ? "+" : ""}${c.delta.toFixed(1)} pts)` : ""}`);
+  }
   const ir = picked.filter((c) => c.type === "ir");
   if (ir.length) {
     reserve = [...new Set([...(league.reserveIds || []).map(String), ...ir.map((c) => c.id)])];
@@ -207,7 +218,7 @@ export function buildPush(league, changes, checked) {
     taxi = (league.taxi || []).filter(Boolean).map((p) => String(p.id)).filter((id) => !gone.has(id));
     for (const c of toBench) summary.push(`Move ${c.name} from the taxi squad to the bench`);
   }
-  return { starters, reserve, taxi, summary, errors };
+  return { starters, reserve, taxi, adds, summary, errors };
 }
 
 /**
@@ -233,7 +244,11 @@ export function arrangement(league, changes = [], checked = new Set()) {
   };
   for (const c of picked) {
     if (c.type === "lineup") put(c.slotIndex, c.toId, c.toName);
-    else if (c.type === "swap") {
+    else if (c.type === "add") {
+      if (c.toPlayer) byId.set(String(c.toId), c.toPlayer);
+      put(c.slotIndex, c.toId, c.toName);
+      starters[c.slotIndex] = { ...starters[c.slotIndex], adding: true };
+    } else if (c.type === "swap") {
       put(c.slotA, c.idB, c.nameB, c.slotB_label);
       put(c.slotB, c.idA, c.nameA, c.slot);
     } else if (c.type === "custom") {
@@ -340,4 +355,31 @@ export function customChange(arr, target, opt) {
     delta: otherSlot != null ? 0 : (Number(toP.proj) || 0) - (Number(from?.proj) || 0),
     blocked: null,
   };
+}
+
+/* ---------------- v4.4.1: free agent / waiver adds ---------------- */
+
+/** Empty bench spots left after the other adds already planned (an add whose drop is chosen takes none). */
+export function openSpotsForAdd(league, plans = {}, exceptKey = null) {
+  const slots = Number(league?.benchSlots);
+  if (!Number.isFinite(slots)) return null; // unknown roster size: the pop-up offers a drop but doesn't insist
+  const used = Object.entries(plans).filter(([k, p]) => k !== exceptKey && p && !p.dropId).length;
+  const empty = (league?.starters || []).some((s) => !s.player) ? 1 : 0; // an empty starting slot is also room
+  return slots - (league?.bench || []).filter(Boolean).length - used + empty;
+}
+
+/** Players who can be dropped for an add: bench, IR and taxi players (not locked), plus the starter being replaced. Weakest first. */
+export function dropOptions(league, change, plans = {}, exceptKey = null) {
+  const taken = new Set(Object.entries(plans).filter(([k, p]) => k !== exceptKey && p?.dropId).map(([, p]) => String(p.dropId)));
+  const out = [];
+  const add = (p, where) => {
+    if (!p || p.id == null || taken.has(String(p.id))) return;
+    out.push({ id: String(p.id), name: p.name, pos: p.pos, team: p.team, proj: p.proj ?? null, where, locked: isLocked(p, league) });
+  };
+  (league?.bench || []).forEach((p) => add(p, "Bench"));
+  (league?.ir || []).forEach((p) => add(p, "IR"));
+  (league?.taxi || []).forEach((p) => add(p, "Taxi"));
+  const st = (league?.starters || [])[change?.slotIndex]?.player;
+  if (st) add(st, `Starting at ${change.slot} (being replaced)`);
+  return out.filter((o) => !o.locked).sort((a, b) => (Number(a.proj) || 0) - (Number(b.proj) || 0));
 }

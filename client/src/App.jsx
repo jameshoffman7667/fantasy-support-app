@@ -116,7 +116,7 @@ export default function App() {
   // last saved copy is already on screen, so nothing blocks on this). A newer
   // build supersedes an older one. Returns { week, superseded }; throws only if
   // not a single league could be built.
-  const buildAll = useCallback(async (sid, ids, wk, { manual = false } = {}) => {
+  const buildAll = useCallback(async (sid, ids, wk, { manual = false, opened = false } = {}) => {
     const seq = ++buildSeq.current;
     let builtWeek = wk;
     let ok = 0;
@@ -126,7 +126,7 @@ export default function App() {
       while (queue.length) {
         const id = queue.shift();
         try {
-          const r = await api.buildLeagues(sid, [id], wk, ids, { manual });
+          const r = await api.buildLeagues(sid, [id], wk, ids, { manual, opened });
           if (seq !== buildSeq.current) return;
           builtWeek = r.week ?? builtWeek;
           if (r.leagues.some((l) => !l.error)) ok += 1;
@@ -168,7 +168,7 @@ export default function App() {
         }
         if (!showedCache) setLoadingLeagues(true);
         setRefreshing(true);
-        const { week: builtWeek } = await buildAll(sessionId, restoredIds, last?.week ?? undefined);
+        const { week: builtWeek } = await buildAll(sessionId, restoredIds, last?.week ?? undefined, { opened: true });
         setWeek(builtWeek ?? currentWeek);
         setSyncedAt("just now");
         if (!showedCache) navigate({ screen: "dashboard" }, { replace: true });
@@ -308,11 +308,11 @@ export default function App() {
 
   // v3.5: the refresh button passes { manual: true } so trade offers and pending claims are re-read live;
   // the 30-minute auto refresh doesn't.
-  const handleRefresh = useCallback(async ({ manual = false } = {}) => {
+  const handleRefresh = useCallback(async ({ manual = false, opened = false } = {}) => {
     if (!sessionId || selectedIds.length === 0) return;
     setRefreshing(true);
     try {
-      const { week: builtWeek } = await buildAll(sessionId, selectedIds, week, { manual });
+      const { week: builtWeek } = await buildAll(sessionId, selectedIds, week, { manual, opened });
       setWeek(builtWeek);
       setSyncedAt("just now");
     } catch (err) {
@@ -352,6 +352,19 @@ export default function App() {
     if (!sessionId || selectedIds.length === 0) return;
     const id = setInterval(() => refreshRef.current(), AUTO_REFRESH_MS);
     return () => clearInterval(id);
+  }, [sessionId, selectedIds.length]);
+
+  // v4.4.1: coming back to the app after 5+ minutes away counts as opening it again (the server only acts on this under the Medium preset).
+  useEffect(() => {
+    if (!sessionId || selectedIds.length === 0) return undefined;
+    let hiddenAt = null;
+    const onVis = () => {
+      if (document.visibilityState === "hidden") hiddenAt = Date.now();
+      else if (hiddenAt != null && Date.now() - hiddenAt >= 5 * 60 * 1000) { hiddenAt = null; refreshRef.current({ opened: true }); }
+      else hiddenAt = null;
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
   }, [sessionId, selectedIds.length]);
 
   const handleLogout = useCallback(async () => {

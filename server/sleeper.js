@@ -17,6 +17,11 @@ const NEAR_MS = 15 * MIN;
 const wroteAt = new Map();
 export function setKickoffs(list) { kickoffs = (list || []).filter((k) => Number.isFinite(k)); }
 export function noteWrite(leagueId) { wroteAt.set(String(leagueId), nowFn()); }
+// v4.4.1 (Medium preset): ask for the next rosters / matchups / trending read to skip the cache once.
+const freshOnce = new Set();
+export function markFreshOnce(leagueId) { freshOnce.add(`rosters:${leagueId}`); freshOnce.add(`matchups:${leagueId}`); }
+export function markTrendingFreshOnce() { freshOnce.add("trending"); }
+function takeFresh(k) { return freshOnce.delete(k); }
 function liveWindow(leagueId) {
   const now = nowFn();
   if (kickoffs.some((k) => Math.abs(k - now) <= NEAR_MS)) return true;
@@ -105,7 +110,7 @@ export function getLeague(leagueId, opts = {}) {
 }
 export function getRosters(leagueId, opts = {}) {
   const ttl = opts.ttl || TTL.rosters; // R1 (5 min); R20 passes a weekly ttl for other managers' leagues
-  const fresh = opts.fresh || (!opts.ttl && liveWindow(leagueId));
+  const fresh = takeFresh(`rosters:${leagueId}`) || opts.fresh || (!opts.ttl && liveWindow(leagueId));
   return cached(`sl:rosters:${leagueId}`, ttl, () => sleeperFetch(`/league/${leagueId}/rosters`), { fresh });
 }
 export function getLeagueUsers(leagueId, opts = {}) {
@@ -116,6 +121,7 @@ export function getLeagueUsers(leagueId, opts = {}) {
 // `limit` is not documented — if it silently caps lower, positions fill up
 // less, nothing breaks).
 export function getTrendingAdds(limit = 200, lookbackHours = 24, opts = {}) {
+  if (!opts.fresh && freshOnce.has("trending") && limit === 200) { freshOnce.delete("trending"); opts = { ...opts, fresh: true }; }
   return cached(`sl:trend:${limit}:${lookbackHours}`, TTL.trending, () => sleeperFetch(`/players/nfl/trending/add?lookback_hours=${lookbackHours}&limit=${limit}`), opts); // R3 1h
 }
 // R19: the current week is re-read every 6 hours; weeks that are over are stored permanently.
@@ -135,7 +141,7 @@ export async function getTransactions(leagueId, round, opts = {}) {
 // in actual score once played" — see buildLeague.js, which checks for
 // this field's actual presence rather than assuming it's there.
 export function getMatchups(leagueId, week, opts = {}) {
-  const fresh = opts.fresh || liveWindow(leagueId);
+  const fresh = takeFresh(`matchups:${leagueId}`) || opts.fresh || liveWindow(leagueId);
   return cached(`sl:matchups:${leagueId}:${week}`, TTL.matchups, () => sleeperFetch(`/league/${leagueId}/matchups/${week}`), { fresh });
 }
 

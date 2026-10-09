@@ -1,6 +1,6 @@
 import * as api from "../api.js";
 import { ArrowLeftRight, Bell, BellOff, CheckCircle2, ChevronRight, ClipboardList, ListChecks, Loader2, LogOut, RefreshCw, Settings2, Stethoscope, TrendingUp, Trophy, UserCog, Users } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Avatar, FootballPlayerIcon, UprightsIcon } from "./common.jsx";
 import { C, STATUS } from "./theme.js";
 
@@ -119,8 +119,20 @@ function UserMenu({ name, avatar, onEditLeagues, onOpenAccount, onLogout, onHome
 
 export function TopBar({ crumbs, onRefresh, refreshing, week, onWeekChange, showWeek, userMenu }) {
   const rest = userMenu ? crumbs.filter((c) => !c.root) : crumbs;
+  // v4.4.1: the bar's height is published as --topbar-h so sticky bars under it (Roster tabs) stick BELOW it, not over it
+  const barRef = useRef(null);
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return undefined;
+    const set = () => document.documentElement.style.setProperty("--topbar-h", `${el.offsetHeight}px`);
+    set();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   return (
-    <div className="sticky top-0 z-10" style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+    <div ref={barRef} className="sticky top-0 z-30" style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
       <div className="flex items-center justify-between gap-2 px-4 py-3">
         <div className="flex items-center gap-1.5 min-w-0">
           {userMenu && <UserMenu {...userMenu} compact={rest.length > 0} />}

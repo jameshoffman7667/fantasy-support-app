@@ -26,12 +26,12 @@ export function connect() {
 }
 
 // v2.9: `leagueIds` = build these now; `trackedIds` = the full tracked list to remember.
-export function buildLeagues(sessionId, leagueIds, week, trackedIds, { manual = false } = {}) {
+export function buildLeagues(sessionId, leagueIds, week, trackedIds, { manual = false, opened = false } = {}) {
   return request(`/api/leagues/build`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     // v3.5: manual = the refresh button was pressed (re-reads trade offers live)
-    body: JSON.stringify({ sessionId, leagueIds, week, trackedIds, manual }),
+    body: JSON.stringify({ sessionId, leagueIds, week, trackedIds, manual, opened }),
   });
 }
 
@@ -399,4 +399,23 @@ export function getAutoMode(leagueId = null) {
 }
 export function setAutoMode(patch) {
   return jsonPost(`/api/automode`, patch);
+}
+
+// v4.4.1: API call presets (Minimal / Medium) — app-wide, owner changes.
+export function getApiPresets() {
+  return request(`/api/api-presets`);
+}
+export function setApiPreset(preset) {
+  return jsonPost(`/api/api-presets`, { preset });
+}
+
+// v4.4.1: add a free agent / waiver player, then the matching lineup move once he is on the roster.
+export function pushAddMove(leagueId, body) {
+  return jsonPost(`/api/private/add-move`, { leagueId, ...body, confirm: true });
+}
+export function getPendingMoves(leagueId) {
+  return request(`/api/pending-moves?leagueId=${encodeURIComponent(leagueId)}`);
+}
+export function cancelPendingMove(id) {
+  return jsonPost(`/api/pending-moves/cancel`, { id });
 }
