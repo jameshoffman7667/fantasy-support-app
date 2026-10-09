@@ -154,7 +154,7 @@ export function WeatherModal({ gameKey, week, onClose }) {
 
 // Opens the report for a scope; coloured by the worst live variance in it.
 export function VarianceButton({ variances, onOpen, compact = false, label = "Variance report" }) {
-  const live = variances.filter((v) => !v.cleared);
+  const live = variances.filter((v) => !v.cleared && v.severity !== "info"); // v4.4.2: info items are listed in the report, not counted
   const sev = worstSev(live.map((v) => v.severity));
   const color = SEV_COLOR(sev);
   return (
@@ -314,7 +314,7 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
         </div>
       )}
       <div style={{ color: C.textFaint }} className="text-[10px] mt-3">
-        Clearing hides the yellow (minor) items listed here until a new one appears. Red items can't be cleared. A cleared item that turns red shows again.
+        Clearing hides yellow items until a new one appears. Red and grey items can't be cleared.
       </div>
     </Modal>
   );

@@ -27,7 +27,7 @@ export const STATUS = {
   na: { color: C.textMuted, bg: "rgba(143,163,158,0.12)", Icon: HelpCircle, label: "No data" },
 };
 
-export const RANK = { ok: 0, minor: 1, major: 2 };
+export const RANK = { ok: 0, info: 0, minor: 1, major: 2 }; // v4.4.2: "info" is listed but never coloured
 
 export const worst = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
 
@@ -142,7 +142,7 @@ export const timeAgo = (iso) => {
 /* ------------------------------------------------------------------ */
 /*  VARIANCE REPORT (v2.8.1)                                           */
 /* ------------------------------------------------------------------ */
-export const SEV_COLOR = (sev, cleared) => (cleared ? C.textFaint : sev === "major" ? C.major : sev === "minor" ? C.minor : C.ok);
+export const SEV_COLOR = (sev, cleared) => (cleared ? C.textFaint : sev === "major" ? C.major : sev === "minor" ? C.minor : sev === "info" ? C.textMuted : C.ok);
 
 export const worstSev = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
 

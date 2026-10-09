@@ -26,7 +26,7 @@ import { lockedNames } from "./lineup.js";
 // v3.0: Roster and Lineup are one page ("roster"); League (settings change log) is new.
 export const PAGES = ["roster", "waiver", "trade", "injury", "league"];
 export const PAGE_LABEL = { roster: "Roster", waiver: "Waivers", trade: "Trade Radar", injury: "Injury Watch", league: "League" };
-const RANK = { ok: 0, minor: 1, major: 2 };
+const RANK = { ok: 0, info: 0, minor: 1, major: 2 }; // v4.4.2: info = on the list, no colour, no count
 export const worst = (list) => list.reduce((acc, s) => (RANK[s] > RANK[acc] ? s : acc), "ok");
 
 // Week-specific pages carry the week in their keys; waivers, trades and
@@ -56,7 +56,7 @@ export function collectVariances(lg) {
   const marked = new Set([...(lineupMark?.keys || []), ...(waiverMark?.keys || [])]);
   const gapQuiet = (gap) => lineupMark != null && gap <= lineupMark.gap + 1;
   const add = (page, rule, subject, severity, text, auto = false) => {
-    if (severity !== "minor" && severity !== "major") return;
+    if (severity !== "minor" && severity !== "major" && severity !== "info") return;
     if (marked.has(varianceKey(lg.id, lg.week, page, rule, subject))) return;
     out.push({ key: varianceKey(lg.id, lg.week, page, rule, subject), leagueId: lg.id, league: lg.name, page, rule, subject, severity, text: text || subject, auto: Boolean(auto) && severity === "minor" });
   };
@@ -137,7 +137,7 @@ export function collectVariances(lg) {
 
   // Injuries.
   for (const e of lg.injury?.rows || []) {
-    add("injury", e.seen ? "Injury status (seen before)" : "New injury status", `${e.player} (${e.status})`, e.seen ? "minor" : "major", `${e.player}: ${e.status}${e.note ? ` — ${e.note}` : ""}`);
+    add("injury", e.seen ? "Injury status (seen before)" : "New injury status", `${e.player} (${e.status})`, e.seen ? "info" : "major", `${e.player}: ${e.status}${e.note ? ` — ${e.note}` : ""}`);
   }
   return out;
 }

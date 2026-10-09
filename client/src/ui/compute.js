@@ -95,13 +95,15 @@ export function computeLineup(league) {
 // v3.9: the starter / bench comparison on its own, so every Available-page card (any category) gets it.
 // v4.1: compared against the NEXT game only — a starter or bench player whose game has locked isn't a comparison,
 // and neither is a free agent whose own game has started. A free agent with any designation other than Questionable
-// (Out, Doubtful, IR, PUP, Suspended, …), or Questionable and projected 0, never "beats" anyone — for the starter rule
+// (Out, Doubtful, IR, PUP, Suspended, …), Questionable and projected 0, or projected 0 on a bye week (v4.4.2), never "beats" anyone — for the starter rule
 // and the bench rule alike (the waiver card note and the variance are the same thing).
 const PLAYABLE_STATUS = new Set([null, undefined, "", "Healthy", "Questionable"]);
 export function faCanCount(fa, league) {
   if (!fa) return false;
   if (!PLAYABLE_STATUS.has(fa.status)) return false;
   if (fa.status === "Questionable" && !(Number(fa.proj) > 0)) return false;
+  // v4.4.2: a 0-point projection together with any injury designation or a bye week never beats anyone
+  if (!(Number(fa.proj) > 0) && (fa.status === "Bye" || fa.onBye || (fa.status && fa.status !== "Healthy"))) return false;
   if (isLocked(fa, league)) return false;
   return true;
 }
@@ -201,6 +203,6 @@ export function computeTrade(league) {
 // the tab's overall status from what the server already decided.
 export function computeInjury(league) {
   const rows = league.injuryEvents || [];
-  const status = rows.length === 0 ? "ok" : rows.some((r) => !r.seen) ? "major" : "minor";
+  const status = rows.some((r) => !r.seen) ? "major" : "ok"; // v4.4.2: a status seen before is listed but no longer yellow
   return { rows, status };
 }

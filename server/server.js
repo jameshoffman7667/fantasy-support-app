@@ -35,6 +35,7 @@ import * as cbs from "./cbs.js";
 import * as performance from "./performance.js";
 import * as dvp from "./dvp.js";
 import * as apiPresets from "./apiPresets.js";
+import * as dropsMod from "./drops.js";
 import * as weather from "./weather.js";
 import { getImage } from "./images.js";
 import * as varianceAcks from "./varianceAcks.js";
@@ -794,6 +795,22 @@ app.post("/api/startsit/research", async (req, res) => {
     res.json({ ok: true, at: out?.at ?? null, players: players.length, verdicts: players.filter((p) => out?.byId?.[p.id]).length });
   } catch (err) {
     res.status(502).json({ error: err.message || "The start/sit research failed." });
+  }
+});
+// v4.4.2: Waivers → Available → Drops (other teams' drops in the past 14 days).
+app.use("/api/drops", requireAuth);
+app.get("/api/drops", async (req, res) => {
+  const lg = ownBuilt(req, res, req.query.leagueId);
+  if (!lg) return;
+  try {
+    const st = await sleeper.getState().catch(() => null);
+    const cur = Number(st?.sleeperWeek ?? st?.week ?? lg.week);
+    const rounds = dropsMod.roundsFor(cur);
+    const [rosters, players, ...perRound] = await Promise.all([sleeper.getRosters(lg.id), sleeper.getPlayers(), ...rounds.map((r) => sleeper.getTransactions(lg.id, r).catch(() => []))]);
+    const drops = dropsMod.summarizeDrops({ transactions: perRound.flat(), rosters, players, myRosterId: lg.myRosterId, labels: lg.rosterLabels || {} });
+    res.json({ days: dropsMod.WINDOW_DAYS, drops });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't read this league's transactions." });
   }
 });
 app.use("/api/api-presets", requireAuth);

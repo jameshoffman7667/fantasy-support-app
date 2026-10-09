@@ -1,7 +1,7 @@
 import * as api from "../api.js";
 import { ChevronRight, Copy, KeyRound, Loader2, Lock, LogOut, UserCog, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Chip, PrimaryButton, SectionLabel, TextField } from "../ui/common.jsx";
+import { Chip, InfoNote, PrimaryButton, SectionLabel, TextField } from "../ui/common.jsx";
 import { C, inputStyle } from "../ui/theme.js";
 
 /* ------------------------------------------------------------------ */
@@ -33,7 +33,7 @@ function SleeperAccessPanel() {
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-2.5" data-sleeper-access>
       <div style={{ color: C.textMuted }} className="text-xs">
-        Optional. Lets the app read your trade offers and league settings log, and — only if you switch it on — push lineup changes, reject trades and enter waiver claims. It uses Sleeper's private, undocumented API with your login token. That API can change without notice and Sleeper's terms arguably restrict automation, so it's off until you turn it on. The token is stored encrypted on your server and never sent back to the browser.
+        Optional: read trade offers and the settings log, and push lineups, claims and trade rejections. <InfoNote label="About Sleeper access">Uses Sleeper's private, undocumented API with your login token. That API can change without notice and Sleeper's terms arguably restrict automation, so every write is off until you switch it on. The token is stored encrypted on your server and never sent back to the browser.</InfoNote>
       </div>
       {!st ? (
         <div style={{ color: C.textMuted }} className="text-xs">Loading…</div>
@@ -417,7 +417,7 @@ function ApiPresetsPanel({ isOwner }) {
   return (
     <div className="space-y-2" data-api-presets>
       <div style={{ color: C.textMuted }} className="text-xs px-1 leading-snug">
-        How often the app asks Sleeper and the other data sources for fresh data. The setting is for everyone who uses this app; only the owner changes it.
+        How often the app asks for fresh data. Applies to everyone; only the owner changes it.
       </div>
       {err && <div style={{ color: C.major }} className="text-xs px-1">{err}</div>}
       {data.presets.map((p) => {

@@ -474,6 +474,13 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.4.2 additions
+- **Waivers → Available → Drops:** players other teams dropped in the last 14 days (not yours), with who dropped them and whether they are still free.
+- **Suggested bids** show the 70% and 95% amounts; tap one for a graph of the real winning bids (min, median, average, 1 and 2 standard deviations, max).
+- **Rules:** Beats a bench player no longer applies to a 0-point player who is injured or on a bye; Out / Sus / IR / DNR players with no projection count as 0; seen-before injury statuses are listed but not yellow; handcuff notes show just the injured player and designation.
+- **Cleaner screens:** Overview and Outlook buttons removed from the league view; many notes shortened or turned into an "i" button.
+- No compose or environment changes in this release.
+
 ### v4.4.1 additions
 - **Roster:** suggestions that start a free agent or waiver player can now be ticked. A pop-up asks free agent or waivers, the FAAB bid and which player to drop; the app adds him (as a claim) and makes the lineup move once he is on your roster. Waiting moves are listed and cancellable. Needs "Waiver claims" and "Roster changes" on.
 - **Account → API call presets** (owner switches, applies to everyone): Minimal (fewest calls) or Medium (default — also reads rosters, matchups and free agents live every time the app is opened).

@@ -2,7 +2,7 @@ import * as api from "../api.js";
 import { ScoutingPage } from "./Scouting.jsx"; // v4.2
 import { Loader2, RefreshCw, Wind } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
-import { BootstrapScreen, CardCtx, ErrorScreen, Modal, SectionLabel, Select, TeamLogo, Toggle } from "../ui/common.jsx";
+import { BootstrapScreen, CardCtx, ErrorScreen, InfoNote, Modal, SectionLabel, Select, TeamLogo, Toggle } from "../ui/common.jsx";
 import { C, SRC_COLOR, SRC_NAME, TIER_COLORS, TIER_LABELS, goodBad, signed } from "../ui/theme.js";
 
 // Average miss by week, one line per source. Plain inline SVG.
@@ -172,8 +172,8 @@ function PerformanceScreen() {
   return (
     <div className="px-4 py-3 space-y-3" data-performance>
       <div style={{ color: C.textMuted }} className="text-xs">
-        How your lineup and waiver decisions worked out against what the app suggested, in real points once a week's scores are in. Only lineup swaps and waiver claims are tracked. Each suggestion is judged by the latest one the app showed before the relevant kickoff.
-        {data.since ? ` History starts ${new Date(data.since).toLocaleDateString([], { month: "short", day: "numeric" })} — earlier weeks weren't recorded.` : ""}
+        How your lineup swaps and waiver claims worked out against the app's suggestions, in real points.
+        <InfoNote label="About My performance"> Each suggestion is judged by the latest one the app showed before the relevant kickoff, once the week's scores are in.{data.since ? ` History starts ${new Date(data.since).toLocaleDateString([], { month: "short", day: "numeric" })}; earlier weeks weren't recorded.` : ""}</InfoNote>
       </div>
       {data.note && <div style={{ color: C.minor }} className="text-xs" data-perf-note>{data.note}</div>}
       {data.leagues.length > 1 && (
@@ -394,7 +394,7 @@ function MatchupRankings({ onDvpChange, authUser }) {
   return (
     <div className="px-4 py-3">
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Fantasy points per game by position, in your league's scoring, from Sleeper's game stats. Your sample and adjustment choices here also colour the matchups on player cards.
+        Fantasy points per game by position in your league's scoring. <InfoNote label="About matchups">Your sample and adjustment choices here also colour the matchups on player cards.</InfoNote>
       </div>
       <div className="flex flex-wrap gap-2 items-end mb-2">
         <Select label="Scoring" value={profile} onChange={setProfile} options={(data?.profiles || []).map((p) => ({ value: p.profile, label: p.label }))} />
@@ -518,7 +518,7 @@ function WeatherSettingsPanel() {
       <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm mb-1 flex items-center gap-1.5">
         <Wind size={14} style={{ color: C.brand }} /> Weather flags (all users)
       </div>
-      <div style={{ color: C.textMuted }} className="text-[11px] mb-2">Outdoor games over the kickoff hour and the 3 after it. A flag marks the starter "minor" on the lineup page.</div>
+      <div style={{ color: C.textMuted }} className="text-[11px] mb-2">Outdoor games over the kickoff hour and the 3 after it.</div>
       <div className="flex flex-wrap gap-2 mb-2">
         {field("windMph", "Wind mph")}
         {field("gustMph", "Gust mph")}

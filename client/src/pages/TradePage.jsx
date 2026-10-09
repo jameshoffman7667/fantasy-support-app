@@ -1,7 +1,7 @@
 import * as api from "../api.js";
 import { Clock, Loader2 } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
-import { ConfirmPush, PrivateGate, PushResults, SectionLabel } from "../ui/common.jsx";
+import { ConfirmPush, InfoNote, PrivateGate, PushResults, SectionLabel } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { C, STATUS, fmtInt, fmtWhen } from "../ui/theme.js";
 
@@ -171,8 +171,8 @@ export function TradeTab({ league, sessionId, onRefresh, onOpenAccount }) {
         )}
       </div>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        You sell from a position of strength and buy at a position of weakness — never the same position — against real rival rosters, kept to offers close enough in trade value that a rival could plausibly accept. Ranked by the net change to your projected starting lineup.
-        {advice.configured === false ? " (Add a Gemini key on the server to get a news check on each swap.)" : advice.configured ? " Each swap has a news check from Gemini with Google Search — it can be wrong, so verify before trading." : ""}
+        Swaps that sell strength for weakness, ranked by the change to your projected lineup.
+        <InfoNote label="About trade suggestions">Against real rival rosters, never the same position, kept close enough in trade value that a rival could accept.{advice.configured === false ? " Add a Gemini key on the server to get a news check on each swap." : advice.configured ? " Each swap has a Gemini news check; it can be wrong, so verify before trading." : ""}</InfoNote>
       </div>
       {advice.error && <div style={{ color: C.major }} className="text-xs px-1 pb-2">News check failed: {advice.error}</div>}
       {finder.length === 0 ? (
@@ -364,7 +364,7 @@ function TradeOffers({ league, onRefresh, onOpenAccount }) {
   if (!pi?.configured) {
     return (
       <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2" data-offers-hint>
-        Trade offers waiting on you (and all your own outstanding offers) appear here once you add your Sleeper token under Account → Sleeper access.
+        Trade offers appear here once you add your Sleeper token (Account → Sleeper access).
         {onOpenAccount && <> <button type="button" onClick={onOpenAccount} style={{ color: C.brand }} className="underline">Set up</button></>}
       </div>
     );
@@ -372,7 +372,7 @@ function TradeOffers({ league, onRefresh, onOpenAccount }) {
   if (pi.readsOff) {
     return (
       <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-2" data-offers-hint>
-        Trade offers are hidden because reading from Sleeper is switched off (Account → Sleeper access).
+        Trade offers are hidden: reading from Sleeper is off (Account → Sleeper access).
       </div>
     );
   }

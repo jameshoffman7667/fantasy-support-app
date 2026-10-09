@@ -168,7 +168,8 @@ export const TAB_META = {
 // v4.1: the tabs look like the status boxes on the dashboard's league card (StatusBadge: same colour, tint and icon
 // per page status). Pages without a status (Overview, Outlook) are neutral boxes. The open page has a solid outline.
 export function LeagueTabs({ active, onSelect, statusOf }) {
-  const tabs = [{ key: "overview", short: "Overview" }, ...Object.entries(TAB_META).map(([key, m]) => ({ key, short: m.short }))];
+  // v4.4.2: no Overview / Outlook buttons here (Overview = the league name in the breadcrumb menu, Outlook = the dashboard card)
+  const tabs = Object.entries(TAB_META).filter(([key]) => key !== "odds").map(([key, m]) => ({ key, short: m.short }));
   return (
     <div className="flex overflow-x-auto gap-1.5 px-3 py-2" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }} data-league-tabs>
       {tabs.map((t) => {

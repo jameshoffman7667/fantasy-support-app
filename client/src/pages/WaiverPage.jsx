@@ -8,8 +8,9 @@ import { ChevronRight, Loader2, Search, SlidersHorizontal, X } from "lucide-reac
 import { expandPositions, fmtValue, normalizeView, sortRows } from "../statsView.js"; // v4.2
 import { StatPickers } from "../ui/statPickers.jsx"; // v4.2
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BidBox, ConfirmPush, DragHandle, DragList, EntryModeToggle, Headshot, MatchupChip, Modal, PrivateGate, PushResults, SectionLabel, SourceTag, UsageBadge, WeatherChip } from "../ui/common.jsx";
+import { BidBox, ConfirmPush, DragHandle, DragList, EntryModeToggle, Headshot, InfoNote, MatchupChip, Modal, PrivateGate, PushResults, SectionLabel, SourceTag, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
+import { BidDistributionModal } from "../ui/bidChart.jsx"; // v4.4.2
 import { C, POS_COLOR, STATUS, fmtInt, fmtMoney, fmtPct, fmtWhen, inputStyle } from "../ui/theme.js";
 
 /* ------------------------------------------------------------------ */
@@ -61,7 +62,7 @@ function TypeExtras({ p, leagueType }) {
   return <div style={{ color: C.brand }} className="text-[11px] mt-0.5" data-type-extras>{bits.join(" · ")}</div>;
 }
 
-function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile, leagueType, keyText = null, elsewhere = null, onElsewhere = null }) {
+function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBidInfo = null, onBid, profile, leagueType, keyText = null, elsewhere = null, onElsewhere = null }) {
   const s = STATUS[p.severity] || STATUS.ok;
   const bid = (plan.bids || []).find((b) => b.id === p.id);
   return (
@@ -105,9 +106,13 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBid, profile,
             </button>
           )}
           {faabHint && (
-            <div style={{ color: C.textFaint }} className="text-[10px] mt-1" data-faab-hint>
-              Suggested bid: {fmtMoney((budget * faabHint.suggestion70Pct) / 100)} (70%) · {fmtMoney((budget * faabHint.suggestion95Pct) / 100)} (95%) · n={faabHint.sampleSize}
-              {faabHint.playerBids?.length ? ` · this player: ${faabHint.playerBids.map((b) => `$${b.bid}`).join(", ")}` : ""}
+            <div style={{ color: C.textFaint }} className="text-[11px] mt-1 flex items-center gap-1.5 flex-wrap" data-faab-hint>
+              <span>Suggested bid</span>
+              {[["70%", faabHint.suggestion70Pct], ["95%", faabHint.suggestion95Pct]].map(([label, v]) => (
+                <button key={label} type="button" onClick={() => onBidInfo?.(p, faabHint)} style={{ color: C.brand, border: `1px solid ${C.brand}55` }} className="rounded px-1.5 py-0.5 text-[11px]" data-faab-bid={label} aria-label={`${label} suggested bid ${fmtMoney((budget * v) / 100)} — show the bid distribution`}>
+                  {fmtMoney((budget * v) / 100)} <span style={{ color: C.textFaint }}>{label}</span>
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -198,9 +203,8 @@ function AutoModeCard({ league, onOpenAccount }) {
         <span>
           <span style={{ color: C.text }} className="text-sm font-medium">Auto mode</span>
           <span style={{ color: C.textMuted }} className="block">
-            Each roster check, empty IR and taxi spots are filled from your bench (never by a claim, nothing is dropped).
-            {faab ? " One hour before waivers process, every empty bench spot gets a $0 claim — top trending free agents first, then trade value." : " This league uses waiver priority, so no claims are placed."}
-            {" "}Needs "Roster changes"{faab ? " and \"Waiver claims\"" : ""} on in <button type="button" onClick={onOpenAccount} style={{ color: C.brand }} className="underline">Account → Sleeper access</button>.
+            Fills empty IR and taxi spots from your bench at each roster check{faab ? ", and places $0 bench claims an hour before waivers" : " (no claims: waiver priority league)"}.
+            {" "}<InfoNote label="About Auto mode">Claims go to top trending free agents first, then trade value; nothing is ever dropped. Needs "Roster changes"{faab ? " and \"Waiver claims\"" : ""} on in <button type="button" onClick={onOpenAccount} style={{ color: C.brand }} className="underline">Account → Sleeper access</button>.</InfoNote>
           </span>
         </span>
       </label>
@@ -310,7 +314,7 @@ function ElsewhereModal({ player, leagues, mode, onClose }) {
             </div>
           );
         })}
-        <div style={{ color: C.textFaint }} className="text-[11px] pt-1">A bid here is saved to that league's Claims page — its drops come from that league's own Drops list.</div>
+        <div style={{ color: C.textFaint }} className="text-[11px] pt-1">A bid here is saved to that league's Claims page.</div>
       </div>
     </Modal>
   );
@@ -516,13 +520,15 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = []
   };
   const meta = CATEGORIES.find((c) => c.key === cat);
   const [elsewhereFor, setElsewhereFor] = useState(null); // v4.1: { player, leagues }
+  const [bidInfo, setBidInfo] = useState(null); // v4.4.2: { player, hint } — the bid distribution pop-up
   const rowProps = (p, keyText = null) => {
     const hint = isFaab && budget ? hints.get(`id:${p.id}`) || hints.get(`name:${p.name}`) : null;
-    return { p, plan, mode, budget, isFaab, faabHint: hint, onBid, profile: league.scoringProfile, leagueType: league.leagueType, keyText, elsewhere: availableElsewhere(p, league, allLeagues), onElsewhere: (pl, leagues) => setElsewhereFor({ player: pl, leagues }) };
+    return { p, plan, mode, budget, isFaab, faabHint: hint, onBidInfo: (pl, h) => setBidInfo({ player: pl, hint: h }), onBid, profile: league.scoringProfile, leagueType: league.leagueType, keyText, elsewhere: availableElsewhere(p, league, allLeagues), onElsewhere: (pl, leagues) => setElsewhereFor({ player: pl, leagues }) };
   };
   const chip = (active) => ({ background: active ? C.brand : "transparent", color: active ? "#fff" : C.textMuted, border: `1px solid ${active ? C.brand : C.border}` });
   return (
     <div>
+      {bidInfo && <BidDistributionModal player={bidInfo.player} budget={budget} samplePct={faab.result?.samples?.[bidInfo.hint.sampleKey] || []} scope={bidInfo.hint.sampleScope || "tracked leagues"} onClose={() => setBidInfo(null)} />}
       {elsewhereFor && <ElsewhereModal player={elsewhereFor.player} leagues={elsewhereFor.leagues} mode={mode} onClose={() => setElsewhereFor(null)} />}
       <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap" data-available-controls>
         <div className="flex items-center gap-1 flex-wrap" data-pos-filter>
@@ -542,25 +548,74 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = []
         ))}
       </div>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-1">
-        {meta?.blurb} {isFaab ? "Enter a bid (0 counts) to add a claim." : "Tap “Add claim” to add a claim."}
+        {meta?.blurb}
       </div>
       {cat === "hype" && <ResearchStatus hype={wc.hype} onRefresh={onRefresh} />}
       {isFaab && (
         <div style={{ color: faab.error ? C.major : C.textFaint }} className="text-[10px] px-1 pb-2" data-faab-status>
-          {faab.loading ? "Working out suggested bids…" : faab.error ? `Suggested bids unavailable: ${faab.error}` : faab.result?.note ? faab.result.note : faab.result ? `Suggested bids (70% / 95% of winning bids, ${faab.result.history?.windowLabel?.toLowerCase() || "last 21 days"}) are on each card.` : null}
+          {faab.loading ? "Working out suggested bids…" : faab.error ? `Suggested bids unavailable: ${faab.error}` : faab.result?.note ? faab.result.note : null}
         </div>
       )}
       {cat === "all" && <AllTab league={league} filter={filter} rowProps={rowProps} cardFor={(r) => (wc.cards[r.id] ? rowFor(r.id) : rowsById.get(r.id) || { ...r, ...compareToRoster(league, r) })} />}
-      {cat !== "all" && view.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>{cat === "hype" && !hypeReady ? "No research yet for this week." : "Nobody available here right now."}</div>}
-      {cat !== "all" && <div className="space-y-1.5" data-category-list={cat}>
+      {cat === "drops" && <DropsTab league={league} filter={filter} rowProps={rowProps} cardFor={(id) => (wc.cards[id] ? rowFor(id) : rowsById.get(id) || null)} />}
+      {cat !== "all" && cat !== "drops" && view.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>{cat === "hype" && !hypeReady ? "No research yet for this week." : "Nobody available here right now."}</div>}
+      {cat !== "all" && cat !== "drops" && <div className="space-y-1.5" data-category-list={cat}>
         {view.map((e) => {
           const p = rowFor(e.id);
           return <AvailableRow key={p.id} {...rowProps(p, keyLabel(cat, p))} />;
         })}
       </div>}
-      {league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
-      <div className="mt-3">
+      {cat !== "drops" && league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
+      {cat !== "drops" && <div className="mt-3">
         <DropSummary league={league} />
+      </div>}
+    </div>
+  );
+}
+
+/* v4.4.2 — Drops: players other teams dropped in the last 14 days (never your own drops). */
+function DropsTab({ league, filter, rowProps, cardFor }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [onlyFree, setOnlyFree] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setData(null);
+    setErr(null);
+    api.getDrops(league.id).then((d) => live && setData(d)).catch((e) => live && setErr(e.message));
+    return () => { live = false; };
+  }, [league.id]);
+  if (err) return <div style={{ color: C.major }} className="text-sm px-1 py-2" data-drops-error>{err}</div>;
+  if (!data) return <div style={{ color: C.textMuted }} className="text-sm px-1 py-2 flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" /> Reading this league's transactions…</div>;
+  const FLEXP = ["RB", "WR", "TE"];
+  const all = data.drops || [];
+  const inFilter = (d) => filter === "ALL" || (filter === "FLEX" ? FLEXP.includes(d.pos) : d.pos === filter);
+  const shown = all.filter((d) => inFilter(d) && (!onlyFree || !d.pickedUpBy));
+  const free = all.filter((d) => !d.pickedUpBy).length;
+  const when = (ms) => new Date(ms).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+  return (
+    <div data-drops>
+      <div className="flex items-center justify-between gap-2 px-1 pb-2 text-xs" style={{ color: C.textMuted }}>
+        <span data-drops-summary>{all.length} dropped in the last {data.days} days · {free} still available</span>
+        <label className="flex items-center gap-1.5 shrink-0"><input type="checkbox" checked={onlyFree} onChange={(e) => setOnlyFree(e.target.checked)} data-drops-free-only /> Available only</label>
+      </div>
+      {shown.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>Nobody matches.</div>}
+      <div className="space-y-1.5" data-category-list="drops">
+        {shown.map((d) => {
+          const keyText = `Dropped by ${d.droppedBy} · ${when(d.at)}`;
+          const card = !d.pickedUpBy ? cardFor(d.id) : null;
+          if (card) return <AvailableRow key={d.id} {...rowProps(card, keyText)} />;
+          return (
+            <div key={d.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${d.pickedUpBy ? C.border : C.ok}` }} className="rounded-md px-3 py-2.5" data-drop={d.id}>
+              <div className="flex items-baseline gap-1.5 min-w-0">
+                <PlayerLink player={{ id: d.id, name: d.name }} className="min-w-0 truncate"><span style={{ color: C.text }} className="text-sm font-medium">{d.name}</span></PlayerLink>
+                <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{d.pos}{d.team ? ` · ${d.team}` : ""}{d.injury ? ` · ${d.injury}` : ""}</span>
+              </div>
+              <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{keyText}</div>
+              <div style={{ color: d.pickedUpBy ? C.textFaint : C.ok }} className="text-[11px] mt-0.5">{d.mine ? "Now on your team" : d.pickedUpBy ? `Picked up by ${d.pickedUpBy}` : "Available"}</div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -869,7 +924,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
             <Stat label="After proposed" dollars={sim.after} pct={sim.afterPct} accent={C.brand} />
           </div>
           <div style={{ color: C.textFaint }} className="text-[10px] mt-2">
-            Predicted for YOUR claims only, assuming you win every one that's possible: only your highest bid per player counts, a dropped player can only be dropped once, and without a drop you can only add as many players as you have open bench spots ({openSpots} now). Other teams' bids aren't visible, so a higher outside bid would change this. Equal bids are assumed to process in the order shown.
+            Predicted for your claims only, assuming you win every possible one. <InfoNote label="About the prediction">Only your highest bid per player counts, a player can be dropped once, and without a drop you can only add as many players as you have open bench spots ({openSpots} now). Other teams' bids aren't visible; equal bids process in the order shown.</InfoNote>
           </div>
         </div>
       ) : (

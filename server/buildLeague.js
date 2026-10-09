@@ -65,6 +65,7 @@ function slotLabel(rawSlot) {
 function playerName(meta, id) {
   return meta ? `${meta.first_name} ${meta.last_name}` : `Player ${id}`;
 }
+const ZERO_WHEN_UNPROJECTED = new Set(["Out", "Sus", "Suspended", "IR", "DNR"]);
 function mapPlayerStatus(meta) {
   return meta?.injury_status || "Healthy";
 }
@@ -360,6 +361,8 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     }
     const { kickoff, kickoffLabel, onBye } = kickoffFor(meta?.team);
     let { proj, projSource, projFactor, projStats, props, rostered } = await resolveProjection(id);
+    // v4.4.2: Out / Sus / IR / DNR with no projection from any source = 0 points
+    if (proj == null && ZERO_WHEN_UNPROJECTED.has(meta?.injury_status)) { proj = 0; projSource = null; projFactor = null; projStats = null; }
     // v2.8: this week's matchup and forecast, for the player card.
     const nt = meta?.team ? schedule.normalizeTeam(meta.team) : null;
     const g = nt && weekSchedule ? weekSchedule.byTeam[nt] : null;

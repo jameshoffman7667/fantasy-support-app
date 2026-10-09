@@ -17,6 +17,8 @@ export const CATEGORIES = [
   { key: "stash", label: "Stashes", blurb: "Dynasty and long-term adds named in the research first, then the best dynasty values." },
   { key: "trending", label: "Trending", blurb: "Most added on Sleeper in the last 24 hours." },
   { key: "handcuff", label: "Handcuff", blurb: "Backups whose starter is out, doubtful or likely to miss." },
+  // v4.4.2: not a ranked list of free agents — other teams' drops in the last 14 days (own page, own data).
+  { key: "drops", label: "Drops", blurb: "Players other teams dropped in the last 14 days." },
 ];
 export const POSITION_FILTERS = ["ALL", "QB", "RB", "WR", "TE", "FLEX"];
 export const CAPS = { all: 5, position: 15, flex: 25 };

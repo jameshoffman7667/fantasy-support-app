@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,31 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.4.2 — Drops page, suggested-bid graph, rule fixes, fewer notes
+
+**Manual step required: none.** No docker-compose.yml or environment changes.
+
+**Commit (short):** `v4.4.2: feat: Drops page, bid graph, fewer notes`
+
+**Commit (extended):**
+v4.4.2 adds a Drops page and a suggested-bid graph to Waivers, tightens several rules, and cuts the number of notes.
+
+Waivers → Available → Drops: players other teams dropped in the past 14 days (your own left out), newest first, with who dropped them and whether they are still free.
+
+Suggested bids show the 70% and 95% amounts. Tapping one opens a graph of the winning bids: a normal curve over the real bids with lines for minimum (left), median, average, plus or minus 1 and 2 standard deviations, and maximum (right).
+
+Rules: Beats a bench player no longer applies to a 0-point projection with an injury designation or bye week. A player who is Out, Sus, IR or DNR with no projection gets 0. Seen-before injury statuses are listed on the variance list but no longer turn anything yellow. Handcuff notes show only the injured player and designation.
+
+The Overview and Outlook buttons are gone from the league view. About 20 notes were shortened or moved behind an "i" button.
+
+Unverified: nothing ran against live Sleeper; the Drops route was only syntax-checked.
+
+Notes changed to shorter text or an info button ("i"): Account (Sleeper access, API presets), Analytics (performance, matchups), weather, Roster (rankings, free agents, swap hint, taxi, "No changes suggested"), Trade Radar (intro, hints), Waivers (simulator, Auto mode, bid pop-up), Injury Watch (several), the variance report footer. Bid-graph lines for ±2 standard deviations are left off when they fall outside the min–max range.
+
+**Unverified:** Drops reads Sleeper's public transactions for the current round and the two before it, then keeps the last 14 days — a drop that Sleeper files under another round would be missed. The Drops route and the other server routes were only syntax-checked. "Revive" at the end of the request was not understood and nothing was built for it. Sleeper behaviours listed under v4.4 and v4.4.1 are still unverified. Known harness gap (not the app): the Account page in the screenshot tour crashes on an unmocked call, as it did in v4.4.1.
 
 ---
 

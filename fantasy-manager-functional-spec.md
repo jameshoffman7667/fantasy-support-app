@@ -612,6 +612,20 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2x v4.4.2 — Drops page, suggested-bid graph, rule fixes, fewer notes
+
+**Drops (Waivers → Available → Drops; server/drops.js, GET /api/drops).** Reads the league's public Sleeper transactions for the current round and the two before it, keeps complete waiver and free-agent transactions from the last 14 days, and lists each dropped player once (his latest drop), newest first. Your own roster's drops are excluded. Each row shows who dropped him, when, and who holds him now; "Available only" hides held players. Free players with a known card use the normal Available card.
+
+**Suggested-bid graph.** Cards show the 70% and 95% bids as buttons. Tapping one opens a pop-up built from the winning-bid sample behind the suggestions (sent once per request: all bids, plus each position with 10 or more). The graph: histogram of the real bids, a normal curve with the sample mean and standard deviation, a line for the minimum (left axis) and maximum (right axis), and lines for the median, average and plus/minus 1 and 2 standard deviations; lines outside min-max are left off. Markers for the 70% and 95% bids sit under the axis.
+
+**Rules.** (1) A free agent never "beats" a starter or bench player when his projection is 0 and he has any injury designation or a bye week. (2) A player who is Out, Sus, Suspended, IR or DNR and has no projection from any source is given 0. (3) A status seen before is listed on the variance list with a new "info" severity, which is never coloured and not counted on the report button; the Injury page no longer turns yellow for it. (4) Injury handcuff notes read "Name — Designation".
+
+**League view and notes.** The Overview and Outlook tab buttons are removed (Overview stays in the league menu, Outlook on the Dashboard). Informational notes were shortened or moved behind an "i" button that shows the text on tap.
+
+**Unverified:** Drops depends on Sleeper filing drops under the current or the two earlier rounds; the route was not run against a live server.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -807,3 +821,8 @@ Collected here since they cut across multiple sections:
 133. **Lineup move follows the add (v4.4.1):** stored as a pending move, made only once the player is on the roster and the slot still fits; dropped with a notification otherwise; cancellable.
 134. **Preset scope (v4.4.1):** API presets are app-wide, owner-only; Minimal = the v3.3 reductions; Medium (default) = Minimal + live rosters/free agents on every app open (once a minute per league).
 135. **Header layering (v4.4.1):** the top bar is above page content; Roster tabs stick just below it.
+136. **Drops page (v4.4.2):** other teams' drops only, last 14 days, each player once at his latest drop.
+137. **Bid graph (v4.4.2):** tap the 70% or 95% bid; normal curve over the real winning bids with min/max, median, average and 1-2 standard-deviation lines.
+138. **Zero projection rule (v4.4.2):** Out, Sus, IR or DNR with no projection = 0; a 0 projection with an injury designation or bye never beats a bench player.
+139. **Info severity (v4.4.2):** seen-before injury statuses are listed, never coloured, not counted.
+140. **Notes (v4.4.2):** informational notes are short or behind an "i" button; Overview and Outlook buttons removed from the league view.

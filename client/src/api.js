@@ -419,3 +419,8 @@ export function getPendingMoves(leagueId) {
 export function cancelPendingMove(id) {
   return jsonPost(`/api/pending-moves/cancel`, { id });
 }
+
+// v4.4.2: other teams' drops in the past 14 days (Waivers → Available → Drops).
+export function getDrops(leagueId) {
+  return request(`/api/drops?leagueId=${encodeURIComponent(leagueId)}`);
+}

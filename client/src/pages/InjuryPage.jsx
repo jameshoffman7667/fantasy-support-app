@@ -1,4 +1,4 @@
-import { SectionLabel } from "../ui/common.jsx";
+import { InfoNote, SectionLabel } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { C, STATUS, backupLine } from "../ui/theme.js";
 
@@ -10,14 +10,14 @@ export function InjuryTab({ league }) {
     <div className="px-4 py-3">
       <SectionLabel>Currently Tracked</SectionLabel>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Persists as long as a player carries a designation. Minor once you've seen this exact status before, Major the first time it appears.
+        Red the first time a status appears; plain once you've seen it.
       </div>
       {league.injury.rows.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No injury designations on this roster right now.</div>
       ) : (
         <div className="space-y-1.5">
           {league.injury.rows.map((e) => {
-            const sev = e.cleared ? "ok" : e.seen ? "minor" : "major";
+            const sev = e.cleared || e.seen ? "ok" : "major"; // v4.4.2: seen before = no colour
             const s = STATUS[sev];
             return (
               <div key={e.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${s.color}` }} className="rounded-md px-3.5 py-3 flex items-center gap-3">
@@ -42,9 +42,8 @@ export function InjuryTab({ league }) {
       )}
       <SectionLabel>Injury opportunities</SectionLabel>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Notes only. Starters and top backups (QB{league.superflex ? "1-2" : "1"}, RB1-2, WR1-3, TE1) who are out, doubtful or likely to miss, with who moves up. Depth chart from {io?.depthSource?.espnTeams ? `ESPN (${io.depthSource.espnTeams}/32 teams; the rest from Sleeper)` : "Sleeper's depth order (ESPN's depth chart wasn't available)"}.
-        {io?.newsConfigured === false ? " Questionable players are only included when their backup is trending, because no Gemini key is set." : ""}
-        {io?.newsError ? ` The news check failed (${io.newsError.slice(0, 80)}).` : ""}
+        Starters and top backups who are out, doubtful or likely to miss, and who moves up.
+        <InfoNote label="About injury opportunities">Covers QB{league.superflex ? "1-2" : "1"}, RB1-2, WR1-3 and TE1. Depth chart from {io?.depthSource?.espnTeams ? `ESPN (${io.depthSource.espnTeams}/32 teams; the rest from Sleeper)` : "Sleeper's depth order (ESPN's depth chart wasn't available)"}.{io?.newsConfigured === false ? " Questionable players are only included when their backup is trending (no Gemini key is set)." : ""}{io?.newsError ? ` The news check failed (${io.newsError.slice(0, 80)}).` : ""}</InfoNote>
       </div>
       {events.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No injuries at these depth-chart slots right now.</div>

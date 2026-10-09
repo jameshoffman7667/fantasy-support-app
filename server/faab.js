@@ -140,7 +140,7 @@ export async function getFaabSuggestions(freeAgents, leagueSummaries, sleeperPla
   const history = { windowLabel, bids: recent, byPosition: byPositionHistory };
 
   if (bids.length === 0) {
-    return { players: [], sampleSize: 0, note: `No completed FAAB waiver transactions found in tracked leagues in the ${windowLabel.toLowerCase()}.`, history };
+    return { players: [], samples: {}, sampleSize: 0, note: `No completed FAAB waiver transactions found in tracked leagues in the ${windowLabel.toLowerCase()}.`, history };
   }
 
   for (const pos in posPct) posPct[pos].sort((a, b) => a - b);
@@ -162,11 +162,16 @@ export async function getFaabSuggestions(freeAgents, leagueSummaries, sleeperPla
       pos: fa.pos,
       suggestion70Pct: percentile(useSample, 70),
       suggestion95Pct: percentile(useSample, 95),
+      sampleKey: posSample.length >= 10 ? fa.pos : "all", // v4.4.2: which sample the bid graph draws (see `samples`)
       sampleSize: useSample.length,
       sampleScope,
       playerBids,
     };
   });
 
-  return { players, sampleSize: bids.length, note: null, history };
+  // v4.4.2: the bid samples (percent of budget, one decimal) behind the percentiles, for the bid graph; sent once, not per player
+  const round1 = (a) => a.map((x) => Math.round(x * 10) / 10);
+  const samples = { all: round1(allPct) };
+  for (const pos in posPct) if (posPct[pos].length >= 10) samples[pos] = round1(posPct[pos]);
+  return { players, samples, sampleSize: bids.length, note: null, history };
 }

@@ -4,7 +4,7 @@ import { arrangement, buildPush, customChange, dropOptions, openSpotsForAdd, pro
 import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ConfirmPush, Headshot, MatchupChip, Modal, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
+import { ConfirmPush, Headshot, InfoNote, MatchupChip, Modal, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, backupLine, fmtWhen, formatStatLine } from "../ui/theme.js";
 import { StartSitButton, StartSitIcon } from "../ui/startSit.jsx"; // v4.3
@@ -504,8 +504,7 @@ function PlayerRankings({ league, onSaveRanking, onBack }) {
       </div>
 
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Drag the handle to rank your players (or focus it and use the arrow keys). Players ranked higher get first claim on the lineup slots they're eligible for,
-        and your order replaces the suggested lineup on the Lineup tab. It's saved to your account, per league.
+        Drag the handle to rank your players. <InfoNote label="About rankings">Higher-ranked players get first claim on the slots they fit, and your order replaces the suggested lineup. Keyboard: focus the handle and use the arrow keys. Saved per league.</InfoNote>
       </div>
 
       <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg p-3 flex items-center justify-around text-center mb-2">
@@ -563,7 +562,7 @@ function PlayerRankings({ league, onSaveRanking, onBack }) {
 
       <SectionLabel>Free Agents</SectionLabel>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Not on your roster, so they can't be ranked — they're shown with their projections so you can see whether a pickup would beat your lineup.
+        Not on your roster, so not ranked — shown to compare against your lineup.
       </div>
       {eff.freeAgents.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">No notable free agents right now.</div>
@@ -794,7 +793,7 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onS
       <SectionLabel>Suggested changes{usable.length ? ` — ${usable.length}` : ""}</SectionLabel>
       {changes.length === 0 ? (
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-3 text-sm">
-          No changes suggested — your lineup already matches the best projected lineup, nothing needs moving to IR and no flex timing swap helps.
+          No changes suggested — your lineup already matches the best projection.
         </div>
       ) : (
         <div className="space-y-1.5">
@@ -868,7 +867,7 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
         </div>
       )}
       <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2 flex items-center justify-between gap-2" data-swap-hint>
-        <span>Tap a position box (QB, RB, BN, TAXI…) to swap that player with anyone on your roster who fits.</span>
+        <span>Tap a position box to swap that player with anyone who fits.</span>
         {customs.length > 0 && <button type="button" onClick={onUndoCustoms} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2 py-0.5 shrink-0" data-undo-customs>Undo custom ({customs.length})</button>}
       </div>
       <SectionLabel>Starters</SectionLabel>
@@ -939,7 +938,7 @@ function SwapPicker({ league, arr, target, onClose, onPick }) {
       <div className="space-y-1.5 text-sm" data-swap-picker={target.kind}>
         {info.locked && <div style={{ color: C.minor }} data-swap-locked>His game has started, so he can't be moved.</div>}
         {!info.locked && info.options.length === 0 && <div style={{ color: C.textMuted }}>Nobody on your roster fits here.</div>}
-        {target.kind === "taxi" && <div style={{ color: C.textMuted }} className="text-xs">Taxi players can only be moved to the bench — this keeps them from leaving the taxi squad by accident.</div>}
+        {target.kind === "taxi" && <div style={{ color: C.textMuted }} className="text-xs">Taxi players can only be moved to the bench.</div>}
         {info.options.map((o, i) => (
           <button key={`${o.player.id ?? "e"}-${i}`} type="button" disabled={!o.enabled} onClick={() => onPick(o)} style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: o.enabled ? 1 : 0.55 }} className="w-full text-left rounded-md px-3 py-2 flex items-center gap-2" data-swap-option={o.player.id ?? "empty"} data-enabled={o.enabled ? "1" : "0"}>
             <span className="min-w-0 flex-1">

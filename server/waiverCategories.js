@@ -117,15 +117,14 @@ export function buildCategories(ctx) {
   return lists;
 }
 
-/** Injury fill-in notes from the league's injury events: id -> "Fills in for X (Out) — DAL RB1". */
+/** Injury fill-in (handcuff) notes from the league's injury events: id -> "X — Out" (v4.4.2: just the injured player and his designation). */
 export function fillInNotes(events) {
   const notes = new Map();
   for (const e of events || []) {
-    const who = `${e.injured.name} (${e.injured.status}${e.injured.note ? ` — ${e.injured.note}` : ""}), ${e.injured.team} ${e.injured.slot}`;
+    const who = `${e.injured.name} — ${e.injured.status}`;
     for (const p of [...(e.freeAdds || []), ...(e.backups || [])]) {
       if (!p?.id || notes.has(String(p.id))) continue;
-      const note = p.opposite ? `Target share opens up: ${who} is out` : p.otherTeam ? `Replacement option for your ${who}` : `Fills in for ${who}`;
-      notes.set(String(p.id), note);
+      notes.set(String(p.id), who);
     }
   }
   return notes;

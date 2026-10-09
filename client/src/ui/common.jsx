@@ -582,3 +582,31 @@ export function BootstrapScreen() {
     </div>
   );
 }
+
+/**
+ * v4.4.2 — an "i" button that opens a note in place. Used instead of an always-visible explanation where the note is
+ * helpful but not needed every time. `inline` puts the button on the line of the label next to it.
+ */
+export function InfoNote({ children, label = "More info", className = "" }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className={className} data-info-note>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        aria-label={label}
+        aria-expanded={open}
+        data-info-button
+        style={{ color: open ? C.brand : C.textFaint, border: `1px solid ${open ? C.brand : C.border}` }}
+        className="inline-flex items-center justify-center rounded-full w-[18px] h-[18px] text-[10px] font-semibold leading-none align-middle"
+      >
+        i
+      </button>
+      {open && (
+        <span style={{ color: C.textMuted }} className="block text-[11px] leading-snug mt-1" data-info-text>
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
