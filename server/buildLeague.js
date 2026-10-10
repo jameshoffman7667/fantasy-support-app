@@ -250,7 +250,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   const teamName = myRoster.metadata?.team_name || myLeagueUser?.metadata?.team_name || myLeagueUser?.display_name || "Your Team";
 
   const startingSlots = (league.roster_positions || []).filter((p) => p !== "BN" && p !== "IR" && p !== "TAXI");
-  const starterIds = myRoster.starters || [];
+  const starterIds = sleeper.effectiveStarters(leagueId, myRoster.roster_id, myRoster.starters || []); // v4.5.1: a just-written lineup is used while Sleeper's public read lags
   const irIds = myRoster.reserve || [];
   const taxiIds = myRoster.taxi || [];
   const starterIdSet = new Set(starterIds);
@@ -1006,7 +1006,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     myRosterId: myRoster.roster_id,
     ownerId: userId,
     // v3.0: raw roster arrays (slot order, '0' = empty) for pushing lineup / IR changes to Sleeper.
-    starterIds: (myRoster.starters || []).map(String),
+    starterIds: starterIds.map(String),
     reserveIds: (myRoster.reserve || []).map(String),
     rosterIds: (myRoster.players || []).map(String),
     taxiIds: taxiIds.map(String), // v4.4: Auto mode

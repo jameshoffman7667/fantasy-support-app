@@ -640,6 +640,16 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2z v4.5.1 — Flex lock pairing, lineup refresh after a push
+
+**Flex timing pairs (lineup.flexTimingPairs).** One pairing for the whole lineup: flex-type starters (FLEX, SFLX, REC_FLEX, WRRB_FLEX) with a kickoff and not locked, earliest first; each takes the starter at his own position in a positional slot with the LATEST later kickoff (not locked); a positional starter is used once; slots a lineup change already uses are skipped. The "Flex lock order" variance (both rows, red) and the suggested swap are both built from these pairs, so a flagged pair always has its swap.
+
+**Lineup after a push.** After a confirmed lineup write the server keeps the written starters (sleeper.noteLineupWritten) for 5 minutes; buildLeague takes them (sleeper.effectiveStarters) while Sleeper's public roster read still differs, and forgets them once it agrees or the 5 minutes pass. The app re-reads the pushed league after every push attempt (not only a confirmed one); a newer single-league read supersedes any older refresh still running. Variances are recalculated from the rebuilt league.
+
+**Unverified:** the server paths were not run against live Sleeper.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -844,3 +854,5 @@ Collected here since they cut across multiple sections:
 142. **Move notes (v4.5):** every roster player in a suggested move gets a note; starters replaced by a waiver player show both projections.
 143. **Push (v4.5):** only the pushed league is rebuilt afterwards; its confirmation clears when the league changes.
 144. **Flex colours (v4.5):** flex slot boxes are vertical bands of the eligible positions' colours.
+145. **Flex timing (v4.5.1):** one pairing across all flex slots; the red variance and the swap come from the same pairs.
+146. **Pushed lineup (v4.5.1):** the just-written lineup is used for up to 5 minutes while Sleeper's public read lags; the league is re-read after every push attempt.

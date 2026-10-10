@@ -1,11 +1,9 @@
-import { effectiveLineup, hasStarted, isLocked } from "../lineup.js";
+import { effectiveLineup, flexTimingPairs, hasStarted, isLocked, slotEligible } from "../lineup.js";
 import { worst } from "./theme.js";
 
 /* ------------------------------------------------------------------ */
 /*  VARIANCE CALCULATIONS                                             */
 /* ------------------------------------------------------------------ */
-const FLEX_ELIGIBLE = { FLEX: ["RB", "WR", "TE"], SFLX: ["QB", "RB", "WR", "TE"] };
-
 const OUT_LIKE = ["Out", "Doubtful", "IR", "Suspended", "NA"];
 
 // v2.8.1: each row lists the rules it breaks (`issues`), so the variance
@@ -26,20 +24,17 @@ export function computeRoster(league) {
     return { slot, label: player.name, issues: [] };
   });
 
-  league.starters.forEach(({ slot, player: flexPlayer }, idx) => {
-    if (!FLEX_ELIGIBLE[slot] || !flexPlayer || flexPlayer.kickoff == null) return;
-    if (isLocked(flexPlayer, league)) return; // v3.4: already locked — the swap can't be made
-    const posIdx = league.starters.findIndex(
-      (s) => s.slot === flexPlayer.pos && s.player && s.player.kickoff != null && s.player.kickoff > flexPlayer.kickoff
-    );
-    if (posIdx < 0) return;
+  // v4.5.1: the same pairing the Roster page proposes a swap for (every flex slot, receiver / RB-WR flex included), so a
+  // "Flex lock order" variance always has its suggested swap. Both rows are red.
+  const changing = new Set((league.lineup?.rows || []).map((r, i) => (r.changed && !r.locked ? i : -1)).filter((i) => i >= 0)); // slots a lineup change already uses
+  for (const { flexIdx, posIdx } of flexTimingPairs(league, changing)) {
+    const flex = league.starters[flexIdx];
     const positional = league.starters[posIdx];
-    if (isLocked(positional.player, league)) return;
-    starterRows[idx].issues.push(
-      iss("Flex lock order", "major", `Locks ${flexPlayer.kickoffLabel} — before ${positional.slot} slot's ${positional.player.name} (${positional.player.kickoffLabel}). Swap these two.`)
+    starterRows[flexIdx].issues.push(
+      iss("Flex lock order", "major", `Locks ${flex.player.kickoffLabel} — before ${positional.slot} slot's ${positional.player.name} (${positional.player.kickoffLabel}). Swap these two.`)
     );
-    starterRows[posIdx].issues.push(iss("Flex lock order", "major", `Later kickoff than ${slot}'s ${flexPlayer.name} — swap these two to preserve flexibility.`));
-  });
+    starterRows[posIdx].issues.push(iss("Flex lock order", "major", `Later kickoff than ${flex.slot}'s ${flex.player.name} — swap these two to preserve flexibility.`));
+  }
 
   // v2.9: Sleeper only lists players, so pad the bench with empty slots up to
   // the league's bench size (this is what makes "Open bench slot" appear).
@@ -108,7 +103,7 @@ export function faCanCount(fa, league) {
   return true;
 }
 export function compareToRoster(league, fa) {
-  const eligible = (slot, pos) => (FLEX_ELIGIBLE[slot] ? FLEX_ELIGIBLE[slot].includes(pos) : slot === pos);
+  const eligible = slotEligible;
   const projOf = (p) => (p && p.proj != null ? p.proj : 0);
   let rule = null;
   let note = null;

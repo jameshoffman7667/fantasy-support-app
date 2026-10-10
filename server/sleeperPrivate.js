@@ -328,6 +328,7 @@ export async function updateStarters(username, { leagueId, rosterId, round, star
     const leg = await getMyLeg(username, leagueId, round, rosterId);
     const got = (leg?.starters || []).map(String);
     const ok = got.length === list.length && got.every((x, i) => x === list[i]);
+    if (ok) sleeperPublic.noteLineupWritten(leagueId, rosterId, list); // v4.5.1
     return { ok, verified: ok, readBack: got, detail: ok ? "lineup set and verified" : "Sleeper accepted the call but the lineup read back differently — check Sleeper." };
   });
 }

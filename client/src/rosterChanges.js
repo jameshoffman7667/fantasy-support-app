@@ -14,7 +14,7 @@
 // Changes that can't be pushed (the better player sits on IR/taxi and needs a
 // roster move first) are listed as `blocked` with the reason and can't be ticked.
 
-import { isLocked, FLEX_ELIGIBLE, slotEligible } from "./lineup.js";
+import { isLocked, flexTimingPairs, slotEligible } from "./lineup.js";
 
 export function proposeChanges(league) {
   const out = [];
@@ -57,17 +57,11 @@ export function proposeChanges(league) {
   // (more options if someone is ruled out late). Neither player may be locked. The latest such game is chosen.
   const touched = new Set(out.filter((c) => !c.blocked).map((c) => c.slotIndex)); // a blocked suggestion can't be pushed anyway
   const starters = league?.starters || [];
-  starters.forEach(({ slot, player: fp }, i) => {
-    if (!FLEX_ELIGIBLE[slot] || !fp || fp.kickoff == null || touched.has(i) || isLocked(fp, league) || fp.id == null) return;
-    let best = -1;
-    starters.forEach((s, j) => {
-      const sp = s.player;
-      if (j === i || touched.has(j) || s.slot !== fp.pos || !sp || sp.kickoff == null || sp.id == null) return;
-      if (sp.kickoff <= fp.kickoff || isLocked(sp, league)) return;
-      if (best < 0 || sp.kickoff > starters[best].player.kickoff) best = j;
-    });
-    if (best < 0) return;
+  // v4.5.1: pairs come from lineup.flexTimingPairs (all flex slots at once — the same pairs the "Flex lock order" variance flags)
+  for (const { flexIdx: i, posIdx: best } of flexTimingPairs(league, touched)) {
+    const fp = starters[i].player;
     const sp = starters[best].player;
+    if (fp.id == null || sp.id == null) continue;
     touched.add(i);
     touched.add(best);
     out.push({
@@ -75,7 +69,7 @@ export function proposeChanges(league) {
       type: "swap",
       slotA: i,
       slotB: best,
-      slot,
+      slot: starters[i].slot,
       slotB_label: starters[best].slot,
       idA: String(fp.id),
       nameA: fp.name,
@@ -86,7 +80,7 @@ export function proposeChanges(league) {
       delta: 0,
       blocked: null,
     });
-  });
+  }
   // IR moves: only as many as there are open IR slots.
   const open = Number.isFinite(league?.irSlots) ? league.irSlots - (league.ir || []).length : 0;
   if (open > 0) {

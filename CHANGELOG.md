@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,27 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.5.1 — Flex lock swaps, lineup refresh after a push
+
+**Manual step required: none.** No docker-compose.yml or environment changes.
+
+**Commit (short):** `v4.5.1: fix: flex lock swaps, lineup refresh after push`
+
+**Commit (extended):**
+v4.5.1 fixes the Flex lock order variances and the lineup not refreshing after a push.
+
+Flex lock order: the variance and the suggested swap now come from one pairing across all flex slots at once (earliest-locking flex first, each positional starter used once). Before, a second flex slot could be flagged with no swap to propose, and the receiver / RB-WR flex slots were proposed but never flagged. Every flagged pair is red, and every red pair has its swap.
+
+Lineup after a push: the server now remembers the lineup it just wrote and read back from Sleeper for up to 5 minutes and uses it while Sleeper's public roster read still shows the old one; once the public read agrees it is forgotten, so a change made in Sleeper itself is never hidden. The app also re-reads the pushed league after every push attempt, not only a confirmed one, and an older refresh still in flight can no longer land on top of the newer read. Variances are recalculated from the rebuilt league.
+
+Unverified: nothing ran against live Sleeper; the server changes were only syntax-checked.
+
+Also: flex lock order now also covers receiver-flex and RB/WR-flex slots (in the variance and in the Waivers comparison, which read a shorter list of flex slots before).
+
+**Unverified:** I could not reproduce "flex lock variances shown yellow" from the code — "Flex lock order" has always been coded red (major) — so what changed is that no flagged pair is left without a swap; if some still show yellow, send me one's text or a screenshot. The cause of the missed lineup updates is my best reading (Sleeper's public roster read lagging the private write, a push whose read-back disagreed skipping the refresh, an older refresh overwriting the newer one) — it could not be seen against live Sleeper. The server changes (`sleeper.js`, `buildLeague.js`, `sleeperPrivate.js`) were only syntax-checked; the overlay logic is tested. A lineup changed inside Sleeper itself within 5 minutes after a push from here can show the pushed lineup until the public read catches up.
 
 ---
 

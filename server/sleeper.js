@@ -17,6 +17,20 @@ const NEAR_MS = 15 * MIN;
 const wroteAt = new Map();
 export function setKickoffs(list) { kickoffs = (list || []).filter((k) => Number.isFinite(k)); }
 export function noteWrite(leagueId) { wroteAt.set(String(leagueId), nowFn()); }
+// v4.5.1: Sleeper's public rosters read can lag a moment behind a lineup the private API just confirmed. The lineup we
+// wrote (and read back from Sleeper) is remembered for 5 minutes and used while the public read still shows the old one;
+// as soon as the public read agrees (or the 5 minutes pass) it is forgotten, so a change made in Sleeper itself is never hidden.
+const lineupWrites = new Map();
+export function noteLineupWritten(leagueId, rosterId, starters) { lineupWrites.set(`${leagueId}:${rosterId}`, { starters: (starters || []).map(String), at: nowFn() }); }
+export function effectiveStarters(leagueId, rosterId, publicStarters) {
+  const k = `${leagueId}:${rosterId}`;
+  const w = lineupWrites.get(k);
+  const pub = (publicStarters || []).map(String);
+  if (!w) return pub;
+  const same = w.starters.length === pub.length && w.starters.every((x, i) => x === pub[i]);
+  if (same || nowFn() - w.at > 5 * MIN) { lineupWrites.delete(k); return pub; }
+  return w.starters;
+}
 // v4.4.1 (Medium preset): ask for the next rosters / matchups / trending read to skip the cache once.
 const freshOnce = new Set();
 export function markFreshOnce(leagueId) { freshOnce.add(`rosters:${leagueId}`); freshOnce.add(`matchups:${leagueId}`); }

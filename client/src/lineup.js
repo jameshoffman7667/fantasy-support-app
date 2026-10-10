@@ -158,6 +158,34 @@ export function fillSlots(slots, ordered, lockedByIndex = []) {
   return results;
 }
 
+/**
+ * v4.5.1: the flex-timing pairs — a flex-type starter whose game kicks off before a starter at his own position in a
+ * positional slot is paired with the LATEST-kicking such starter, so the flex keeps the later game. The pairing is
+ * made across ALL flex slots at once (earliest-locking flex first, each positional starter used once), so every
+ * flagged "Flex lock order" variance has a swap to propose and the other way round. Locked players never pair; `skip` =
+ * slot indexes a lineup change already uses (never swapped).
+ * Returns [{ flexIdx, posIdx }].
+ */
+export function flexTimingPairs(league, skip = new Set()) {
+  const starters = league?.starters || [];
+  const flex = starters
+    .map((s, i) => ({ i, p: s.player }))
+    .filter((x) => !skip.has(x.i) && FLEX_ELIGIBLE[starters[x.i].slot] && x.p && x.p.kickoff != null && !isLocked(x.p, league))
+    .sort((a, b) => a.p.kickoff - b.p.kickoff);
+  const used = new Set();
+  const pairs = [];
+  for (const { i, p: fp } of flex) {
+    let best = -1;
+    starters.forEach((s, j) => {
+      const sp = s.player;
+      if (j === i || used.has(j) || skip.has(j) || s.slot !== fp.pos || !sp || sp.kickoff == null || sp.kickoff <= fp.kickoff || isLocked(sp, league)) return;
+      if (best < 0 || sp.kickoff > starters[best].player.kickoff) best = j;
+    });
+    if (best >= 0) { used.add(best); pairs.push({ flexIdx: i, posIdx: best }); }
+  }
+  return pairs;
+}
+
 function totalOf(picks) {
   return picks.reduce((sum, e) => sum + (e?.player.proj ?? 0), 0);
 }

@@ -325,6 +325,7 @@ export default function App() {
   // v4.5: after a push, rebuild just that league (fresh from Sleeper — the push opens the 15-minute live window)
   const refreshOne = useCallback(async (leagueId) => {
     if (!sessionId || !leagueId) return handleRefresh({ manual: true });
+    buildSeq.current += 1; // v4.5.1: an older full refresh still in flight must not land on top of this newer read
     try {
       const r = await api.buildLeagues(sessionId, [leagueId], week, selectedIds, { manual: true });
       setLiveLeagues((prev) => {

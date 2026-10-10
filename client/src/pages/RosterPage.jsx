@@ -1027,8 +1027,10 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
       }
       if (out.some((o) => o.ok)) {
         if (same) onDone();
-        onRefresh?.(pushedFor); // v4.5: re-read THAT league now, so Current and Proposed lineup show what Sleeper holds
       }
+      // v4.5.1: re-read THAT league after every push attempt (not only a confirmed one — Sleeper may have taken the change
+      // even when its read-back disagreed), so Current / Proposed lineup and the variances show what Sleeper holds.
+      if (out.length) onRefresh?.(pushedFor);
     }
   };
   return (

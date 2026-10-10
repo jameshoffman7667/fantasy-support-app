@@ -474,6 +474,11 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.5.1 additions
+- **Flex lock order:** every flagged flex-timing problem (receiver / RB-WR flex slots too) is red and has its swap proposed.
+- **After a push** the lineup is shown as pushed even if Sleeper's roster read lags a moment; the league is re-read after every push attempt and the variances are recalculated.
+- No compose or environment changes in this release.
+
 ### v4.5 additions
 - **Roster → Proposed lineup** now looks for the best possible lineup from scratch (your roster plus free agents / waivers) and proposes the moves to get there — including moving a player between slots (e.g. the SUPERFLEX QB up to QB when your QB is out).
 - **Notes on every card** involved in a move, on Current and Proposed lineup.
