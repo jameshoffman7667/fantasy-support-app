@@ -322,6 +322,22 @@ export default function App() {
     }
   }, [sessionId, selectedIds, week, buildAll]);
 
+  // v4.5: after a push, rebuild just that league (fresh from Sleeper — the push opens the 15-minute live window)
+  const refreshOne = useCallback(async (leagueId) => {
+    if (!sessionId || !leagueId) return handleRefresh({ manual: true });
+    try {
+      const r = await api.buildLeagues(sessionId, [leagueId], week, selectedIds, { manual: true });
+      setLiveLeagues((prev) => {
+        const next = mergeLeagues(prev, r.leagues, selectedIds);
+        weekCache.current.set(r.week ?? week, next.filter((l) => !l.error));
+        return next;
+      });
+      setSyncedAt("just now");
+    } catch (err) {
+      setConnectError(err.message || "Refresh failed.");
+    }
+  }, [sessionId, selectedIds, week, handleRefresh]);
+
   const handleWeekChange = useCallback(
     async (newWeek) => {
       if (!sessionId || selectedIds.length === 0) {
@@ -671,7 +687,7 @@ export default function App() {
                 <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: tabKey })} label="Variance report — this page" />
               </div>
             )}
-            <Comp league={activeLeague} allLeagues={computed} onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={() => handleRefresh({ manual: true })} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
+            <Comp league={activeLeague} allLeagues={computed} onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={(id) => (typeof id === "string" ? refreshOne(id) : handleRefresh({ manual: true }))} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
           </>
         );
       })()}

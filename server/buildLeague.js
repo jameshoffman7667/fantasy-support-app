@@ -18,6 +18,7 @@ import * as tradeTools from "./tradeTools.js"; // v3.5
 import * as slp from "./sleeperProjections.js"; // v3.5: scores past stat lines (injury rule)
 import * as gemini from "./gemini.js"; // v3.9: waiver research (Hype Train)
 import * as waiverCats from "./waiverCategories.js"; // v3.9: Available page categories
+import { solveLineup } from "./lineupSolve.js"; // v4.5: best lineup from zero (exact assignment)
 
 // Slot labels as they appear AFTER slotLabel() (SUPER_FLEX -> "SFLX"). Before
 // v2.1 this map was keyed "SUPERFLEX", which never matched the "SFLX" label the
@@ -102,45 +103,6 @@ function buildInjuryRows(leagueId, league) {
       seen: seenBefore,
     };
   });
-}
-
-/**
- * A greedy (not globally-optimal via ILP, but strong in practice) lineup
- * solver: fill strict positional slots first with the highest-projected
- * eligible player, then fill FLEX/SFLX slots from what's left.
- *
- * `lockedByIndex` is parallel to startingSlotLabels — a non-null entry
- * means that slot's real-world outcome is already decided (the starter
- * has actually played) and must not be re-suggested away; that player is
- * also removed from the candidate pool so they can't double-appear in a
- * different slot's recommendation.
- */
-function solveOptimalLineup(startingSlotLabels, pool, lockedByIndex = []) {
-  const lockedNames = new Set(lockedByIndex.filter(Boolean).map((p) => p.name));
-  const remaining = pool.filter((p) => !lockedNames.has(p.name)).map((p) => ({ ...p }));
-  const results = new Array(startingSlotLabels.length).fill(null);
-
-  startingSlotLabels.forEach((slot, idx) => {
-    if (lockedByIndex[idx]) results[idx] = lockedByIndex[idx];
-  });
-
-  const takeBest = (predicate, idx) => {
-    if (results[idx]) return; // already locked to the actual outcome
-    const candidates = remaining.filter(predicate).sort((a, b) => (b.proj ?? -1) - (a.proj ?? -1));
-    if (candidates.length === 0) return;
-    const pick = candidates[0];
-    results[idx] = pick;
-    remaining.splice(remaining.indexOf(pick), 1);
-  };
-
-  startingSlotLabels.forEach((slot, idx) => {
-    if (!FLEX_ELIGIBLE[slot]) takeBest((p) => p.pos === slot, idx);
-  });
-  startingSlotLabels.forEach((slot, idx) => {
-    if (FLEX_ELIGIBLE[slot]) takeBest((p) => FLEX_ELIGIBLE[slot].includes(p.pos), idx);
-  });
-
-  return results;
 }
 
 function rankThreshold(pos, superflex) {
@@ -524,48 +486,15 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   // has started from the candidate pool — neither can be swapped any more.
   const lockedByIndex = starters.map((s) => (s.player && (s.player.played || s.player.started) ? s.player : null));
   const candidatePool = [...rosterPool, ...trendingFreeAgents].filter((p) => !p.started);
-  const optimalPicks = solveOptimalLineup(startingSlots.map(slotLabel), candidatePool, lockedByIndex);
+  const slotLabels = startingSlots.map(slotLabel);
+  // v4.5: the best lineup is worked out from zero — everyone (roster + free agents) against every slot at once — so a
+  // player can change slots when that scores more (QB out in the QB slot: the SUPERFLEX QB moves up and the best bench
+  // player takes the SUPERFLEX). Today's slots only break ties, so equal players are never shuffled.
+  const pkey = (p) => String(p?.id ?? p?.name);
+  const optimalPicks = solveLineup(slotLabels, candidatePool, lockedByIndex, { keyOf: pkey, currentKeyBySlot: starters.map((s) => (s.player ? pkey(s.player) : null)) });
+  const displaySlots = optimalPicks;
 
   // --- Lineup Advice: side-by-side current vs. optimal, per slot ---
-  // solveOptimalLineup's greedy fill order finds the best-scoring SET of
-  // players, but naively pairing that set slot-by-slot with the current
-  // lineup often reassigns two interchangeable players (e.g. two WRs
-  // with equal projections) to each other's slots for no scoring reason
-  // — which reads as a meaningless "recommended swap." Fixed below: a
-  // player already in both the current AND optimal sets keeps their
-  // current slot in the display, no matter which slot the solver
-  // internally assigned them. Only the real symmetric difference (who's
-  // actually entering or leaving the lineup) gets flagged as changed —
-  // the total score is identical either way, since it's the same set of
-  // players regardless of which eligible slot each display shows them in.
-  const slotLabels = startingSlots.map(slotLabel);
-  const optimalNames = new Set(optimalPicks.filter(Boolean).map((p) => p.name));
-  const currentNames = new Set(starters.filter((s) => s.player).map((s) => s.player.name));
-  const toAddPool = optimalPicks
-    .filter((p) => p && !currentNames.has(p.name))
-    .sort((a, b) => (b.proj ?? -1) - (a.proj ?? -1));
-
-  const displaySlots = starters.map((s) => s.player); // default: everyone keeps their current slot
-  const vacantIdx = [];
-  displaySlots.forEach((p, idx) => {
-    if (!p || !optimalNames.has(p.name)) vacantIdx.push(idx); // empty, or this starter isn't part of the optimal set
-  });
-  // Fill strict-position vacancies before flex ones, same ordering
-  // solveOptimalLineup itself uses — a flex-only-eligible leftover
-  // shouldn't get first pick over an exact-position match.
-  const vacantOrdered = [...vacantIdx.filter((i) => !FLEX_ELIGIBLE[slotLabels[i]]), ...vacantIdx.filter((i) => FLEX_ELIGIBLE[slotLabels[i]])];
-  for (const idx of vacantOrdered) {
-    const slot = slotLabels[idx];
-    const eligible = FLEX_ELIGIBLE[slot] ? (p) => FLEX_ELIGIBLE[slot].includes(p.pos) : (p) => p.pos === slot;
-    const pickIdx = toAddPool.findIndex(eligible);
-    if (pickIdx >= 0) {
-      displaySlots[idx] = toAddPool[pickIdx];
-      toAddPool.splice(pickIdx, 1);
-    } else {
-      displaySlots[idx] = null;
-    }
-  }
-
   const lineupComparison = slotLabels.map((slot, idx) => {
     const current = starters[idx]?.player || null;
     const optimal = displaySlots[idx] || null;

@@ -383,3 +383,45 @@ export function dropOptions(league, change, plans = {}, exceptKey = null) {
   if (st) add(st, `Starting at ${change.slot} (being replaced)`);
   return out.filter((o) => !o.locked).sort((a, b) => (Number(a.proj) || 0) - (Number(b.proj) || 0));
 }
+
+/* ---------------- v4.5: a note for every player involved in a suggested move ---------------- */
+
+const pts = (d) => (d > 0 ? ` (+${d.toFixed(1)} pts)` : "");
+
+/**
+ * playerId -> [note text] for every roster player touched by a suggested change: the player coming out, the bench
+ * player or starter moving in (or to another slot), the starter a free agent / waiver player would replace, the two
+ * players in a timing swap, and a player moving to IR. Free agents have no roster card, so they get none.
+ */
+export function changeNotes(league, changes = []) {
+  const out = new Map();
+  const put = (id, text) => {
+    if (id == null || !text) return;
+    const k = String(id);
+    if (!out.has(k)) out.set(k, []);
+    if (!out.get(k).includes(text)) out.get(k).push(text);
+  };
+  const starting = new Map();
+  (league?.starters || []).forEach((s) => s.player?.id != null && starting.set(String(s.player.id), s.slot));
+  const lineupTo = new Map(); // player id -> the slot a suggestion moves him to
+  for (const c of changes) if (c.type === "lineup" && !c.blocked && c.toId) lineupTo.set(String(c.toId), c.slot);
+  for (const c of changes) {
+    if (c.type === "lineup") {
+      const was = starting.get(String(c.toId));
+      const alt = c.alt ? " — bench option, no add needed" : "";
+      put(c.toId, was ? `Suggested: move from ${was} to ${c.slot}${c.fromName ? `, in for ${c.fromName}` : ""}${pts(c.delta)}` : `Suggested: start at ${c.slot}${c.fromName ? `, in for ${c.fromName}` : ""}${pts(c.delta)}${alt}`);
+      if (c.fromId && c.fromId !== "0") put(c.fromId, lineupTo.has(String(c.fromId)) ? null : `Suggested: replaced at ${c.slot} by ${c.toName}${pts(c.delta)}`);
+    } else if (c.type === "add") {
+      const fromProj = Number((league?.starters || [])[c.slotIndex]?.player?.proj);
+      const toProj = Number(c.toPlayer?.proj);
+      const beats = fromProj > 0 && toProj > fromProj;
+      if (c.fromId && c.fromId !== "0") put(c.fromId, beats ? `${c.toName} (free agent / waivers) is projected ${toProj.toFixed(1)} vs ${fromProj.toFixed(1)} — suggested add for ${c.slot}${pts(c.delta)}` : `Suggested: replaced at ${c.slot} by ${c.toName} (free agent / waivers)${pts(c.delta)}`);
+    } else if (c.type === "swap") {
+      put(c.idA, `Suggested: swap with ${c.nameB} — move to ${c.slotB_label}; he plays earlier${c.kickA ? ` (${c.kickA})` : ""}, so the ${c.slot} slot keeps the later game`);
+      put(c.idB, `Suggested: swap with ${c.nameA} — move to ${c.slot}${c.kickB ? `; his game is later (${c.kickB})` : ""}`);
+    } else if (c.type === "ir") {
+      put(c.id, "Suggested: move to injured reserve");
+    }
+  }
+  return out;
+}

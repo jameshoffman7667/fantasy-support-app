@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,31 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.5 — Best lineup from zero, notes on every move, push refresh, flex colours
+
+**Manual step required: none.** No docker-compose.yml or environment changes.
+
+**Commit (short):** `v4.5: feat: best lineup from zero, card notes, fixes`
+
+**Commit (extended):**
+v4.5 rebuilds how the Roster page finds the best lineup and adds notes to every card involved in a move.
+
+Best lineup from zero: the server and the app now work out the highest-scoring lineup by considering every player (roster plus free agents / waivers) for every slot at once, with an exact solver. Today's slots only break ties. This fixes an Out QB left in the QB slot with no backup: the QB in the SUPERFLEX now moves to QB and the best bench player takes the SUPERFLEX (ticked together).
+
+Notes: every player in a suggested move gets a note on his card - the player coming out, the one moving in or changing slots, the starter a free agent / waiver player would replace (with both projections), both players in a timing swap, and a player going to IR.
+
+Push: after a successful push that league is rebuilt straight away, so Current and Proposed lineup show what Sleeper holds. The confirmation clears when you switch leagues.
+
+Flex slots are drawn as vertical bands in the colours of their eligible positions.
+
+Unverified: nothing ran against live Sleeper; the server routes were only syntax-checked.
+
+Also: the new solver (`lineupSolve.js`) is the same file in `client/src/` and `server/` (separate Docker builds); a test keeps the two identical. A tie between a roster player and a free agent never suggests the add. A slot nobody can fill stays empty. Notes show on Current lineup and, until ticked, on Proposed lineup.
+
+**Unverified:** the server-side lineup rows (`buildLeague.js`) could not be run end to end here (no live Sleeper, Express not installed) — the solver and the app-side logic are tested, including the Out-QB case. The rebuild after a push relies on the push opening the 15-minute live window for that league's rosters (existing behaviour). Sleeper behaviours listed under v4.4 and v4.4.1 are still unverified.
 
 ---
 

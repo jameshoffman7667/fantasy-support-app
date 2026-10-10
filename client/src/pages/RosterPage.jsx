@@ -1,6 +1,6 @@
 import * as api from "../api.js";
-import { GROUP_LABEL, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
-import { arrangement, buildPush, customChange, dropOptions, openSpotsForAdd, proposeChanges, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
+import { FLEX_ELIGIBLE, GROUP_LABEL, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
+import { arrangement, buildPush, changeNotes, customChange, dropOptions, openSpotsForAdd, proposeChanges, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
 import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,12 +15,22 @@ import { StartSitButton, StartSitIcon } from "../ui/startSit.jsx"; // v4.3
 // Sleeper-style slot colours: positions from POS_COLOR, bench / IR / taxi their own.
 const SLOT_EXTRA = { BN: "#5E7570", IR: "#D6533B", TAXI: "#A08BE0" };
 const slotColor = (slot) => POS_COLOR[slot] || SLOT_EXTRA[slot] || POS_COLOR.FLEX;
+// v4.5: a flex slot is shown as vertical bands in the colours of the positions that can play it.
+const flexBands = (label) => (FLEX_ELIGIBLE[label] ? FLEX_ELIGIBLE[label].map((p) => POS_COLOR[p]).filter(Boolean) : null);
+const bandBackground = (label) => {
+  const bands = flexBands(label);
+  if (!bands || bands.length < 2) return null;
+  const w = 100 / bands.length;
+  return `linear-gradient(to right, ${bands.map((c, i) => `${c} ${i * w}%, ${c} ${(i + 1) * w}%`).join(", ")})`;
+};
 export function PosBox({ label, small = false }) {
+  const bands = bandBackground(label);
   return (
     <span
-      style={{ background: slotColor(label), color: "#0E1416", fontFamily: "Oswald, sans-serif", letterSpacing: "0.02em" }}
+      style={{ background: bands || slotColor(label), color: "#0E1416", fontFamily: "Oswald, sans-serif", letterSpacing: "0.02em", textShadow: bands ? "0 0 3px rgba(255,255,255,0.75), 0 0 1px rgba(255,255,255,0.9)" : undefined }}
       className={`inline-flex items-center justify-center rounded font-bold shrink-0 ${small ? "text-[9px] w-9 h-5" : "text-[11px] w-11 h-7"}`}
       data-pos-box={label}
+      {...(bands ? { "data-flex-bands": flexBands(label).length } : {})}
     >
       {label}
     </span>
@@ -206,8 +216,11 @@ function StartSitStatus({ league, onRefresh }) {
   );
 }
 
-function CurrentLineup({ league, onOpenWaivers = null, onRefresh = null }) {
-  const notesFor = rowNotes(league);
+function CurrentLineup({ league, changes = [], onOpenWaivers = null, onRefresh = null }) {
+  const baseNotes = rowNotes(league);
+  // v4.5: every player a suggested change touches gets a note on his card
+  const moveNotes = useMemo(() => changeNotes(league, changes), [league, changes]);
+  const notesFor = (row, name, id) => [...baseNotes(row, name), ...((id != null && moveNotes.get(String(id))) || []).map((t) => ({ text: t, color: C.minor, attr: { "data-change-note": true } }))];
   const starterRows = league.roster.rows.filter((r) => r.slot !== "BN");
   const benchRows = league.roster.rows.filter((r) => r.slot === "BN");
   const bench = league.bench || [];
@@ -217,13 +230,13 @@ function CurrentLineup({ league, onOpenWaivers = null, onRefresh = null }) {
       <SectionLabel>Starters</SectionLabel>
       <div className="space-y-1.5">
         {(league.starters || []).map((s, i) => (
-          <RosterPlayerRow key={i} slot={s.slot} player={s.player} profile={league.scoringProfile} severity={starterRows[i]?.severity} notes={notesFor(starterRows[i], s.player?.name)} />
+          <RosterPlayerRow key={i} slot={s.slot} player={s.player} profile={league.scoringProfile} severity={starterRows[i]?.severity} notes={notesFor(starterRows[i], s.player?.name, s.player?.id)} />
         ))}
       </div>
       <SectionLabel>Bench</SectionLabel>
       <div className="space-y-1.5">
         {benchRows.map((r, i) => (
-          <RosterPlayerRow key={i} slot="BN" player={bench[i] || null} profile={league.scoringProfile} severity={r.severity} notes={notesFor(r, bench[i]?.name)} emptyLabel="Open bench slot" onTapEmpty={!bench[i] && onOpenWaivers ? onOpenWaivers : null} />
+          <RosterPlayerRow key={i} slot="BN" player={bench[i] || null} profile={league.scoringProfile} severity={r.severity} notes={notesFor(r, bench[i]?.name, bench[i]?.id)} emptyLabel="Open bench slot" onTapEmpty={!bench[i] && onOpenWaivers ? onOpenWaivers : null} />
         ))}
       </div>
       {(league.ir || []).length > 0 && (
@@ -231,7 +244,7 @@ function CurrentLineup({ league, onOpenWaivers = null, onRefresh = null }) {
           <SectionLabel>IR</SectionLabel>
           <div className="space-y-1.5">
             {league.ir.map((p, i) => (
-              <RosterPlayerRow key={i} slot="IR" player={p} profile={league.scoringProfile} severity={league.roster.irRows[i]?.severity} notes={notesFor(league.roster.irRows[i], p?.name)} />
+              <RosterPlayerRow key={i} slot="IR" player={p} profile={league.scoringProfile} severity={league.roster.irRows[i]?.severity} notes={notesFor(league.roster.irRows[i], p?.name, p?.id)} />
             ))}
           </div>
         </>
@@ -764,7 +777,7 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
       {sub === "current" ? (
         <>
           <PendingMoves league={league} onRefresh={onRefresh} />
-          <CurrentLineup league={league} onRefresh={onRefresh} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
+          <CurrentLineup league={league} changes={suggested} onRefresh={onRefresh} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
           <SuggestedChanges league={league} changes={suggested} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />
         </>
       ) : (
@@ -835,6 +848,9 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onS
 
 function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, onUndoCustoms, onRefresh, onOpenAccount, onDone, onGoCurrent }) {
   const arr = useMemo(() => arrangement(league, changes, checked), [league, changes, checked]);
+  // v4.5: players in a suggested change that isn't ticked yet carry its note (ticked ones show "In for …" / "Moved to the bench")
+  const moveNotes = useMemo(() => changeNotes(league, changes.filter((c) => !checked.has(c.key) && c.type !== "custom")), [league, changes, checked]);
+  const noteFor = (p) => ((p?.id != null && moveNotes.get(String(p.id))) || []).map((t) => ({ text: t, color: C.minor, attr: { "data-change-note": true } }));
   const [picker, setPicker] = useState(null); // v4.4: { kind: "starter", index } | { kind: "bench"|"taxi", id }
   const pushRef = useRef(null);
   // The floating "Review & push" button hides once the push panel itself is on screen.
@@ -879,6 +895,7 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
             onSlotTap={s.adding ? null : () => setPicker({ kind: "starter", index: i })}
             player={s.player}
             profile={league.scoringProfile}
+            notes={s.changed ? [] : noteFor(s.player)}
             highlight={s.changed ? "in" : null}
             sub={
               !s.changed ? null : s.adding ? (
@@ -895,7 +912,7 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
       <SectionLabel>Bench</SectionLabel>
       <div className="space-y-1.5">
         {arr.bench.map((b, i) => (
-          <RosterPlayerRow key={i} slot="BN" player={b.player} profile={league.scoringProfile} onSlotTap={b.player?.id != null ? () => setPicker({ kind: "bench", id: b.player.id }) : null} highlight={b.change === "benched" || b.change === "from taxi" ? "out" : null} sub={b.change === "benched" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved to the bench</div> : b.change === "from taxi" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved from the taxi squad to the bench</div> : null} />
+          <RosterPlayerRow key={i} slot="BN" player={b.player} profile={league.scoringProfile} notes={b.change ? [] : noteFor(b.player)} onSlotTap={b.player?.id != null ? () => setPicker({ kind: "bench", id: b.player.id }) : null} highlight={b.change === "benched" || b.change === "from taxi" ? "out" : null} sub={b.change === "benched" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved to the bench</div> : b.change === "from taxi" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved from the taxi squad to the bench</div> : null} />
         ))}
       </div>
       {arr.ir.length > 0 && (
@@ -903,7 +920,7 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
           <SectionLabel>IR</SectionLabel>
           <div className="space-y-1.5">
             {arr.ir.map((b, i) => (
-              <RosterPlayerRow key={i} slot="IR" player={b.player} profile={league.scoringProfile} highlight={b.change ? "ir" : null} sub={b.change ? <div style={{ color: C.major }} className="text-xs mt-0.5">Moved to injured reserve</div> : null} />
+              <RosterPlayerRow key={i} slot="IR" player={b.player} profile={league.scoringProfile} notes={b.change ? [] : noteFor(b.player)} highlight={b.change ? "ir" : null} sub={b.change ? <div style={{ color: C.major }} className="text-xs mt-0.5">Moved to injured reserve</div> : null} />
             ))}
           </div>
         </>
@@ -960,7 +977,12 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState(null);
+  // v4.5: the confirmation belongs to the league it was pushed for — switching league clears it (and a push that
+  // finishes after switching never shows its result on the other league).
+  const leagueRef = useRef(league.id);
+  useEffect(() => { leagueRef.current = league.id; setResults(null); setConfirming(false); setBusy(false); }, [league.id]);
   const send = async () => {
+    const pushedFor = league.id;
     setBusy(true);
     const out = [];
     try {
@@ -997,12 +1019,15 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
         }
       }
     } finally {
-      setResults(out);
-      setBusy(false);
-      setConfirming(false);
+      const same = leagueRef.current === pushedFor;
+      if (same) {
+        setResults(out);
+        setBusy(false);
+        setConfirming(false);
+      }
       if (out.some((o) => o.ok)) {
-        onDone();
-        onRefresh?.();
+        if (same) onDone();
+        onRefresh?.(pushedFor); // v4.5: re-read THAT league now, so Current and Proposed lineup show what Sleeper holds
       }
     }
   };

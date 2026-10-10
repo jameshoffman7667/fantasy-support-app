@@ -626,6 +626,20 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2y v4.5 — Best lineup from zero, notes on every move, push refresh, flex colours
+
+**Best lineup from zero (lineupSolve.js, used by server/buildLeague.js and client/src/lineup.js).** The candidate pool is every roster starter and bench player plus the free agents / waiver players, minus anyone whose game has started. Slots whose starter has played or started are pinned and leave the pool. The rest is an exact assignment problem (Hungarian method): maximise total projection with each player in at most one slot he is eligible for. A position can fill at most as many slots as are free, so only its best that many are considered. Today's slots never decide who is best; they only break ties (tiny bonuses: stay in the same slot, already starting, on the roster rather than a free agent), so equal players are not shuffled and an add is never suggested on a tie. A slot nobody fits stays empty. The per-slot "current vs optimal" rows come straight from the assignment, so a player in both lineups may change slots (e.g. the SUPERFLEX QB moves to QB). A change that puts a player into a slot he still starts in is ticked together with the change that moves him out (existing dependency rule).
+
+**Notes on cards (rosterChanges.changeNotes).** Every roster player touched by a suggested change gets a note: coming out (replaced by X), moving in from the bench or from another slot, the starter a free agent / waiver player would replace (both projections shown when the starter is projected above 0), both players of a timing swap, a player going to IR. Free agents get none (their cards are on Waivers). Shown on Current lineup; on Proposed lineup for changes not yet ticked (ticked ones show the arrangement text).
+
+**Push refresh.** After a successful push, only that league is rebuilt (manual, live read), so Current and Proposed lineup show what Sleeper holds. The confirmation result belongs to its league: it clears when the league changes, and a push finishing after a switch never shows on the other league.
+
+**Flex colours.** A flex slot box (FLEX, SFLX, REC_FLEX, WRRB_FLEX) is drawn as equal vertical bands in the colours of its eligible positions.
+
+**Unverified:** server-side rows were not run end to end here.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -826,3 +840,7 @@ Collected here since they cut across multiple sections:
 138. **Zero projection rule (v4.4.2):** Out, Sus, IR or DNR with no projection = 0; a 0 projection with an injury designation or bye never beats a bench player.
 139. **Info severity (v4.4.2):** seen-before injury statuses are listed, never coloured, not counted.
 140. **Notes (v4.4.2):** informational notes are short or behind an "i" button; Overview and Outlook buttons removed from the league view.
+141. **Best lineup (v4.5):** worked out from zero with an exact assignment over roster + free agents; current slots only break ties.
+142. **Move notes (v4.5):** every roster player in a suggested move gets a note; starters replaced by a waiver player show both projections.
+143. **Push (v4.5):** only the pushed league is rebuilt afterwards; its confirmation clears when the league changes.
+144. **Flex colours (v4.5):** flex slot boxes are vertical bands of the eligible positions' colours.

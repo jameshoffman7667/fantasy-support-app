@@ -12,6 +12,8 @@
 //            the order. So rank order IS priority: dragging a player up makes
 //            them win ties for the slots they're eligible for.
 
+import { solveLineup } from "./lineupSolve.js"; // v4.5
+
 // Slot labels as the server sends them (SUPER_FLEX is relabelled "SFLX").
 export const FLEX_ELIGIBLE = {
   FLEX: ["RB", "WR", "TE"],
@@ -196,7 +198,15 @@ export function effectiveLineup(league, orderKeysOverride) {
   const startableKeys = new Set(startable.map((e) => e.key));
   const rankedPicks = fillSlots(slots, custom ? rosterOrder.filter(notStarted) : rosterOrder.filter((e) => startableKeys.has(e.key)), lockedByIndex);
 
-  const bestPicks = fillSlots(slots, defaultOrder([...startable, ...freeAgents.filter(notStarted)]), lockedByIndex);
+  // v4.5: the best lineup is worked out from zero (exact assignment), not slot by slot
+  const bestPool = [...startable, ...freeAgents.filter(notStarted)];
+  const bestByKey = new Map(bestPool.map((e) => [e.key, e]));
+  const bestPicks = solveLineup(
+    slots,
+    bestPool.map((e) => ({ key: e.key, pos: e.player.pos, proj: e.player.proj, origin: e.group === "fa" ? "waiver" : "roster" })),
+    lockedByIndex,
+    { keyOf: (c) => c.key, currentKeyBySlot: (league.starters || []).map((s) => (s.player ? playerKey(s.player) : null)) }
+  ).map((c, i) => (c ? (lockedByIndex[i] ? c : bestByKey.get(c.key)) : null));
 
   const rankedTotal = totalOf(rankedPicks);
   const bestTotal = totalOf(bestPicks);

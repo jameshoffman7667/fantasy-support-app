@@ -474,6 +474,13 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.5 additions
+- **Roster → Proposed lineup** now looks for the best possible lineup from scratch (your roster plus free agents / waivers) and proposes the moves to get there — including moving a player between slots (e.g. the SUPERFLEX QB up to QB when your QB is out).
+- **Notes on every card** involved in a move, on Current and Proposed lineup.
+- **After a push** that league's lineup is re-read straight away; the confirmation clears when you switch leagues.
+- **Flex slots** are coloured in vertical bands of the positions that can play them.
+- No compose or environment changes in this release.
+
 ### v4.4.2 additions
 - **Waivers → Available → Drops:** players other teams dropped in the last 14 days (not yours), with who dropped them and whether they are still free.
 - **Suggested bids** show the 70% and 95% amounts; tap one for a graph of the real winning bids (min, median, average, 1 and 2 standard deviations, max).
