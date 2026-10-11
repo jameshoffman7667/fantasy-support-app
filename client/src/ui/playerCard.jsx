@@ -2,7 +2,8 @@ import * as api from "../api.js";
 import { ChevronRight, Loader2, X } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Avatar, Headshot, MatchupChip, StatLine, WeatherChip } from "./common.jsx";
-import { ADV_COLOR, C, POS_COLOR, SOURCE_TAG, SRC_COLOR, TEAM_COLORS, fmtAdv, fmtInt, normTeam, ordinalN, rankColor, readPref, teamRankColor, timeAgo, writePref } from "./theme.js";
+import { ClaimSection } from "./claimForm.jsx"; // v4.6
+import { ADV_COLOR, backupLine, C, POS_COLOR, SOURCE_TAG, SRC_COLOR, TEAM_COLORS, fmtAdv, fmtInt, normTeam, ordinalN, rankColor, readPref, teamRankColor, timeAgo, writePref } from "./theme.js";
 
 /* ------------------------------------------------------------------ */
 /*  v3.5 PLAYER CARD POP-UP (benchmarked on Sleeper's player card)      */
@@ -30,6 +31,36 @@ export function PlayerLink({ player, leagueId, children, className = "", style =
     >
       {children}
     </button>
+  );
+}
+
+// v4.6: a replacement/backup line (see backupLine in theme.js) whose name opens the player's card.
+export function BackupText({ b }) {
+  const rest = backupLine(b).slice(String(b.name).length);
+  return (
+    <>
+      <PlayerLink player={{ id: b.id, name: b.name, pos: b.pos, team: b.team }} className="inline underline" data-backup-link={b.id}>{b.name}</PlayerLink>
+      {rest}
+    </>
+  );
+}
+export function BackupList({ backups = [], opposite = null, empty = "none on the depth chart" }) {
+  if (!backups.length && !opposite) return <>{empty}</>;
+  return (
+    <>
+      {backups.map((b, i) => (
+        <React.Fragment key={b.id}>
+          {i > 0 && "; "}
+          <BackupText b={b} />
+        </React.Fragment>
+      ))}
+      {opposite && (
+        <>
+          {backups.length ? "; also " : "also "}
+          <BackupText b={{ ...opposite, rank: null }} />
+        </>
+      )}
+    </>
   );
 }
 
@@ -85,12 +116,13 @@ function AdvancedStats({ adv }) {
   );
 }
 
-export function PlayerCardModal({ target, onClose }) {
+export function PlayerCardModal({ target, onClose, league = null, onOpenAccount = null, onRefresh = null }) {
   const [card, setCard] = useState(null);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("summary");
   const [logSeason, setLogSeason] = useState(0);
   const [availOpen, setAvailOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false); // v4.6: the claim section under the header
   const p = target.player || {};
   useEffect(() => {
     let alive = true;
@@ -100,6 +132,7 @@ export function PlayerCardModal({ target, onClose }) {
     return () => {
       alive = false;
     };
+    setAddOpen(false);
   }, [p.id, target.leagueId]);
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -152,6 +185,15 @@ export function PlayerCardModal({ target, onClose }) {
             </div>
           )}
         </div>
+        {/* v4.6: unowned in this league → Add opens the claim section */}
+        {league && owner?.status === "available" && p.id != null && (
+          <div className="px-4 py-2 space-y-2" style={{ borderBottom: `1px solid ${C.border}` }} data-card-add>
+            <button type="button" onClick={() => setAddOpen((o) => !o)} aria-expanded={addOpen} style={{ background: addOpen ? "transparent" : C.brand, color: addOpen ? C.brand : "#fff", border: `1px solid ${C.brand}` }} className="rounded-md px-3 py-1.5 text-sm font-medium" data-card-add-btn>
+              {addOpen ? "Close claim" : `Add to ${league.name || "this team"}`}
+            </button>
+            {addOpen && <ClaimSection league={league} player={{ id: String(p.id), name }} onOpenAccount={onOpenAccount} onRefresh={onRefresh} />}
+          </div>
+        )}
         {/* availability */}
         {card?.availability?.length > 0 && (
           <div className="px-4 py-2" style={{ borderBottom: `1px solid ${C.border}` }}>

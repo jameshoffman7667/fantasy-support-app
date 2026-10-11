@@ -650,6 +650,22 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2aa v4.6 — Clear reds, Pending Claims, claim from the card, rule changes
+
+**Clearing variances.** `variances.js`: `ackKey(v)` = the key, plus `|RED` for a major; `isCleared` reads the matching form; `canClear` = red or yellow, not cleared, not info. The variance report makes each red/yellow item a button → confirm pop-up → `onClear([ackKey])` (the existing acknowledgement route, no server change). `minorKeys` (the yellow Clear buttons and the report's "Clear minor variances") stays yellow-only. Pruning keeps both key forms (`presentKeys`). `applyAcks` honours red acks on roster rows and stale outgoing offers.
+
+**League colours.** `worstLive(league)` = worst of the live (not cleared, not info) variances; the league drop-down names use it (red `C.major`, yellow `C.minor`).
+
+**Weekly clear.** `server/weeklyClear.js`, every 10 minutes from the scheduler: per tracked weekly-waiver league, 15 minutes after its waiver run (`faabDb.waiverSchedule`) the saved waiver plan loses its bids, edits, removed, custom claims, order, ticks and every willing-to-drop tick (drop list order and entry mode stay). `decide()` = wait / baseline (first sight) / skip (already handled, or plan edited after the run) / clear. State: `waiver_cleared:{user}:{league}`.
+
+**Player card + claims.** `BackupList` / `BackupText` make replacement names open the card. `ClaimSection` (player card, for `availability.current.status === "available"`): bid, drop, Submit claim → confirm → `api.pushClaim`, then `refreshOne(league)`. **Waivers** tabs: Available, Claim Generator (was Claims), Pending Claims, Opponents. Pending Claims shows `privateInfo.claims.pending`; Change bid = `cancel_waiver_claim` then `submit_waiver_claim`; Cancel = `cancel_waiver_claim`. `privateData` re-reads queued claims at most every 2 minutes (`CLAIMS_SNAPSHOT_MS`), always after a push (dirty) or a manual refresh.
+
+**Rules.** Opportunity (`Play opportunity`) skipped for a backup in the starting lineup (variance and card note). `compareToRoster`: in dynasty leagues the bench rule compares `value` (free agent vs lowest-valued bench player at his position), falling back to points when a value is missing; players you own carry `value`. `Injury add: your player is injured` is major only for a starter, minor for a bench player.
+
+**Unverified:** `cancel_waiver_claim` against live Sleeper; bid change as cancel + re-submit; the server job and the claim re-read were only syntax-checked.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -856,3 +872,9 @@ Collected here since they cut across multiple sections:
 144. **Flex colours (v4.5):** flex slot boxes are vertical bands of the eligible positions' colours.
 145. **Flex timing (v4.5.1):** one pairing across all flex slots; the red variance and the swap come from the same pairs.
 146. **Pushed lineup (v4.5.1):** the just-written lineup is used for up to 5 minutes while Sleeper's public read lags; the league is re-read after every push attempt.
+147. **Clearing reds (v4.6):** a red variance is cleared one at a time from the variance report, with a confirmation pop-up; no clear-all for red. Yellows can be cleared the same way; the yellow clear-all buttons stay.
+148. **Team list colours (v4.6):** each name in the league drop-down is coloured by its worst live variance.
+149. **Weekly clear (v4.6):** after a league's weekly waiver run its Claim Generator and every willing-to-drop tick are cleared.
+150. **Player card (v4.6):** replacement names open the card; an unowned player can be claimed from it (bid, drop, submit).
+151. **Pending Claims (v4.6):** Waivers → Claim Generator + Pending Claims; queued claims are read with every roster read; bids can be changed and claims cancelled.
+152. **Rules (v4.6):** an opportunity already starting is no variance; dynasty bench comparisons use dynasty value; an injured bench player's replacement suggestion is yellow at most.

@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,39 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.6 — Clear red variances, Pending Claims, claim from the player card, rule changes
+
+**Manual step required: none.** No docker-compose.yml or environment changes.
+
+**Commit (short):** `v4.6: clear reds, pending claims, add from card`
+
+**Commit (extended):**
+v4.6 adds clearing of red variances, a Pending Claims tab, claiming from the player card, and several rule changes.
+
+Variances: red and yellow items can be cleared one at a time from the variance report (tap the item, confirm in a pop-up); red has no clear-all, and the yellow Clear buttons stay. The team drop-down names take the colour of each team's worst variance.
+
+Waivers: "Claims" is now "Claim Generator"; the new Pending Claims tab lists the claims queued in Sleeper, lets you change a bid (cancel plus re-submit) or cancel, and refreshes with every roster read and every claim push. After each league's weekly waiver run its claims, bids and willing-to-drop ticks are cleared.
+
+Player card: replacement names in injury notes open the card; an unowned player gets an Add button with bid, drop and Submit claim.
+
+Rules: an opportunity already in your starting lineup is no variance; in dynasty leagues free agents are compared with bench players by dynasty value; an injured bench player's replacement suggestion is yellow at most.
+
+Unverified: cancel and bid change against live Sleeper; server routes only syntax-checked.
+
+**What changed (details):**
+- **Clearing variances one by one.** In the variance report, tapping a red or a yellow item asks "Clear this … variance?" (Keep it / Yes, clear it). A red has no clear-all; the yellow "Clear variances" buttons are unchanged. A cleared red is saved under its key plus `|RED`, so a yellow you cleared that later turns red shows again, and a cleared red that drops back to yellow shows as a new yellow. Cleared items stay under "Show N cleared variance(s)". Reds are not auto-cleared and nothing in your lineup or Sleeper changes.
+- **Team drop-down colours.** In the league/team drop-down every name is red or yellow for that league's worst live variance (cleared and grey items don't count); otherwise the normal colour. The current league keeps its bold.
+- **Weekly clear.** Every 10 minutes the server checks each tracked league (weekly-waiver leagues only): 15 minutes after its waiver run it clears the Claim Generator (bids, edits, custom claims, order, ticks) and every "willing to drop" tick. Claims already queued in Sleeper are not touched. The first time a league is seen only a baseline is stored (nothing is cleared), and a plan you edited after the run is left alone.
+- **Player card.** Replacement names in the injured-player notes (Roster cards, Injury Watch) open the card. For an unowned player in the league on screen the card has "Add to <team>" → bid (FAAB leagues), drop (or "No drop" with an open spot; required when the bench is full), Submit claim → confirm → sent through the existing claim push (needs "Waiver claims" on), then the league is re-read.
+- **Waivers tabs.** "Claims" → "Claim Generator". New "Pending Claims" tab: each claim queued in Sleeper (add, drop, bid, status, week), "Change bid" (confirm; cancel then re-submit) and "Cancel claim" (confirm), "Read again". It is refreshed whenever the roster is read (queued claims are re-read at most every 2 minutes per league instead of every 6 hours) and after every claim push or cancel.
+- **Rules.** (1) A backup already in your starting lineup is no longer an "opportunity" (no variance, no card note). (2) Dynasty leagues: "Beats a bench player" compares dynasty value (free agent vs the lowest-valued bench player at his position); if a value is missing it falls back to points; "beats a starter" stays on points; the rule name still says "outprojects". Your own players now carry their trade value. (3) "Injury add: your player is injured" is red only when the injured player is in your starting lineup; on the bench it is yellow.
+
+**Unverified:** Sleeper's cancel call (`cancel_waiver_claim`) has never been seen working against live Sleeper, so Cancel and Change bid may fail; Change bid is cancel + re-submit because Sleeper's own edit call isn't known, so the new claim may lose the old one's place in your order (if the re-submit fails the old claim is already gone, and the result says so). The weekly clear's waiver time is the league's setting (estimated) or the one you set per league. The new server code (weekly clear job, 2-minute claim re-read in `privateData.js`) was syntax-checked and its decision logic tested, not run end to end (Express isn't available in the build sandbox). Not reproduced in a real browser against Sleeper data: the player-card claim (tested against a mock).
+
+**My own choices (not confirmed with you):** a cleared red is keyed by its issue (league + week for roster items + page + rule + subject), so it returns next week for week-keyed roster items or when the subject changes; the confirm pop-up also appears for yellow items; info (grey) items can't be cleared; daily-waiver leagues are skipped by the weekly clear; the dynasty rule applies to the bench comparison only, not to adds over a starter; the Claim Generator's tab key and data stay the same.
 
 ---
 

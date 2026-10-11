@@ -14,7 +14,7 @@ import { BidDistributionModal } from "../ui/bidChart.jsx"; // v4.4.2
 import { C, POS_COLOR, STATUS, fmtInt, fmtMoney, fmtPct, fmtWhen, inputStyle } from "../ui/theme.js";
 
 /* ------------------------------------------------------------------ */
-/*  WAIVERS (v2.9): Available page + Claims page                       */
+/*  WAIVERS (v2.9): Available page + Claim Generator                       */
 /* ------------------------------------------------------------------ */
 const POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DEF"];
 
@@ -124,7 +124,7 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBidInfo = nul
               {bid ? "Claimed ✓" : "Add claim"}
             </button>
           )}
-          {bid && <span style={{ color: C.ok }} className="text-[10px]">on Claims page</span>}
+          {bid && <span style={{ color: C.ok }} className="text-[10px]">on Claim Generator</span>}
         </div>
       </div>
       <SourceTag source={p.projSource} factor={p.projFactor} />
@@ -260,7 +260,7 @@ function RosterWarnings({ league }) {
 }
 
 // v4.1: "Available elsewhere" — the other leagues he can be claimed in, with each league's FAAB left / budget and a
-// bid box (or "Add claim" without FAAB). A bid goes straight into THAT league's waiver plan (its Claims page).
+// bid box (or "Add claim" without FAAB). A bid goes straight into THAT league's waiver plan (its Claim Generator tab).
 function ElsewhereModal({ player, leagues, mode, onClose }) {
   const [plans, setPlans] = useState({});
   const [msg, setMsg] = useState({});
@@ -279,7 +279,7 @@ function ElsewhereModal({ player, leagues, mode, onClose }) {
     try {
       const saved = await api.saveWaiverPlan(l.id, next);
       setPlans((m) => ({ ...m, [l.id]: saved }));
-      setMsg((m) => ({ ...m, [l.id]: { ok: dollars == null ? "Removed from its Claims page" : "Added to its Claims page" } }));
+      setMsg((m) => ({ ...m, [l.id]: { ok: dollars == null ? "Removed from its Claim Generator" : "Added to its Claim Generator" } }));
     } catch (e) {
       setMsg((m) => ({ ...m, [l.id]: { err: e.message } }));
     }
@@ -314,7 +314,7 @@ function ElsewhereModal({ player, leagues, mode, onClose }) {
             </div>
           );
         })}
-        <div style={{ color: C.textFaint }} className="text-[11px] pt-1">A bid here is saved to that league's Claims page.</div>
+        <div style={{ color: C.textFaint }} className="text-[11px] pt-1">A bid here is saved to that league's Claim Generator.</div>
       </div>
     </Modal>
   );
@@ -1373,6 +1373,123 @@ function OpponentsPage({ league }) {
   );
 }
 
+
+/* ------------------------------------------------------------------ */
+/*  v4.6 PENDING CLAIMS: the claims queued in Sleeper, read back       */
+/* ------------------------------------------------------------------ */
+// Change a bid = cancel the queued claim, then submit it again with the new bid (Sleeper's own "edit" call isn't
+// known to the app). Cancel = Sleeper's cancel call (unverified until a cancel has been seen to work).
+function PendingClaimsPage({ league, onRefresh, onOpenAccount }) {
+  const isFaab = Boolean(league.waiverInfo?.faab);
+  const budget = league.waiverInfo?.budget || 0;
+  const used = league.waiverInfo?.used || 0;
+  const pending = league.privateInfo?.claims?.pending || [];
+  const canWrite = Boolean(league.privateInfo?.perms?.claims ?? league.privateInfo?.writesEnabled);
+  const nameOf = useMemo(() => {
+    const m = new Map();
+    const all = [...Object.values(league.waiverCategories?.cards || {}), ...(league.waiver?.rows || []), ...(league.addCandidates || []), ...(league.bench || []), ...(league.ir || []), ...(league.taxi || []), ...(league.starters || []).map((s) => s.player)];
+    for (const p of all) if (p?.id != null) m.set(String(p.id), p);
+    return (id) => m.get(String(id)) || { id: String(id), name: String(id) };
+  }, [league]);
+  const [bids, setBids] = useState({});
+  const [confirm, setConfirm] = useState(null); // { kind: "cancel" | "bid", x, bid }
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null);
+  const describe = (x) => {
+    const add = nameOf(x.adds[0]);
+    const drop = x.drops[0] != null ? nameOf(x.drops[0]) : null;
+    return { add, drop, text: `${add.name}${drop ? `, dropping ${drop.name}` : ", no drop"}` };
+  };
+  const run = async () => {
+    if (!confirm) return;
+    setBusy(true);
+    const { x, kind } = confirm;
+    const d = describe(x);
+    try {
+      const c = await api.cancelClaim(league.id, x.id, x.leg ?? null);
+      if (!c.ok) {
+        setResults([{ label: `${kind === "bid" ? "Change bid for" : "Cancel claim for"} ${d.add.name}`, ok: false, detail: c.detail || "Sleeper didn't cancel it." }]);
+      } else if (kind === "cancel") {
+        setResults([{ label: `Cancelled the claim for ${d.add.name}`, ok: true, detail: c.detail }]);
+      } else {
+        try {
+          const r = await api.pushClaim(league.id, { addId: x.adds[0], dropId: x.drops[0] ?? null, bid: confirm.bid }, { keys: pushKeys(league, "waiver") });
+          setResults([{ label: `${d.add.name} re-submitted at ${fmtMoney(confirm.bid)}`, ok: r.ok, verified: r.verified, detail: r.ok ? r.detail : `The old claim was cancelled but the new one failed: ${r.detail}. Submit it again from the Claim Generator.` }]);
+        } catch (e) {
+          setResults([{ label: `${d.add.name} re-submit`, ok: false, detail: `The old claim was cancelled but the new one failed: ${e.message}. Submit it again from the Claim Generator.` }]);
+        }
+      }
+    } catch (e) {
+      setResults([{ label: `${kind === "bid" ? "Change bid for" : "Cancel claim for"} ${d.add.name}`, ok: false, detail: e.message }]);
+    } finally {
+      setBusy(false);
+      setConfirm(null);
+      onRefresh?.(league.id);
+    }
+  };
+  const readAt = league.privateInfo?.claimsAt;
+  return (
+    <div className="space-y-2" data-pending-claims>
+      <PrivateGate league={league} onOpenAccount={onOpenAccount}>
+        <div className="flex items-center justify-between gap-2 px-1">
+          <div style={{ color: C.textMuted }} className="text-xs">
+            Claims queued in Sleeper{readAt ? ` · read ${fmtWhen(readAt)}` : ""}.
+            <InfoNote label="About pending claims">Read from Sleeper whenever the roster is read and after every claim you send. Changing a bid cancels the queued claim and submits it again with the new bid — Sleeper's own edit call isn't known to the app, so the new claim may not keep the old one's place in your order. Cancelling uses Sleeper's cancel call, which is still unverified until you've seen one work. Both need "Waiver claims" switched on under Account → Sleeper access.</InfoNote>
+          </div>
+          <button type="button" onClick={() => onRefresh?.(league.id)} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="rounded-md px-2 py-1 text-xs shrink-0" data-pending-refresh>Read again</button>
+        </div>
+        {league.privateInfo?.claims?.error && <div style={{ color: C.minor }} className="text-[11px] px-1">Couldn't read your queued claims from Sleeper ({league.privateInfo.claims.error}).</div>}
+        {pending.length === 0 ? (
+          <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-pending-empty>No claims are queued in Sleeper for this league.</div>
+        ) : (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y">
+            {pending.map((x) => {
+              const d = describe(x);
+              const typed = bids[x.id] ?? String(Number(x.bid) || 0);
+              const newBid = Math.max(0, Math.min(Math.max(0, budget - used), Math.round(Number(typed) || 0)));
+              const changed = isFaab && newBid !== (Number(x.bid) || 0);
+              return (
+                <div key={x.id} style={{ borderColor: C.border }} className="px-3 py-2.5 space-y-1.5" data-pending-claim={x.id}>
+                  <div style={{ color: C.text }} className="text-sm">
+                    Add <PlayerLink player={d.add} className="inline underline">{d.add.name}</PlayerLink>
+                    {d.add.pos ? <span style={{ color: C.textFaint }} className="text-xs"> {d.add.pos}{d.add.team ? ` · ${d.add.team}` : ""}</span> : null}
+                    {d.drop ? <>, drop <PlayerLink player={d.drop} className="inline underline">{d.drop.name}</PlayerLink></> : ", no drop"}
+                  </div>
+                  <div style={{ color: C.textFaint }} className="text-[11px]">{x.status || "pending"}{x.leg ? ` · week ${x.leg}` : ""}{isFaab ? ` · bid ${fmtMoney(Number(x.bid) || 0)}` : ""}</div>
+                  {canWrite && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {isFaab && (
+                        <>
+                          <input type="number" inputMode="numeric" min={0} value={typed} onChange={(e) => setBids((b) => ({ ...b, [x.id]: e.target.value }))} style={inputStyle} className="w-20 rounded-md px-2 py-1 text-sm" aria-label={`New bid for ${d.add.name}`} data-pending-bid />
+                          <button type="button" disabled={!changed || busy} onClick={() => setConfirm({ kind: "bid", x, bid: newBid })} style={{ color: changed ? C.brand : C.textFaint, border: `1px solid ${changed ? C.brand : C.border}66` }} className="rounded-md px-2 py-1 text-xs" data-pending-change-bid>Change bid</button>
+                        </>
+                      )}
+                      <button type="button" disabled={busy} onClick={() => setConfirm({ kind: "cancel", x })} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2 py-1 text-xs ml-auto" data-pending-cancel>Cancel claim</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {!canWrite && pending.length > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1">Changing or cancelling claims is switched off — turn on "Waiver claims" under Account → Sleeper access.</div>}
+        {confirm && (
+          <ConfirmPush
+            title={confirm.kind === "cancel" ? "Cancel this claim in Sleeper?" : "Change this bid?"}
+            lines={confirm.kind === "cancel" ? [`Cancel the claim for ${describe(confirm.x).text}`] : [`${describe(confirm.x).text}`, `Bid ${fmtMoney(Number(confirm.x.bid) || 0)} → ${fmtMoney(confirm.bid)}`]}
+            buttonLabel={confirm.kind === "cancel" ? "Yes, cancel it" : "Yes, change it"}
+            busy={busy}
+            onConfirm={run}
+            onCancel={() => setConfirm(null)}
+            note={confirm.kind === "bid" ? "This cancels the queued claim and submits it again with the new bid. If the new one fails, the old one is already gone." : undefined}
+          />
+        )}
+        <PushResults results={results} />
+      </PrivateGate>
+    </div>
+  );
+}
+
 export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeagues = [] }) {
   const [sub, setSub] = useState("available");
   const [plan, setPlanState] = useState(null);
@@ -1442,13 +1559,16 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
     <div className="px-4 py-3">
       <div className="flex mb-3" style={{ borderBottom: `1px solid ${C.border}` }}>
         {tab("available", "Available")}
-        {tab("claims", `Claims${claimCount ? ` (${claimCount})` : ""}`)}
+        {tab("claims", `Claim Generator${claimCount ? ` (${claimCount})` : ""}`)}
+        {tab("pending", `Pending Claims${(league.privateInfo?.claims?.pending || []).length ? ` (${league.privateInfo.claims.pending.length})` : ""}`)}
         {league.waiverInfo?.faab && tab("opponents", "Opponents")}
       </div>
       {planError && <div style={{ color: C.major }} className="text-xs px-1 pb-2">{planError}</div>}
-      {sub !== "opponents" && !league.bestBall && <AutoModeCard league={league} onOpenAccount={onOpenAccount} />}
-      {sub !== "opponents" && <RosterWarnings league={league} />}
-      {!plan ? (
+      {sub !== "opponents" && sub !== "pending" && !league.bestBall && <AutoModeCard league={league} onOpenAccount={onOpenAccount} />}
+      {sub !== "opponents" && sub !== "pending" && <RosterWarnings league={league} />}
+      {sub === "pending" ? (
+        <PendingClaimsPage league={league} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />
+      ) : !plan ? (
         <div className="flex items-center gap-2 px-1 py-4" style={{ color: C.textMuted }}>
           <Loader2 size={16} className="animate-spin" /> <span className="text-sm">Loading your waiver plan…</span>
         </div>

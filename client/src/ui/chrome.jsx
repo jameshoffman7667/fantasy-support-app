@@ -41,7 +41,7 @@ function CrumbMenu({ c, current }) {
               o.divider ? (
                 <div key={`d${i}`} style={{ borderTop: `1px solid ${C.border}` }} className="my-1" />
               ) : (
-                <button key={o.key || o.label} type="button" role="menuitem" onClick={() => { setOpen(false); o.onSelect?.(); }} className="w-full text-left px-3 py-2 text-sm truncate" style={{ color: o.current ? C.brand : C.text, fontWeight: o.current ? 600 : 400 }} data-crumb-option={o.key || o.label}>
+                <button key={o.key || o.label} type="button" role="menuitem" onClick={() => { setOpen(false); o.onSelect?.(); }} className="w-full text-left px-3 py-2 text-sm truncate" style={{ color: o.severity === "major" ? C.major : o.severity === "minor" ? C.minor : o.current ? C.brand : C.text, fontWeight: o.current ? 600 : 400 }} data-crumb-option={o.key || o.label} data-crumb-severity={o.severity || "ok"}>
                   {o.label}
                 </button>
               )

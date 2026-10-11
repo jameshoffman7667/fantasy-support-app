@@ -106,6 +106,7 @@ export function summarizeLog(row) {
   return { id: String(row.log_id), at: row.created ?? null, type: row.event_type || null, text: text.slice(0, 400) };
 }
 
+const CLAIMS_SNAPSHOT_MS = 2 * 60 * 1000; // v4.6: queued claims follow the roster reads
 const TX_SNAPSHOT_MS = 6 * 3600 * 1000; // R24: trade offers + pending claims are re-read from Sleeper every 6 hours
 const LOG_SNAPSHOT_MS = WEEK_MS; // R25: the league change log weekly
 export const dirtyKey = (username, leagueId) => `priv_dirty:${username}:${leagueId}`;
@@ -129,13 +130,29 @@ async function fetchLeague(username, lg, ctx, prev = null, { force = false } = {
   const dirty = store.getState(dirtyKey(username, lg.id), 0) || 0; // a push of yours makes the snapshot out of date
   // v3.5: a manual refresh (force) always re-reads trade offers and pending claims.
   const txFresh = !force && prev && prev.rawTrades && prev.claims && !prev.claims.error && prev.legChecked === leg && prev.txAt && now - prev.txAt < TX_SNAPSHOT_MS && dirty <= prev.txAt;
+  // v4.6: queued claims are re-read whenever the roster is (so the Pending Claims tab is current) — at most once every
+  // CLAIMS_SNAPSHOT_MS per league, and always after a push of yours (dirty) or a manual refresh (force).
+  const claimsFresh = !force && prev && prev.claims && !prev.claims.error && prev.claimsAt && prev.legChecked === leg && now - prev.claimsAt < CLAIMS_SNAPSHOT_MS && dirty <= prev.claimsAt;
+  const readClaims = () =>
+    priv.getPendingClaims(username, lg.id, claimLegs, lg.myRosterId).then(
+      (r) => {
+        info.claims = { pending: r.claims.map((c) => ({ id: String(c.transaction_id), adds: Object.keys(c.adds || {}), drops: Object.keys(c.drops || {}), bid: c.settings?.waiver_bid ?? null, status: c.status, leg: c.leg ?? null })), statuses: r.statuses, legs: r.legs };
+        info.claimsAt = now;
+      },
+      (e) => { info.claimsAt = 0; info.claims = { pending: [], statuses: [], error: e.message }; }
+    );
   if (txFresh) {
     // Snapshot reused; the red "stale" flag depends on today's date and kickoffs, so it is recomputed on every page load.
     info.rawTrades = prev.rawTrades;
     info.trades = classify(prev.rawTrades);
-    info.claims = prev.claims;
     info.txAt = prev.txAt;
     info.legChecked = leg;
+    if (claimsFresh) {
+      info.claims = prev.claims;
+      info.claimsAt = prev.claimsAt;
+    } else {
+      tasks.push(readClaims());
+    }
   } else {
     info.txAt = now;
     info.legChecked = leg;
@@ -144,10 +161,7 @@ async function fetchLeague(username, lg, ctx, prev = null, { force = false } = {
         (rows) => { info.rawTrades = rows; info.trades = classify(rows); },
         (e) => { info.txAt = 0; info.trades = { incoming: [], outgoing: [], error: e.message }; }
       ),
-      priv.getPendingClaims(username, lg.id, claimLegs, lg.myRosterId).then(
-        (r) => (info.claims = { pending: r.claims.map((c) => ({ id: String(c.transaction_id), adds: Object.keys(c.adds || {}), drops: Object.keys(c.drops || {}), bid: c.settings?.waiver_bid ?? null, status: c.status, leg: c.leg ?? null })), statuses: r.statuses, legs: r.legs }),
-        (e) => { info.txAt = 0; info.claims = { pending: [], statuses: [], error: e.message }; }
-      )
+      readClaims()
     );
   }
   if (prev && prev.log && !prev.log.error && prev.logAt && now - prev.logAt < LOG_SNAPSHOT_MS) {

@@ -10,7 +10,9 @@
 // acknowledged (saved per user on the server). A cleared minor stops
 // colouring its row, page badge and league card. A NEW variance (any key not
 // cleared) colours them again; a cleared minor that becomes major always
-// shows (reds can't be cleared). Acknowledgements for issues that have gone
+// shows. v4.6: a red can be cleared too, but only one at a time from the
+// variance report (saved under its key + "|RED", so it never mixes with a
+// yellow's acknowledgement). Acknowledgements for issues that have gone
 // away are pruned, so if the same issue comes back later it's new again.
 //
 // v2.9: some minor variances are "auto-clearing" (a weather warning, a big-gap
@@ -105,18 +107,22 @@ export function collectVariances(lg) {
   // a Questionable player only counts after the news check / trending signal and is only ever yellow.
   // You owning a backup is a yellow play-opportunity on Roster. The Injury page gets notes only.
   const lockedNow = lockedNames(lg); // v3.4: a locked player can't be moved, so no variance on him
+  const startingIds = new Set((lg.starters || []).map((s) => s.player?.id).filter((x) => x != null).map(String)); // v4.6
   for (const e of lg.injuryOpportunities?.events || []) {
     const subj = `${e.injured.name} (${e.injured.status})`;
     const adds = (e.freeAdds || []).map((a) => `${a.name} (${a.pos})`).join(", ");
     if (e.questionable) {
       if (adds) add("waiver", RULE.INJ_QUESTIONABLE, subj, "minor", `${subj}: ${(e.signals || []).join("; ")}. Possible adds: ${adds}`);
     } else if (adds && e.mine === "active" && !lockedNow.has(e.injured.name)) {
-      add("waiver", RULE.INJ_ADD_OWN, subj, "major", `Your ${e.injured.slot} ${subj}. Available now: ${adds}`);
+      // v4.6: red only while the injured player is in your starting lineup; on the bench the replacement suggestion is yellow at most
+      const starting = startingIds.has(String(e.injured.id));
+      add("waiver", RULE.INJ_ADD_OWN, subj, starting ? "major" : "minor", `Your ${e.injured.slot} ${subj}${starting ? "" : " (bench)"}. Available now: ${adds}`);
     } else if (adds && !e.mine) {
       add("waiver", RULE.INJ_ADD, subj, "minor", `${subj} (${e.injured.team} ${e.injured.slot}). Available: ${adds}`, true);
     }
     for (const b of e.backups || []) {
-      if (b.owner === "mine" && !lockedNow.has(b.name)) add("roster", RULE.PLAY_OPP, `${b.name} for ${e.injured.name}`, "minor", `${b.name} (${b.pos}${b.rank}) moves up with ${e.injured.name} (${e.injured.slot}) ${e.injured.status}. You already own him.`);
+      // v4.6: a player who is already in your starting lineup is not an opportunity — no variance
+      if (b.owner === "mine" && !lockedNow.has(b.name) && !startingIds.has(String(b.id))) add("roster", RULE.PLAY_OPP, `${b.name} for ${e.injured.name}`, "minor", `${b.name} (${b.pos}${b.rank}) moves up with ${e.injured.name} (${e.injured.slot}) ${e.injured.status}. You already own him.`);
     }
   }
 
@@ -144,7 +150,17 @@ export function collectVariances(lg) {
 
 const offerSide = (players, picks) => [...(players || []).map((p) => p.name || p.id), ...(picks || [])].join(", ") || "nothing";
 
-export const isCleared = (v, acks) => v.severity === "minor" && acks.has(v.key);
+// v4.6: a red (major) variance can be cleared too, but only one at a time from the variance report. Its
+// acknowledgement is saved under a different key (…|RED), so a yellow you cleared earlier that later turns
+// red still shows, and a cleared red that drops back to yellow shows as a new yellow.
+export const RED_SUFFIX = "|RED";
+export const ackKey = (v) => (v.severity === "major" ? v.key + RED_SUFFIX : v.key);
+export const canClear = (v) => !v.cleared && (v.severity === "minor" || v.severity === "major");
+export const isCleared = (v, acks) => (v.severity === "minor" ? acks.has(v.key) : v.severity === "major" ? acks.has(v.key + RED_SUFFIX) : false);
+/** Every key a variance could be saved under (used when pruning cleared keys for issues that have gone away). */
+export const presentKeys = (variances) => variances.flatMap((v) => [v.key, v.key + RED_SUFFIX]);
+/** v4.6: the worst colour among a league's live variances ("major" | "minor" | "ok") — cleared and grey items don't count. */
+export const worstLive = (lg) => worst((lg?.variances || []).filter((v) => !v.cleared && v.severity !== "info").map((v) => v.severity));
 
 /**
  * Returns a copy of the computed league with acknowledged minors applied:
@@ -157,9 +173,10 @@ export function applyAcks(lg, acks) {
   const live = variances.filter((v) => !v.cleared);
   const status = (page) => worst(live.filter((v) => v.page === page).map((v) => v.severity));
   const clearedKey = (page, rule, subject) => acks.has(varianceKey(lg.id, lg.week, page, rule, subject));
+  const clearedRed = (page, rule, subject) => acks.has(varianceKey(lg.id, lg.week, page, rule, subject) + RED_SUFFIX);
 
   const rosterRows = (lg.roster.rows || []).map((r) => {
-    const issues = (r.issues || []).map((i) => ({ ...i, cleared: i.severity === "minor" && clearedKey("roster", i.rule, `${r.slot} ${r.label}`) }));
+    const issues = (r.issues || []).map((i) => ({ ...i, cleared: (i.severity === "minor" && clearedKey("roster", i.rule, `${r.slot} ${r.label}`)) || (i.severity === "major" && clearedRed("roster", i.rule, `${r.slot} ${r.label}`)) }));
     const open = issues.filter((i) => !i.cleared);
     return { ...r, issues, severity: worst(open.map((i) => i.severity)), reason: open.map((i) => i.text).join(" ") || null, clearedNote: issues.some((i) => i.cleared) || undefined };
   });
@@ -186,7 +203,7 @@ export function applyAcks(lg, acks) {
   });
   const offerCleared = (rule, o) => acks.has(varianceKey(lg.id, lg.week, "trade", rule, `offer ${o.id}`));
   const T = lg.privateInfo?.trades;
-  const tradeOffers = T ? { ...T, incoming: (T.incoming || []).map((o) => ({ ...o, cleared: offerCleared("Incoming trade offer", o) })), outgoing: (T.outgoing || []).map((o) => ({ ...o, cleared: false })) } : null;
+  const tradeOffers = T ? { ...T, incoming: (T.incoming || []).map((o) => ({ ...o, cleared: offerCleared("Incoming trade offer", o) })), outgoing: (T.outgoing || []).map((o) => ({ ...o, cleared: clearedRed("trade", "Stale trade offer", `offer ${o.id}`) })) } : null;
   const logItems = (lg.privateInfo?.log?.items || []).map((it) => ({ ...it, cleared: acks.has(varianceKey(lg.id, lg.week, "league", "Settings change", `log ${it.id}`)) }));
   const leaguePage = { configured: Boolean(lg.privateInfo?.configured) && !lg.privateInfo?.readsOff, error: lg.privateInfo?.log?.error || null, items: logItems, status: lg.privateInfo?.configured && !lg.privateInfo?.readsOff ? status("league") : "na", readsOff: Boolean(lg.privateInfo?.readsOff) };
   return {

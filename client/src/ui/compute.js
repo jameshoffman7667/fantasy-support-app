@@ -118,11 +118,24 @@ export function compareToRoster(league, fa) {
       note = `projected ${fa.proj.toFixed(1)} vs ${weakest.player ? weakest.player.name : "(empty)"} ${projOf(weakest.player).toFixed(1)} at ${weakest.slot}`;
     } else {
       const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos && !isLocked(p, league)); // v3.4: nor can a locked bench player be dropped
-      const weakBench = bench.length ? bench.reduce((m, p) => (projOf(p) < projOf(m) ? p : m)) : null;
-      if (weakBench && fa.proj > projOf(weakBench)) {
-        rule = "Free agent outprojects a bench player";
-        severity = "minor";
-        note = `projected ${fa.proj.toFixed(1)} vs bench ${weakBench.name} ${projOf(weakBench).toFixed(1)}`;
+      // v4.6: dynasty leagues compare a free agent with the bench by dynasty (trade) value, not points. When the free agent
+      // or every bench player at the position has no value, the comparison falls back to this week's projection.
+      const byValue = league.leagueType === "dynasty" && fa.value != null && bench.some((p) => p.value != null);
+      if (byValue) {
+        const valued = bench.filter((p) => p.value != null);
+        const weakBench = valued.reduce((m, p) => (p.value < m.value ? p : m));
+        if (fa.value > weakBench.value) {
+          rule = "Free agent outprojects a bench player";
+          severity = "minor";
+          note = `dynasty value ${Math.round(fa.value)} vs bench ${weakBench.name} ${Math.round(weakBench.value)}`;
+        }
+      } else {
+        const weakBench = bench.length ? bench.reduce((m, p) => (projOf(p) < projOf(m) ? p : m)) : null;
+        if (weakBench && fa.proj > projOf(weakBench)) {
+          rule = "Free agent outprojects a bench player";
+          severity = "minor";
+          note = `projected ${fa.proj.toFixed(1)} vs bench ${weakBench.name} ${projOf(weakBench).toFixed(1)}`;
+        }
       }
     }
   }

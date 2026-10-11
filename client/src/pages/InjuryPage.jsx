@@ -1,6 +1,6 @@
 import { InfoNote, SectionLabel } from "../ui/common.jsx";
-import { PlayerLink } from "../ui/playerCard.jsx";
-import { C, STATUS, backupLine } from "../ui/theme.js";
+import { BackupList, BackupText, PlayerLink } from "../ui/playerCard.jsx";
+import { C, STATUS } from "../ui/theme.js";
 
 export function InjuryTab({ league }) {
   const io = league.injuryOpportunities;
@@ -29,8 +29,7 @@ export function InjuryTab({ league }) {
                   <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{e.status}{e.note ? ` — ${e.note}` : ""}</div>
                   {mineByName.get(e.player) && (
                     <div style={{ color: C.minor }} className="text-[11px] mt-0.5" data-injury-note>
-                      Replacements: {mineByName.get(e.player).backups.map(backupLine).join("; ") || "none on the depth chart"}
-                      {mineByName.get(e.player).opposite ? `; also ${backupLine({ ...mineByName.get(e.player).opposite, rank: null })}` : ""}
+                      Replacements: <BackupList backups={mineByName.get(e.player).backups} opposite={mineByName.get(e.player).opposite} />
                     </div>
                   )}
                 </div>
@@ -59,9 +58,9 @@ export function InjuryTab({ league }) {
               {e.questionable && <div style={{ color: C.minor }} className="text-[11px]">News check: {(e.signals || []).join("; ")}{e.news?.practice ? ` · practice: ${e.news.practice}` : ""}{e.news?.note ? ` — ${e.news.note}` : ""}</div>}
               {e.backups.length === 0 && <div style={{ color: C.textFaint }} className="text-[11px]">No healthy backups on the depth chart.</div>}
               {e.backups.map((b) => (
-                <div key={b.id} style={{ color: C.minor }} className="text-[11px]">{backupLine(b)}</div>
+                <div key={b.id} style={{ color: C.minor }} className="text-[11px]"><BackupText b={b} /></div>
               ))}
-              {e.opposite && <div style={{ color: C.minor }} className="text-[11px]">Also consider: {backupLine({ ...e.opposite, rank: null })}</div>}
+              {e.opposite && <div style={{ color: C.minor }} className="text-[11px]">Also consider: <BackupText b={{ ...e.opposite, rank: null }} /></div>}
             </div>
           ))}
         </div>

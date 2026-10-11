@@ -474,6 +474,13 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.6 additions
+- **Variance report:** tap a red or yellow item and confirm to clear it (red only one at a time; the yellow Clear buttons stay). The league drop-down names are coloured by their worst variance.
+- **Waivers:** "Claims" is now **Claim Generator**; new **Pending Claims** tab shows the claims queued in Sleeper, with change bid and cancel. After each league's weekly waiver run the claims and the "willing to drop" ticks are cleared.
+- **Player card:** replacement names open the card; an unowned player has an **Add** button (bid, drop, submit claim).
+- **Rules:** a backup already starting is no opportunity; dynasty bench comparisons use dynasty value; an injured bench player's replacement suggestion is only yellow.
+- No compose or environment changes in this release.
+
 ### v4.5.1 additions
 - **Flex lock order:** every flagged flex-timing problem (receiver / RB-WR flex slots too) is red and has its swap proposed.
 - **After a push** the lineup is shown as pushed even if Sleeper's roster read lags a moment; the league is re-read after every push attempt and the variances are recalculated.

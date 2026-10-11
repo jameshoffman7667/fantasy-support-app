@@ -15,6 +15,7 @@ import * as faabDb from "./faabDb.js"; // v3.7: opponent bid collection 2 h befo
 import * as commish from "./commish.js"; // v3.8: charters re-read each July
 import * as gemini from "./gemini.js"; // v4.1: scheduled waiver research
 import * as autoMode from "./autoMode.js"; // v4.4
+import * as weeklyClear from "./weeklyClear.js"; // v4.6: waiver plan cleared after each weekly waiver run
 import * as priv from "./sleeperPrivate.js"; // v4.4: Auto mode writes
 import * as pendingMoves from "./pendingMoves.js"; // v4.4.1: add a player, then the matching lineup move
 import { buildFullLeague } from "./buildLeague.js";
@@ -411,6 +412,11 @@ export function startScheduler() {
   setInterval(() => {
     const users = getAllUserStates().filter((st) => getUser(st.username)?.active && st.leagueIds?.length && !isInactive(getUser(st.username), st)).map((st) => st.username);
     faabDb.tick({ users }).catch((err) => console.warn(`[scheduler] FAAB collection check failed: ${err.message}`));
+  }, 10 * 60 * 1000);
+  // v4.6: after a league's weekly waiver run, the waiver plan (proposed claims and "willing to drop" ticks) is cleared.
+  setInterval(() => {
+    const users = getAllUserStates().filter((st) => getUser(st.username)?.active && st.leagueIds?.length && !isInactive(getUser(st.username), st)).map((st) => st.username);
+    weeklyClear.tick({ users }).catch((err) => console.warn(`[scheduler] Weekly waiver clear failed: ${err.message}`));
   }, 10 * 60 * 1000);
   // v4.4: Auto mode claims, one hour before each switched-on league's waivers process.
   setInterval(() => autoClaimTick().catch((err) => console.warn(`[scheduler] Auto mode check failed: ${err.message}`)), 10 * 60 * 1000);

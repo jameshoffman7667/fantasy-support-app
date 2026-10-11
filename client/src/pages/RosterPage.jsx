@@ -5,8 +5,8 @@ import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmPush, Headshot, InfoNote, MatchupChip, Modal, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
-import { PlayerLink } from "../ui/playerCard.jsx";
-import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, backupLine, fmtWhen, formatStatLine } from "../ui/theme.js";
+import { BackupList, PlayerLink } from "../ui/playerCard.jsx";
+import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, fmtWhen, formatStatLine } from "../ui/theme.js";
 import { StartSitButton, StartSitIcon } from "../ui/startSit.jsx"; // v4.3
 
 /* ------------------------------------------------------------------ */
@@ -173,9 +173,10 @@ function rowNotes(league) {
   const playNotes = new Map();
   const replNotes = new Map();
   const lockedNow = lockedNames(league); // v3.4: no move can help a locked player, so no note for him
+  const startingIds = new Set((league.starters || []).map((s) => s.player?.id).filter((x) => x != null).map(String)); // v4.6: a starter isn't "an opportunity"
   for (const e of ioEvents) {
-    for (const b of e.backups || []) if (b.owner === "mine" && !lockedNow.has(b.name)) playNotes.set(b.name, `Opportunity: ${e.injured.name} (${e.injured.slot}, ${e.injured.status}) is hurt and ${b.name} moves up.`);
-    if (e.mine && !lockedNow.has(e.injured.name)) replNotes.set(e.injured.name, `Replacements: ${(e.backups || []).map(backupLine).join("; ") || "none on the depth chart"}${e.opposite ? `; also ${backupLine({ ...e.opposite, rank: null })}` : ""}`);
+    for (const b of e.backups || []) if (b.owner === "mine" && !lockedNow.has(b.name) && !startingIds.has(String(b.id))) playNotes.set(b.name, `Opportunity: ${e.injured.name} (${e.injured.slot}, ${e.injured.status}) is hurt and ${b.name} moves up.`);
+    if (e.mine && !lockedNow.has(e.injured.name)) replNotes.set(e.injured.name, <>Replacements: <BackupList backups={e.backups || []} opposite={e.opposite} /></>); // v4.6: names open the player card
   }
   return (row, name) => {
     const out = [];

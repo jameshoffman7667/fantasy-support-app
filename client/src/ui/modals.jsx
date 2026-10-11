@@ -1,5 +1,5 @@
 import * as api from "../api.js";
-import { groupTree, minorKeys } from "../variances.js";
+import { ackKey, canClear, groupTree, minorKeys } from "../variances.js";
 import { CheckCircle2, ChevronRight, ListChecks, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Modal, TeamLogo } from "./common.jsx";
@@ -209,6 +209,8 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [showCleared, setShowCleared] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [confirm, setConfirm] = useState(null); // v4.6: the variance waiting for "Clear it?"
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const shown = showCleared ? variances : variances.filter((v) => !v.cleared);
   const tree = useMemo(() => groupTree(shown), [shown]);
   const clearedCount = variances.filter((v) => v.cleared).length;
@@ -275,7 +277,7 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
       </div>
       {clearedCount > 0 && (
         <button onClick={() => setShowCleared((v) => !v)} style={{ color: C.textMuted }} className="text-[11px] mb-1 underline">
-          {showCleared ? "Hide" : "Show"} {clearedCount} cleared minor variance(s)
+          {showCleared ? "Hide" : "Show"} {clearedCount} cleared variance(s)
         </button>
       )}
       {tree.length === 0 ? (
@@ -299,7 +301,13 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
                             <ul style={{ paddingLeft: 48 }} className="pb-1 space-y-0.5">
                               {r.items.map((v) => (
                                 <li key={v.key} style={{ color: SEV_COLOR(v.severity, v.cleared) }} className="text-xs" data-variance={v.severity}>
-                                  {v.text}
+                                  {canClear(v) ? (
+                                    <button type="button" onClick={() => setConfirm(v)} style={{ color: "inherit" }} className="text-left underline decoration-dotted underline-offset-2" data-clear-one={v.severity} aria-label={`Clear this ${v.severity === "major" ? "red" : "yellow"} variance`}>
+                                      {v.text}
+                                    </button>
+                                  ) : (
+                                    v.text
+                                  )}
                                   {v.cleared ? " (cleared)" : ""}
                                 </li>
                               ))}
@@ -314,8 +322,38 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
         </div>
       )}
       <div style={{ color: C.textFaint }} className="text-[10px] mt-3">
-        Clearing hides yellow items until a new one appears. Red and grey items can't be cleared.
+        Tap a red or yellow item to clear it (you're asked to confirm). Clearing hides it until a new one appears. The yellow "Clear" buttons clear every yellow item at once; red items are only cleared one at a time, here. Grey items can't be cleared.
       </div>
+      {confirm && (
+        <div role="alertdialog" aria-modal="true" aria-label="Clear this variance?" className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => !confirmBusy && setConfirm(null)} data-clear-confirm>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="w-full max-w-sm rounded-xl p-4 space-y-3">
+            <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-base">Clear this {confirm.severity === "major" ? "red" : "yellow"} variance?</div>
+            <div style={{ color: SEV_COLOR(confirm.severity, false) }} className="text-xs">{confirm.league} · {confirm.text}</div>
+            <div style={{ color: C.textMuted }} className="text-[11px]">It stops colouring the page, the league and the team list until a new one appears{confirm.severity === "major" ? ". Nothing is changed in your lineup or in Sleeper" : ""}.</div>
+            <div className="flex gap-2 justify-end">
+              <button type="button" disabled={confirmBusy} onClick={() => setConfirm(null)} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-sm" data-clear-confirm-no>Keep it</button>
+              <button
+                type="button"
+                disabled={confirmBusy}
+                onClick={async () => {
+                  setConfirmBusy(true);
+                  try {
+                    await onClear([ackKey(confirm)]);
+                  } finally {
+                    setConfirmBusy(false);
+                    setConfirm(null);
+                  }
+                }}
+                style={{ background: confirm.severity === "major" ? C.major : C.minor, color: "#fff" }}
+                className="rounded-md px-3 py-1.5 text-sm font-medium"
+                data-clear-confirm-yes
+              >
+                {confirmBusy ? "Clearing…" : "Yes, clear it"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }

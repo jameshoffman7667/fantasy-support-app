@@ -640,6 +640,8 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     fa.bye = byeOf(m?.team);
     fa.rookie = Number(m?.years_exp) === 0;
   }
+  // v4.6: your own players carry their trade value too (dynasty leagues compare free agents with bench players by value).
+  for (const p of [...starters.map((x) => x.player), ...bench, ...ir, ...taxi]) if (p) p.value = valueTable.source ? valueTable.valueOf(p.id) ?? null : null;
   const ADD_TOP_N = 10;
   const addCandidates = [];
   for (const [pos, list] of projTop) {

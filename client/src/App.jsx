@@ -1,5 +1,5 @@
 import * as api from "./api.js";
-import { PAGE_LABEL, applyAcks, autoClearKeys, collectVariances } from "./variances.js";
+import { PAGE_LABEL, applyAcks, autoClearKeys, collectVariances, presentKeys, worstLive } from "./variances.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccountScreen, AdminScreen, ForcePasswordScreen, LoginScreen } from "./pages/Account.jsx";
 import { AnalyticsScreen } from "./pages/Analytics.jsx";
@@ -472,7 +472,7 @@ export default function App() {
     const sameWeek = new Set(rawComputed.map((lg) => lg.week)).size === 1;
     const tracked = selectedIds.length === 0 || selectedIds.every((id) => rawComputed.some((lg) => lg.id === id));
     if (!complete || !sameWeek || !tracked) return;
-    const present = rawComputed.flatMap((lg) => collectVariances(lg).map((v) => v.key));
+    const present = rawComputed.flatMap((lg) => presentKeys(collectVariances(lg))); // v4.6: includes the …|RED keys of cleared reds
     const epoch = ackEpoch.current;
     api
       .pruneVarianceAcks(rawComputed.map((lg) => lg.id), rawComputed[0].week, present)
@@ -579,13 +579,14 @@ export default function App() {
         key: l.id,
         label: l.name || l.id,
         current: l.id === current,
+        severity: worstLive(computed.find((x) => x.id === l.id)), // v4.6: the name takes the colour of the league's worst variance
         onSelect: () => navigate(view.screen === "tab" ? { screen: "tab", leagueId: l.id, tab: tabKey } : { screen: "league", leagueId: l.id }),
       })),
     ];
     if (view.screen === "league" && activeLeague) return [root, { label: activeLeague.name, menuKey: "league", options: leagueOptions(activeLeague.id) }];
     if (view.screen === "tab" && activeLeague) return [root, { label: activeLeague.name, menuKey: "league", options: leagueOptions(activeLeague.id) }, { label: (TAB_META[tabKey] || TAB_META.roster).label }]; // v4.1: plain text again — the league tabs switch pages
     return [root];
-  }, [view, sleeperUser, liveLeagues, activeLeague, navigate]);
+  }, [view, sleeperUser, liveLeagues, activeLeague, navigate, computed]);
 
   const showRefresh = view.screen === "dashboard" || view.screen === "league" || view.screen === "tab";
   const showWeek = showRefresh && week != null;
@@ -594,7 +595,7 @@ export default function App() {
     <CardCtx.Provider value={cardCtx}>
     <PlayerCardCtx.Provider value={playerCardCtx}>
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="max-w-lg mx-auto">
-      {cardTarget && <PlayerCardModal target={cardTarget} onClose={closeCard} />}
+      {cardTarget && <PlayerCardModal target={cardTarget} onClose={closeCard} league={computed.find((l) => l.id === cardTarget.leagueId) || null} onOpenAccount={() => { closeCard(); navigate({ screen: "account" }); }} onRefresh={(id) => refreshOne(id)} />}
       {modal?.type === "dvp" && <DvpDetailModal params={modal.params} onClose={closeModal} />}
       {modal?.type === "weather" && <WeatherModal gameKey={modal.key} week={modal.week} onClose={closeModal} />}
       {modal?.type === "variances" && (() => {
