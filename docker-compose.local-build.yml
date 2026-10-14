@@ -32,6 +32,10 @@ services:
       - TANK01_RESERVE=${TANK01_RESERVE:-}
       # v2.7 Pick'em article scan (optional): Google AI Studio key + model id.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # v4.7 (optional): parse.bot API key — KeepTradeCut dynasty values for Trade → Value opportunities.
+      # Third-party wrapper (KeepTradeCut has no API). Free key: 200 credits a month. Leave empty and the page
+      # compares the other value sources only. Never paste the key anywhere but your .env / Portainer variables.
+      - PARSE_API_KEY=${PARSE_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-}
       - PORT=4000
       # Web Push (v2, pre-kickoff alerts) — optional; see docker-compose.yml.

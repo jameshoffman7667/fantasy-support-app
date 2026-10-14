@@ -424,3 +424,14 @@ export function cancelPendingMove(id) {
 export function getDrops(leagueId) {
   return request(`/api/drops?leagueId=${encodeURIComponent(leagueId)}`);
 }
+
+// v4.7: Waivers → Available → Auto (dry run) and Copy; Trade → Value opportunities.
+export function getAutoPreview(leagueId) {
+  return request(`/api/automode/preview?leagueId=${encodeURIComponent(leagueId)}`);
+}
+export function getCopyClaims(leagueId) {
+  return request(`/api/copy-claims?leagueId=${encodeURIComponent(leagueId)}`);
+}
+export function getValueOpps(format = "sf") {
+  return request(`/api/value-opps?format=${encodeURIComponent(format)}`);
+}

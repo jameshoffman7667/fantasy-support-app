@@ -53,6 +53,8 @@ import { getLastSummary, cachedPick } from "./projectionHub.js";
 import { searchFreeAgents } from "./playerSearch.js"; // v4.1
 import { registerStatsRoutes } from "./statsApi.js"; // v4.2: stats list, Waivers → All, Analytics → Scouting
 import * as autoMode from "./autoMode.js";
+import * as copyClaims from "./copyClaims.js"; // v4.7
+import * as valueOpps from "./valueOpps.js"; // v4.7
 import * as aiSources from "./aiSources.js"; // v4.3: AI sources per feature
 import { simulateSeason } from "./simulate.js";
 import { isPushConfigured, getPublicKey, saveSubscription, removeSubscription } from "./push.js";
@@ -584,6 +586,21 @@ app.get("/api/automode", (req, res) => {
   const s = autoMode.getSettings(req.user.username);
   res.json({ paused: s.paused, leagues: s.leagues, log: autoMode.getLog(req.user.username, req.query.leagueId || null).slice(0, 20) });
 });
+// v4.7: what Auto mode would do right now in this league (a dry run — nothing is written).
+app.get("/api/automode/preview", async (req, res) => {
+  const lg = ownBuilt(req, res, req.query.leagueId);
+  if (!lg) return;
+  try {
+    const u = req.user.username;
+    const raw = await sleeper.getLeague(lg.id).catch(() => null);
+    const sched = raw ? faabDb.waiverSchedule(raw, faabDb.getSettings(u).waiverTimes[String(lg.id)]) : null;
+    let perms = {};
+    try { perms = priv.status(u).perms || {}; } catch { /* no Sleeper token */ }
+    res.json(autoMode.preview(u, lg, { perms, waiverAt: sched?.next ?? null, leadMs: 60 * 60 * 1000 }));
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't work out Auto mode's moves." });
+  }
+});
 app.post("/api/automode", (req, res) => {
   const u = req.user.username;
   if (typeof req.body?.paused === "boolean") autoMode.setPaused(u, req.body.paused);
@@ -811,6 +828,43 @@ app.get("/api/drops", async (req, res) => {
     res.json({ days: dropsMod.WINDOW_DAYS, drops });
   } catch (err) {
     res.status(502).json({ error: err.message || "Couldn't read this league's transactions." });
+  }
+});
+// v4.7: Waivers → Available → Copy (claims from your other leagues of the same type, pending and already processed).
+app.use("/api/copy-claims", requireAuth);
+app.get("/api/copy-claims", async (req, res) => {
+  const lg = ownBuilt(req, res, req.query.leagueId);
+  if (!lg) return;
+  if (lg.bestBall) return res.json({ applicable: false, reason: "Best ball leagues have no waiver claims to copy.", leagues: [], items: [] });
+  try {
+    const u = req.user.username;
+    const now = Date.now();
+    const others = [];
+    let notBuilt = 0;
+    for (const id of (getUserState(u)?.leagueIds || []).map(String)) {
+      if (id === String(lg.id)) continue;
+      const b = getBuiltLeague(u, id)?.data;
+      if (!b?.myRosterId) {
+        notBuilt++;
+        continue;
+      }
+      if (b.bestBall || !copyClaims.sameType(b.leagueType, lg.leagueType)) continue;
+      others.push({ id: b.id, name: b.name, myRosterId: b.myRosterId, budget: b.waiverInfo?.budget || 0, pending: b.privateInfo?.claims?.pending || [], rows: faabDb.claimsFor({ leagueId: b.id, since: now - copyClaims.WINDOW_MS - 2 * 86400e3, limit: 3000 }) });
+    }
+    const players = await sleeper.getPlayers();
+    res.json({ applicable: true, type: lg.leagueType === "dynasty" ? "dynasty" : "redraft / keeper", notBuilt, readPending: Boolean(lg.privateInfo?.claims), ...copyClaims.buildCopy({ others, available: copyClaims.availableIds(lg), players, now }) });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't work out the claims from your other leagues." });
+  }
+});
+// v4.7: Trade → Value opportunities.
+app.use("/api/value-opps", requireAuth);
+app.get("/api/value-opps", async (req, res) => {
+  try {
+    const superflex = String(req.query.format || "sf").toLowerCase() !== "1qb";
+    res.json(await valueOpps.valueOpportunities({ superflex, sleeperPlayers: await sleeper.getPlayers() }));
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't load the value sources." });
   }
 });
 app.use("/api/api-presets", requireAuth);

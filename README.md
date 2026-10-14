@@ -474,6 +474,12 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.7 additions
+- **Waivers → Available:** two rows of views. **Auto** shows what Auto mode would do right now (text) and the claims that follow, and holds the Auto mode check box. **Copy** lists your claims in your other leagues of the same type — pending and already processed (won/lost, winning bid) — for players free here; player cards show them too.
+- **Game Day:** the old list is the **Cheer meter** tab; **Primetime** shows each league's win %, the Sunday/Monday-night players still to play and what to cheer for.
+- **Trade → Value opportunities:** players the dynasty value sources (Roster Audit, FantasyCalc, KeepTradeCut) disagree on most, each source scaled 0–100.
+- **Manual step (optional):** set `PARSE_API_KEY` (your parse.bot key, free tier 200 credits/month) in `.env` / Portainer variables to switch on KeepTradeCut; set `DATA_PATH` (absolute host folder) to keep the data outside the named volume. Redeploy the stack after the compose change. Never paste the key anywhere else.
+
 ### v4.6 additions
 - **Variance report:** tap a red or yellow item and confirm to clear it (red only one at a time; the yellow Clear buttons stay). The league drop-down names are coloured by their worst variance.
 - **Waivers:** "Claims" is now **Claim Generator**; new **Pending Claims** tab shows the claims queued in Sleeper, with change bid and cancel. After each league's weekly waiver run the claims and the "willing to drop" ticks are cleared.

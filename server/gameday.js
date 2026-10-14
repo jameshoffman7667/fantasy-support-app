@@ -122,6 +122,65 @@ function updateBaselines(username, season, week, leagues, firstKickoff, now = Da
   return cur;
 }
 
+
+/* ---------------- v4.7: Primetime ---------------- */
+const ET_PARTS = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", hourCycle: "h23" });
+const DOW_ET = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+/** Which window a kickoff belongs to: "sun-night" (Sunday 7 pm ET or later), "mon-night" (Monday or later), else "earlier". */
+export function nightWindow(kickoffMs) {
+  if (!Number.isFinite(kickoffMs)) return "earlier";
+  const p = Object.fromEntries(ET_PARTS.formatToParts(new Date(kickoffMs)).map((x) => [x.type, x.value]));
+  const dow = DOW_ET[p.weekday];
+  const hour = Number(p.hour) % 24;
+  if (dow === 1 || dow === 2) return "mon-night"; // Monday (and a Tuesday holiday game)
+  if (dow === 0 && hour >= 19) return "sun-night";
+  return "earlier";
+}
+const NIGHT_LABEL = { "sun-night": "Sunday night", "mon-night": "Monday night" };
+
+/**
+ * One league's Primetime card from both sides' starters. Each starter: { id, name, pos, team, state, kickoff, pts, proj }.
+ *  stage   waiting  — a Thursday–Sunday afternoon game is still on (the card updates once the last 4 pm game ends)
+ *          sunday   — only Sunday-night and Monday-night players remain (shown after the last 4 pm game)
+ *          monday   — only Monday-night players remain (shown after the Sunday-night game)
+ *          final    — every starter's game is over
+ *  Each side lists its starters who have not finished and play in the night windows ("remaining"); `later` counts the ones
+ *  still waiting in earlier windows. gap = current points difference, leader = who is ahead.
+ *  need    what the trailing team needs: its remaining players must outscore the leader's remaining players by more than gap.
+ */
+export function primetimeCard({ my = [], opp = [], myPoints = 0, oppPoints = 0, myName = "You", oppName = "Opponent" }) {
+  const unfinished = (l) => l.filter((x) => x.state !== "post" && Number.isFinite(x.kickoff)); // no kickoff = bye / no game
+  const side = (list) => {
+    const open = unfinished(list);
+    const night = open.filter((x) => nightWindow(x.kickoff) !== "earlier");
+    return {
+      earlier: open.filter((x) => nightWindow(x.kickoff) === "earlier").length,
+      remaining: night.map((x) => ({ id: x.id, name: x.name, pos: x.pos, team: x.team, window: NIGHT_LABEL[nightWindow(x.kickoff)] || "", state: x.state || null, pts: x.pts, proj: x.proj, statusDetail: x.statusDetail || null, kickoffLabel: x.kickoffLabel || null })),
+    };
+  };
+  const a = side(my);
+  const b = side(opp);
+  const all = [...a.remaining, ...b.remaining];
+  const earlier = a.earlier + b.earlier;
+  const hasSun = [...unfinished(my), ...unfinished(opp)].some((x) => nightWindow(x.kickoff) === "sun-night");
+  const stage = earlier > 0 ? "waiting" : all.length === 0 ? "final" : hasSun ? "sunday" : "monday";
+  const diff = r2(myPoints - oppPoints);
+  const leader = Math.abs(diff) < 0.005 ? "tie" : diff > 0 ? "me" : "opp";
+  const gap = Math.abs(diff);
+  const sum = (l) => r2(l.reduce((t, x) => t + (x.proj ?? 0), 0));
+  const names = (l) => (l.length ? l.map((x) => x.name).join(" + ") : "nobody");
+  let need = null;
+  if (stage !== "final" && stage !== "waiting") {
+    if (leader === "tie") need = `Tied at ${myPoints.toFixed(1)} — whoever's remaining players score more wins.`;
+    else {
+      const lead = leader === "me" ? { name: myName, rem: a.remaining } : { name: oppName, rem: b.remaining };
+      const trail = leader === "me" ? { name: oppName, rem: b.remaining } : { name: myName, rem: a.remaining };
+      need = `${lead.name} leads by ${gap.toFixed(1)}. ${trail.name} needs ${names(trail.rem)} to outscore ${names(lead.rem)} by more than ${gap.toFixed(1)}.`;
+    }
+  }
+  return { stage, leader, gap, earlierPending: earlier, my: { points: r2(myPoints), remProj: sum(a.remaining), remaining: a.remaining }, opp: { points: r2(oppPoints), remProj: sum(b.remaining), remaining: b.remaining }, need };
+}
+
 export async function getGameDay(username, { week: weekParam } = {}) {
   const state = getUserState(username);
   const leagueIds = state?.leagueIds || [];
@@ -188,7 +247,7 @@ export async function getGameDay(username, { week: weekParam } = {}) {
           if (g?.state === "post") final += pts ?? 0;
           else if (g?.state === "in") final += Math.max(pts ?? 0, projPts ?? 0);
           else final += projPts ?? 0;
-          return { id, pts, proj: projPts };
+          return { id, pts, proj: projPts, name: p?.position === "DEF" ? `${p?.first_name || id} ${p?.last_name || "D/ST"}`.trim() : name(p, id), pos: p?.position || null, team: p?.team || (p?.position === "DEF" ? id : null), state: g?.state ?? null, kickoff: g?.kickoffMillis ?? null, kickoffLabel: g?.kickoffLabel ?? null, statusDetail: g?.statusDetail ?? null };
         });
         return { list, final, points: Number(m.points ?? 0) };
       };
@@ -203,6 +262,7 @@ export async function getGameDay(username, { week: weekParam } = {}) {
         marginPct: r2(close.marginPct),
         closeFactor: r2(close.factor),
         ...matchupOutlook({ myPoints: me.points, oppPoints: opp.points, myProjected: me.final, oppProjected: opp.final }),
+        primetime: primetimeCard({ my: me.list, opp: opp.list, myPoints: me.points, oppPoints: opp.points, myName: summary.myTeam || "You", oppName: summary.oppTeam || "Opponent" }),
       });
       if (!ls.include || !(ls.importance > 0)) continue;
       const weight = ls.importance * (settings.closeWeighting ? close.factor : 1);

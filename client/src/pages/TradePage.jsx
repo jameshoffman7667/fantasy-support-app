@@ -3,6 +3,7 @@ import { Clock, Loader2 } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
 import { ConfirmPush, InfoNote, PrivateGate, PushResults, SectionLabel } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
+import { ValueOpportunities } from "./ValueOpps.jsx"; // v4.7
 import { C, STATUS, fmtInt, fmtWhen } from "../ui/theme.js";
 
 function StrengthWeaknessRow({ label, items, color }) {
@@ -114,7 +115,26 @@ function OwnershipSection({ ownership }) {
   );
 }
 
-export function TradeTab({ league, sessionId, onRefresh, onOpenAccount }) {
+// v4.7: Trade has two pages — the existing trade tools and Value opportunities.
+export function TradeTab(props) {
+  const [sub, setSub] = useState("trade");
+  const tab = (key, label) => (
+    <button key={key} type="button" onClick={() => setSub(key)} aria-current={sub === key ? "page" : undefined} data-trade-tab={key} style={{ color: sub === key ? C.text : C.textMuted, borderBottom: `2px solid ${sub === key ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium">
+      {label}
+    </button>
+  );
+  return (
+    <div>
+      <div className="flex mx-4 mt-3" style={{ borderBottom: `1px solid ${C.border}` }}>
+        {tab("trade", "Trade")}
+        {tab("value", "Value opportunities")}
+      </div>
+      {sub === "value" ? <div className="px-4 py-3"><ValueOpportunities league={props.league} /></div> : <TradeMain {...props} />}
+    </div>
+  );
+}
+
+function TradeMain({ league, sessionId, onRefresh, onOpenAccount }) {
   const teams = league.leagueTeams || [];
   const me = teams.find((t) => t.isMe);
   const others = teams.filter((t) => !t.isMe);

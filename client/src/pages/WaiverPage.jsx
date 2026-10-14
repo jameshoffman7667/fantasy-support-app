@@ -1,7 +1,8 @@
 import * as api from "../api.js";
 import { isLocked } from "../lineup.js";
 import { pushKeys } from "../variances.js";
-import { CATEGORIES, POSITION_FILTERS, categoryView, keyLabel } from "../waiverLists.js"; // v3.9
+import { CATEGORIES, POSITION_FILTERS, categoryRows, categoryView, keyLabel } from "../waiverLists.js"; // v3.9
+import { CopyEntries, useCopyClaims } from "../ui/copyClaims.jsx"; // v4.7
 import { availableElsewhere, compareToRoster, waiverRosterWarnings } from "../ui/compute.js"; // v3.9, v4.1
 import { claimKey, clearClaims, clearDrops, describeClaim, effectiveClaims, flatten, groupClaims, orderDrops, resetClaims, selectedClaims, setBid, simulate, syncDrops, toDollars } from "../waiverPlan.js";
 import { ChevronRight, Loader2, Search, SlidersHorizontal, X } from "lucide-react";
@@ -172,7 +173,7 @@ function ResearchStatus({ hype, onRefresh }) {
 }
 
 // v4.4: Auto mode check box (every league except best ball) and what it has done lately.
-function AutoModeCard({ league, onOpenAccount }) {
+function AutoModeCard({ league, onOpenAccount, onChanged = null }) {
   const [st, setSt] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -188,6 +189,7 @@ function AutoModeCard({ league, onOpenAccount }) {
     setErr(null);
     try {
       setSt(await api.setAutoMode({ leagueId: league.id, ...patch }));
+      onChanged?.();
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -224,6 +226,98 @@ function AutoModeCard({ league, onOpenAccount }) {
         </div>
       )}
       {err && <div style={{ color: C.major }}>{err}</div>}
+    </div>
+  );
+}
+
+// v4.7: Waivers → Available → Auto — the check box, then what Auto mode would do right now (text) and the claims that follow.
+function AutoView({ league, onOpenAccount }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [tick, setTick] = useState(0);
+  const builtAt = league.builtAt || league.cachedAt || null;
+  useEffect(() => {
+    let alive = true;
+    api.getAutoPreview(league.id).then((r) => alive && (setData(r), setErr(null))).catch((e) => alive && setErr(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [league.id, builtAt, tick]);
+  return (
+    <div data-auto-view>
+      {!league.bestBall && <AutoModeCard league={league} onOpenAccount={onOpenAccount} onChanged={() => setTick((t) => t + 1)} />}
+      {err && <div style={{ color: C.major }} className="text-sm px-1 py-2" data-auto-error>{err}</div>}
+      {!data && !err && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2 flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" /> Working out what Auto mode would do…</div>}
+      {data && (
+        <>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2.5 mb-3 space-y-1" data-auto-lines>
+            <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide">Auto mode would</div>
+            {data.lines.map((l, i) => <div key={i} style={{ color: C.text }} className="text-xs">{l}</div>)}
+            <div style={{ color: C.textFaint }} className="text-[10px] pt-0.5">A preview from the last time this league was read — nothing is sent from this page.</div>
+          </div>
+          <div style={{ color: C.textMuted }} className="text-xs px-1 pb-1.5">Resulting claims{data.claims.length ? ` (${data.claims.length})` : ""}</div>
+          {data.claims.length === 0 ? (
+            <div style={{ color: C.textMuted }} className="text-sm px-1 py-1" data-auto-claims-empty>No claims.</div>
+          ) : (
+            <div className="space-y-1.5" data-auto-claims>
+              {data.claims.map((c) => (
+                <div key={c.addId} style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.brand}` }} className="rounded-md px-3 py-2.5" data-auto-claim={c.addId}>
+                  <div className="flex items-baseline gap-1.5 min-w-0">
+                    <PlayerLink player={{ id: c.addId, name: c.name, pos: c.pos, team: c.team }} className="min-w-0 truncate"><span style={{ color: C.text }} className="text-sm font-medium">{c.name}</span></PlayerLink>
+                    <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{c.pos}{c.team ? ` · ${c.team}` : ""}</span>
+                  </div>
+                  <div style={{ color: C.textMuted }} className="text-xs mt-0.5">$0 claim, no drop{c.trendCount ? ` · +${Number(c.trendCount).toLocaleString()} adds in 24 h` : ""}{c.value != null ? ` · value ${Math.round(c.value).toLocaleString()}` : ""}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// v4.7: Waivers → Available → Copy — your claims in your other leagues of the same type for players free in this league.
+function CopyView({ league, filter, rowProps, cardFor }) {
+  const { data, error, loading, reload } = useCopyClaims(league.id, true);
+  if (error) return <div style={{ color: C.major }} className="text-sm px-1 py-2" data-copy-error>{error}</div>;
+  if (loading && !data) return <div style={{ color: C.textMuted }} className="text-sm px-1 py-2 flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" /> Reading your other leagues…</div>;
+  if (!data) return null;
+  if (data.applicable === false) return <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>{data.reason}</div>;
+  const FLEXP = ["RB", "WR", "TE"];
+  const shown = (data.items || []).filter((i) => filter === "ALL" || (filter === "FLEX" ? FLEXP.includes(i.pos) : i.pos === filter));
+  return (
+    <div data-copy>
+      <div className="flex items-center justify-between gap-2 px-1 pb-2 text-xs" style={{ color: C.textMuted }}>
+        <span data-copy-summary>
+          {data.leagues.length ? `${data.leagues.length} other ${data.type} league${data.leagues.length === 1 ? "" : "s"}` : `No other ${data.type} leagues`} · {shown.length} player{shown.length === 1 ? "" : "s"}
+          <InfoNote label="About Copy">Pending claims are as last read from Sleeper in each league (needs Account → Sleeper access). Processed claims are the last {data.windowDays} days from the FAAB database, which reads each league after its waivers run; a lost claim shows the winning bid when the database has it. Best ball leagues are left out, and keeper counts as redraft.{data.notBuilt ? ` ${data.notBuilt} tracked league${data.notBuilt === 1 ? " hasn't" : "s haven't"} been read yet and ${data.notBuilt === 1 ? "is" : "are"} left out.` : ""}</InfoNote>
+        </span>
+        <button type="button" onClick={reload} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="rounded-md px-2 py-1 text-xs shrink-0" data-copy-refresh>Read again</button>
+      </div>
+      {shown.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>Nothing to copy — none of your claims in your other {data.type} leagues is for a player who is free here.</div>}
+      <div className="space-y-2" data-category-list="copy">
+        {shown.map((i) => {
+          const card = cardFor(i.id);
+          const keyText = `${i.entries.length} claim${i.entries.length === 1 ? "" : "s"} in your other leagues`;
+          return (
+            <div key={i.id} data-copy-player={i.id}>
+              {card ? (
+                <AvailableRow {...rowProps(card, keyText)} />
+              ) : (
+                <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2.5">
+                  <div className="flex items-baseline gap-1.5 min-w-0">
+                    <PlayerLink player={{ id: i.id, name: i.name, pos: i.pos, team: i.team }} className="min-w-0 truncate"><span style={{ color: C.text }} className="text-sm font-medium">{i.name}</span></PlayerLink>
+                    <span style={{ color: C.textFaint }} className="text-[11px] shrink-0">{i.pos}{i.team ? ` · ${i.team}` : ""}</span>
+                  </div>
+                  <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{keyText}</div>
+                </div>
+              )}
+              <div className="px-3 pt-1" style={{ borderLeft: `2px solid ${C.border}`, marginLeft: 6 }}><CopyEntries entries={i.entries} /></div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -494,7 +588,7 @@ function AllTab({ league, filter, rowProps, cardFor }) {
   );
 }
 
-function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = [] }) {
+function AvailablePage({ league, plan, setPlan, faab, onRefresh, onOpenAccount = null, allLeagues = [] }) {
   const budget = league.waiverInfo?.budget || 0;
   const isFaab = Boolean(league.waiverInfo?.faab);
   const mode = plan.entryMode;
@@ -530,7 +624,7 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = []
     <div>
       {bidInfo && <BidDistributionModal player={bidInfo.player} budget={budget} samplePct={faab.result?.samples?.[bidInfo.hint.sampleKey] || []} scope={bidInfo.hint.sampleScope || "tracked leagues"} onClose={() => setBidInfo(null)} />}
       {elsewhereFor && <ElsewhereModal player={elsewhereFor.player} leagues={elsewhereFor.leagues} mode={mode} onClose={() => setElsewhereFor(null)} />}
-      <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap" data-available-controls>
+      {cat !== "auto" && <div className="flex items-center justify-between gap-2 px-1 pb-2 flex-wrap" data-available-controls>
         <div className="flex items-center gap-1 flex-wrap" data-pos-filter>
           {POSITION_FILTERS.map((f) => (
             <button key={f} type="button" onClick={() => setFilter(f)} style={chip(filter === f)} className="rounded-full px-2.5 py-0.5 text-[11px]" data-pos-filter-btn={f} aria-pressed={filter === f}>
@@ -539,34 +633,40 @@ function AvailablePage({ league, plan, setPlan, faab, onRefresh, allLeagues = []
           ))}
         </div>
         {isFaab && <EntryModeToggle mode={mode} onChange={(m) => setPlan((pl) => ({ ...pl, entryMode: m }))} />}
-      </div>
-      <div className="flex overflow-x-auto mb-2 -mx-1 px-1" style={{ borderBottom: `1px solid ${C.border}` }} data-category-tabs>
-        {CATEGORIES.map((c) => (
-          <button key={c.key} type="button" onClick={() => setCat(c.key)} aria-current={cat === c.key ? "page" : undefined} data-category={c.key} style={{ color: cat === c.key ? C.text : C.textMuted, borderBottom: `2px solid ${cat === c.key ? C.brand : "transparent"}` }} className="shrink-0 px-2 py-1.5 text-xs font-medium whitespace-nowrap">
-            {c.label}
-          </button>
+      </div>}
+      <div className="mb-2" data-category-tabs>
+        {categoryRows().map((row, ri) => (
+          <div key={ri} className="flex" style={{ borderBottom: `1px solid ${C.border}` }} data-category-row={ri}>
+            {row.map((c) => (
+              <button key={c.key} type="button" onClick={() => setCat(c.key)} aria-current={cat === c.key ? "page" : undefined} data-category={c.key} style={{ color: cat === c.key ? C.text : C.textMuted, borderBottom: `2px solid ${cat === c.key ? C.brand : "transparent"}` }} className="flex-1 px-1 py-1.5 text-xs font-medium whitespace-nowrap">
+                {c.label}
+              </button>
+            ))}
+          </div>
         ))}
       </div>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-1">
         {meta?.blurb}
       </div>
       {cat === "hype" && <ResearchStatus hype={wc.hype} onRefresh={onRefresh} />}
-      {isFaab && (
+      {isFaab && cat !== "auto" && (
         <div style={{ color: faab.error ? C.major : C.textFaint }} className="text-[10px] px-1 pb-2" data-faab-status>
           {faab.loading ? "Working out suggested bids…" : faab.error ? `Suggested bids unavailable: ${faab.error}` : faab.result?.note ? faab.result.note : null}
         </div>
       )}
       {cat === "all" && <AllTab league={league} filter={filter} rowProps={rowProps} cardFor={(r) => (wc.cards[r.id] ? rowFor(r.id) : rowsById.get(r.id) || { ...r, ...compareToRoster(league, r) })} />}
+      {cat === "auto" && <AutoView league={league} onOpenAccount={onOpenAccount} />}
+      {cat === "copy" && <CopyView league={league} filter={filter} rowProps={rowProps} cardFor={(id) => (wc.cards[id] ? rowFor(id) : rowsById.get(id) || null)} />}
       {cat === "drops" && <DropsTab league={league} filter={filter} rowProps={rowProps} cardFor={(id) => (wc.cards[id] ? rowFor(id) : rowsById.get(id) || null)} />}
-      {cat !== "all" && cat !== "drops" && view.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>{cat === "hype" && !hypeReady ? "No research yet for this week." : "Nobody available here right now."}</div>}
-      {cat !== "all" && cat !== "drops" && <div className="space-y-1.5" data-category-list={cat}>
+      {!["all", "drops", "auto", "copy"].includes(cat) && view.length === 0 && <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-category-empty>{cat === "hype" && !hypeReady ? "No research yet for this week." : "Nobody available here right now."}</div>}
+      {!["all", "drops", "auto", "copy"].includes(cat) && <div className="space-y-1.5" data-category-list={cat}>
         {view.map((e) => {
           const p = rowFor(e.id);
           return <AvailableRow key={p.id} {...rowProps(p, keyLabel(cat, p))} />;
         })}
       </div>}
-      {cat !== "drops" && league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
-      {cat !== "drops" && <div className="mt-3">
+      {cat !== "drops" && cat !== "auto" && league.waiverLock?.hidden > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2" data-waiver-lock>{league.waiverLock.hidden} player(s) are hidden because their game has started. They can't be claimed until the week's last game ends.</div>}
+      {cat !== "drops" && cat !== "auto" && <div className="mt-3">
         <DropSummary league={league} />
       </div>}
     </div>
@@ -1564,7 +1664,6 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
         {league.waiverInfo?.faab && tab("opponents", "Opponents")}
       </div>
       {planError && <div style={{ color: C.major }} className="text-xs px-1 pb-2">{planError}</div>}
-      {sub !== "opponents" && sub !== "pending" && !league.bestBall && <AutoModeCard league={league} onOpenAccount={onOpenAccount} />}
       {sub !== "opponents" && sub !== "pending" && <RosterWarnings league={league} />}
       {sub === "pending" ? (
         <PendingClaimsPage league={league} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />
@@ -1573,7 +1672,7 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
           <Loader2 size={16} className="animate-spin" /> <span className="text-sm">Loading your waiver plan…</span>
         </div>
       ) : sub === "available" ? (
-        <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRefresh={onRefresh} allLeagues={allLeagues} />
+        <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} allLeagues={allLeagues} />
       ) : sub === "opponents" ? (
         <OpponentsPage league={league} />
       ) : (

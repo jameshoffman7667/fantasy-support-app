@@ -666,6 +666,26 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2ab v4.7 — Waivers Auto/Copy views, Game Day Primetime, Trade Value opportunities
+
+**Waivers → Available.** `waiverLists.js`: `CATEGORIES` gains `auto` and `copy`; `categoryRows()` returns two rows — `TOP_ROW` = all, auto, trending, copy, drops, then the rest (hype, spot, ros, stash, handcuff) in their old order. The Auto card no longer sits above every Waivers page.
+
+**Auto view.** `AutoView` = `AutoModeCard` (check box, pause-all, log; `onChanged` reloads the preview) + `GET /api/automode/preview?leagueId=` → `autoMode.preview(username, built, { perms, waiverAt })`: a dry run through `planMoves` / `planClaims` returning `lines` (text), `moves`, `claims`, `claimsAt` (waivers minus 1 h). Best ball = unavailable; waiver-priority league = no claims; missing Account switches are called out; pending claims count as filling spots.
+
+**Copy view.** `server/copyClaims.js`: `buildCopy({ others, available, players })`; `GET /api/copy-claims?leagueId=` gathers the user's other tracked leagues of the same type (`sameType`: dynasty vs redraft/keeper; never best ball), their pending claims (`privateInfo.claims.pending`) and their own processed rows from `faabDb.claimsFor` (roster_id = mine, last 7 days; Won/Lost; a lost claim's winning bid = the "won" row for the same player in that league within 2 days). Only players free in the league on screen (`availableIds` = freeAgents ∪ waiver rows ∪ waiverCategories cards). `ui/copyClaims.jsx` (`useCopyClaims`, `CopyEntries`) is used by the Copy view and the player card ("Your claims in your other leagues").
+
+**Game Day.** `GameDayScreen` tabs under the league cards: Cheer meter (the old slot/category filters and player list) and Primetime. `gameday.js`: `nightWindow(kickoff)` (ET: Sunday ≥ 7 pm = sun-night, Monday/Tuesday = mon-night, else earlier) and `primetimeCard({ my, opp, myPoints, oppPoints, myName, oppName })` → `{ stage: waiting | sunday | monday | final, leader, gap, earlierPending, my/opp: { points, remProj, remaining[] }, need }` attached to each league summary as `primetime` (starters without a game are ignored). The tab draws a win % bar from the league's existing `winProb`, both sides' points, remaining players with projections, the lead on the leading side and the `need` line. Live: the screen already re-reads every 60 seconds.
+
+**Value opportunities.** `server/valueOpps.js`: `buildOpportunities({ sources, info })` scales each source 0–100 (`scaleMap`) over the players every source lists (≥ 40 in common, else each source's own table), clamps outside the range, keeps players listed by ≥ 2 sources, sorts by spread (highest − lowest scaled). Sources: Roster Audit (`raValues`), FantasyCalc dynasty (`fcValues`), KeepTradeCut (`values.ktcValues`, below); `matchKtc` maps KTC rows to Sleeper ids with `waiverCategories.nameIndex`. `GET /api/value-opps?format=sf|1qb`. `pages/ValueOpps.jsx` (Trade → Value opportunities; Superflex/1QB, position filters, a dot track per player).
+
+**KeepTradeCut.** No official API (its FAQ forbids scraping). `values.ktcValues` calls the parse.bot wrapper `GET …/get_dynasty_rankings?limit=400&scoring=superflex|1qb&position=all&tep=0` with header `X-API-Key: $PARSE_API_KEY`; table cached 2 days (+ last good copy a week), failures remembered 10 minutes, a monthly credit counter stops calls at 190 of 200. No key = source reported "not set up".
+
+**Compose.** `PARSE_API_KEY` env line; data mount `${DATA_PATH:-fantasy-manager-data}:/app/data` (entrypoint chowns whatever is mounted).
+
+**Unverified:** parse.bot's live response and the 1QB `scoring` value; real-name matching; Primetime on a live Sunday; Copy's winning-bid lookup depends on the FAAB database having the winner's row.
+
+---
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -878,3 +898,12 @@ Collected here since they cut across multiple sections:
 150. **Player card (v4.6):** replacement names open the card; an unowned player can be claimed from it (bid, drop, submit).
 151. **Pending Claims (v4.6):** Waivers → Claim Generator + Pending Claims; queued claims are read with every roster read; bids can be changed and claims cancelled.
 152. **Rules (v4.6):** an opportunity already starting is no variance; dynasty bench comparisons use dynasty value; an injured bench player's replacement suggestion is yellow at most.
+153. **Waivers views (v4.7):** Available's views are two rows — All, Auto, Trending, Copy, Drops on top, the rest below in their old order.
+154. **Auto view (v4.7):** Auto mode's check box lives on its own view with a text preview of what it would do and the claims that follow (dry run, same planners as the real run); the old Auto card is gone.
+155. **Copy view (v4.7):** claims from the user's other leagues of the same type (dynasty vs redraft/keeper, never best ball) for players free in the current league — pending and already processed (Won/Lost, winning bid); player cards show them too.
+156. **Game Day tabs (v4.7):** everything under the league cards is the Cheer meter tab; Primetime is a second tab.
+157. **Primetime (v4.7):** per league a win % bar (like Pick'em), both sides' points, Sunday-night/Monday-night players still to play with projections, the lead on the leading side and what the trailing side needs; live, with stages after the last 4 pm game and after Sunday night.
+158. **Value opportunities (v4.7):** Trade → Value opportunities ranks dynasty players by the gap between sources, each source scaled 0–100 (over the players every source lists).
+159. **KeepTradeCut (v4.7):** values come through the third-party parse.bot API (key in the `PARSE_API_KEY` env var, cached 2 days, monthly credit guard); KTC has no API of its own and its FAQ forbids scraping.
+160. **API keys (v4.7):** stay environment variables (an Account field was asked for, then withdrawn).
+161. **Data location (v4.7):** the compose data mount is `${DATA_PATH:-fantasy-manager-data}:/app/data`.

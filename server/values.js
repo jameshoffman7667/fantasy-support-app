@@ -31,13 +31,13 @@ const num = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-async function getJson(url, { method = "GET", body = null, timeoutMs = 20000 } = {}) {
+async function getJson(url, { method = "GET", body = null, timeoutMs = 20000, headers = {} } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       method,
-      headers: { "User-Agent": USER_AGENT, Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "User-Agent": USER_AGENT, Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}), ...headers },
       body: body ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });
@@ -266,6 +266,56 @@ export async function fcValues({ dynasty = false, numQbs = 1, numTeams = 12, ppr
     return [...map.entries()];
   });
   return { at: r?.at ?? null, stale: Boolean(r?.stale), error: r?.error || null, map: new Map(r?.value || []) };
+}
+
+/* ---------------- KeepTradeCut via the parse.bot wrapper (dynasty; v4.7) ---------------- */
+
+/**
+ * KeepTradeCut has no API of its own (its FAQ forbids scraping). v4.7 reads its dynasty values through the third-party
+ * parse.bot wrapper (https://parse.bot/marketplace/b7c3ba52-2896-48b7-8cb3-883d36787c09/keeptradecut-com-api), which needs a
+ * key in the PARSE_API_KEY env var (header X-API-Key). Free tier: 200 credits a month, 5 requests a minute; the rankings call
+ * costs 3 credits, so each table is kept for 2 days and a monthly guard stops calls at 190 credits.
+ *
+ * UNVERIFIED (no key in the build sandbox): the response is parsed as documented ({data:{players:[{playerName, position,
+ * team, age, value, rank, ...}]}}), and the `scoring` values: "superflex" is in the page's sample, "1qb" is a guess.
+ */
+const KTC_BASE = process.env.KTC_API_BASE || "https://api.parse.bot/scraper/52095a49-4d80-48b7-9495-40d7716e1e65";
+export const KTC_TTL = 2 * DAY;
+export const KTC_CALL_CREDITS = 3;
+export const KTC_MONTH_GUARD = 190;
+export const ktcConfigured = () => Boolean(process.env.PARSE_API_KEY);
+const ktcCreditKey = (now = new Date()) => `values:ktc:credits:${now.getUTCFullYear()}-${now.getUTCMonth() + 1}`;
+export const ktcCreditsUsed = () => Number(cacheGet(ktcCreditKey()) || 0);
+
+/** parse.bot get_dynasty_rankings JSON → [{ ktcId, name, pos, team, age, value, rank, rookie }] (QB/RB/WR/TE only, picks left out). */
+export function parseKtcRankings(json) {
+  const d = json && typeof json === "object" && json.data && typeof json.data === "object" ? json.data : json;
+  const list = Array.isArray(d?.players) ? d.players : Array.isArray(d) ? d : [];
+  const out = [];
+  for (const e of list) {
+    if (!e || !e.playerName) continue;
+    const pos = String(e.position || "").toUpperCase();
+    if (!["QB", "RB", "WR", "TE"].includes(pos)) continue;
+    const value = num(e.value);
+    if (value == null) continue;
+    out.push({ ktcId: e.playerID != null ? String(e.playerID) : null, name: String(e.playerName), pos, team: e.team || null, age: num(e.age), value, rank: num(e.rank), rookie: Boolean(e.rookie) });
+  }
+  return out;
+}
+
+export async function ktcValues({ superflex = true } = {}) {
+  if (!ktcConfigured()) return { configured: false, at: null, stale: false, error: null, list: [] };
+  const scoring = superflex ? "superflex" : "1qb";
+  const r = await cachedTable(`values:ktc:${scoring}`, KTC_TTL, async () => {
+    const used = ktcCreditsUsed();
+    if (used + KTC_CALL_CREDITS > KTC_MONTH_GUARD) throw new Error(`monthly credit guard reached (${used} of the free 200 credits used this month)`);
+    cacheSet(ktcCreditKey(), used + KTC_CALL_CREDITS, 35 * DAY);
+    const json = await getJson(`${KTC_BASE}/get_dynasty_rankings?limit=400&scoring=${scoring}&position=all&tep=0`, { headers: { "X-API-Key": process.env.PARSE_API_KEY } });
+    const list = parseKtcRankings(json);
+    if (!list.length) throw new Error("no usable players in the response");
+    return list;
+  });
+  return { configured: true, at: r?.at ?? null, stale: Boolean(r?.stale), error: r?.error || null, list: r?.value || [] };
 }
 
 /* ---------------- one league ---------------- */

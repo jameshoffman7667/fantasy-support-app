@@ -1,7 +1,7 @@
 import * as api from "../api.js";
 import { ChevronRight, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Avatar, BootstrapScreen, ErrorScreen, Headshot, PrimaryButton, Select, Toggle } from "../ui/common.jsx";
+import { Avatar, BootstrapScreen, ErrorScreen, Headshot, InfoNote, PrimaryButton, Select, Toggle } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { C } from "../ui/theme.js";
 
@@ -229,10 +229,94 @@ function GameDayGroups({ slots, ratio, collapsed, toggle, prefix = "" }) {
   });
 }
 
+
+/* ------------------------------------------------------------------ */
+/*  v4.7 PRIMETIME — what to cheer for in the Sunday-night / Monday-night games, league by league     */
+/* ------------------------------------------------------------------ */
+const STAGE_TEXT = {
+  waiting: "Waiting for the last 4 pm game to finish — the card updates then. Sunday-night and Monday-night players are listed already.",
+  sunday: "Sunday night and Monday night are what's left.",
+  monday: "Only Monday night is left.",
+  final: "Every game for your starters is over.",
+};
+const f1 = (x) => (x == null ? "—" : Number(x).toFixed(1));
+
+/** Win % bar under the league title, in the style of the Pick'em bar: your side left, the opponent right. */
+function WinBar({ l }) {
+  const p = Math.min(1, Math.max(0, l.winProb ?? 0.5));
+  const me = Math.round(p * 100);
+  return (
+    <div className="flex h-6 rounded overflow-hidden text-[11px] font-semibold mt-1.5" role="img" aria-label={`Win chance: ${l.myTeam || "you"} ${me}%, ${l.oppTeam || "opponent"} ${100 - me}%`} data-pt-bar>
+      <div style={{ width: `${p * 100}%`, background: C.brand, color: "#fff" }} className="flex items-center pl-1.5 min-w-[2.25rem] truncate" data-pt-bar-me>{me}%</div>
+      <div style={{ width: `${(1 - p) * 100}%`, background: C.textFaint, color: "#fff" }} className="flex items-center justify-end pr-1.5 min-w-[2.25rem]" data-pt-bar-opp>{100 - me}%</div>
+    </div>
+  );
+}
+
+function PrimetimeSide({ side, name, lead, gap, mine, leagueId }) {
+  return (
+    <div className="min-w-0 flex-1 rounded px-2 py-1.5" style={{ background: lead ? (mine ? C.okBg : C.majorBg) : "transparent", border: `1px solid ${lead ? (mine ? `${C.ok}55` : `${C.major}55`) : C.border}` }} data-pt-side={mine ? "me" : "opp"} data-pt-lead={lead ? "1" : "0"}>
+      <div style={{ color: C.textMuted }} className="text-[10px] uppercase tracking-wide truncate">{name}</div>
+      <div style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-base font-semibold leading-tight">{f1(side.points)} <span style={{ color: C.textFaint }} className="text-[10px] font-normal">pts</span></div>
+      {lead && gap > 0 && <div style={{ color: mine ? C.ok : C.major }} className="text-[11px] font-semibold" data-pt-gap>+{f1(gap)} lead</div>}
+      <div className="mt-1 space-y-0.5">
+        {side.remaining.length === 0 && <div style={{ color: C.textFaint }} className="text-[11px]">Nobody left to play</div>}
+        {side.remaining.map((p) => (
+          <div key={p.id} className="flex items-baseline justify-between gap-1 text-[11px]" data-pt-player={p.id}>
+            <PlayerLink player={{ id: p.id, name: p.name, pos: p.pos, team: p.team }} leagueId={leagueId} className="min-w-0 truncate"><span style={{ color: C.text }}>{p.name}</span> <span style={{ color: C.textFaint }}>{p.pos}</span></PlayerLink>
+            <span style={{ color: C.textMuted, fontVariantNumeric: "tabular-nums" }} className="shrink-0">{p.state === "in" && p.pts != null ? `${f1(p.pts)} · ` : ""}proj {f1(p.proj)}</span>
+          </div>
+        ))}
+      </div>
+      {side.remaining.length > 0 && <div style={{ color: C.textFaint }} className="text-[10px] mt-1">Left: proj {f1(side.remProj)}</div>}
+    </div>
+  );
+}
+
+function PrimetimeCard({ l }) {
+  const pt = l.primetime;
+  const windows = [...new Set([...(pt?.my.remaining || []), ...(pt?.opp.remaining || [])].map((p) => p.window).filter(Boolean))];
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2.5" data-pt-league={l.id} data-pt-stage={pt?.stage || ""}>
+      <div className="flex items-center gap-1.5 min-w-0">
+        <Avatar avatar={l.avatar} name={l.name} size={18} square />
+        <span style={{ color: OUTLOOK[l.color] || C.text }} className="text-sm font-semibold truncate" data-pt-title>{l.name}</span>
+        {windows.length > 0 && <span style={{ color: C.textFaint }} className="text-[10px] shrink-0">{windows.join(" · ")}</span>}
+      </div>
+      <WinBar l={l} />
+      <div style={{ color: C.textFaint }} className="text-[10px] mt-1">Win chance from the live score and projections ({f1(l.myProjected)} – {f1(l.oppProjected)} expected final)</div>
+      <div className="flex gap-2 mt-2">
+        <PrimetimeSide side={pt.my} name={l.myTeam || "You"} lead={pt.leader === "me"} gap={pt.gap} mine leagueId={l.id} />
+        <PrimetimeSide side={pt.opp} name={l.oppTeam || "Opponent"} lead={pt.leader === "opp"} gap={pt.gap} mine={false} leagueId={l.id} />
+      </div>
+      {pt.need && <div style={{ color: C.text }} className="text-xs mt-2" data-pt-need>{pt.need}</div>}
+      {pt.stage === "waiting" && pt.earlierPending > 0 && <div style={{ color: C.minor }} className="text-[11px] mt-1">{pt.earlierPending} starter{pt.earlierPending === 1 ? "" : "s"} still playing in earlier games.</div>}
+      {pt.stage === "final" && <div style={{ color: C.textMuted }} className="text-xs mt-2">{pt.leader === "tie" ? "Tied" : pt.leader === "me" ? "You won" : "You lost"} {f1(pt.my.points)} – {f1(pt.opp.points)}, nothing left to cheer for.</div>}
+    </div>
+  );
+}
+
+function PrimetimeTab({ data }) {
+  const leagues = data.leagues.filter((l) => l.primetime);
+  if (!leagues.length) return <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-pt-empty>No matchups this week.</div>;
+  const stages = [...new Set(leagues.map((l) => l.primetime.stage))];
+  const stage = stages.includes("waiting") ? "waiting" : stages.includes("sunday") ? "sunday" : stages.includes("monday") ? "monday" : "final";
+  return (
+    <div className="space-y-2" data-primetime data-pt-stage-all={stage}>
+      <div style={{ color: C.textMuted }} className="text-xs px-0.5">
+        {STAGE_TEXT[stage]}
+        <InfoNote label="About Primetime">For each league: your points and the opponent's, the players on each side who have not played yet in the Sunday-night and Monday-night games (with projections), and the lead on the side that is ahead. The win chance is the same estimate as the league cards. It follows the games live and moves on to the next stage by itself after the last 4 pm game and after the Sunday-night game.</InfoNote>
+      </div>
+      {leagues.map((l) => <PrimetimeCard key={l.id} l={l} />)}
+    </div>
+  );
+}
+
 export function GameDayScreen() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [view, setView] = useState("cheer"); // v4.7: "cheer" (Cheer meter) | "primetime"
   const [slot, setSlot] = useState("all");
   const [cat, setCat] = useState("all");
   // v2.9: tap league cards to show only those leagues' starters (yours + your opponents'); none selected = all.
@@ -304,6 +388,14 @@ export function GameDayScreen() {
       <div style={{ color: C.textFaint }} className="text-[10px] px-0.5">
         Your score (expected final) – opponent's. Green: you lead by at least 5% of the points both teams still have to score; red: you trail by that much. A projection in red has dropped since the week's first kickoff.
       </div>
+      <div className="flex" style={{ borderBottom: `1px solid ${C.border}` }} data-gd-tabs>
+        {[["cheer", "Cheer meter"], ["primetime", "Primetime"]].map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setView(k)} aria-current={view === k ? "page" : undefined} data-gd-tab={k} style={{ color: view === k ? C.text : C.textMuted, borderBottom: `2px solid ${view === k ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium">
+            {label}
+          </button>
+        ))}
+      </div>
+      {view === "primetime" ? <PrimetimeTab data={data} /> : <>
       <div className="flex flex-wrap gap-2 items-center">
         <Select label="Game slot" value={slot} onChange={setSlot} options={[{ value: "all", label: "All games" }, ...slots.map((s) => ({ value: s, label: s }))]} />
         <div className="flex gap-1.5 pt-3.5">
@@ -338,6 +430,7 @@ export function GameDayScreen() {
           <GameDayGroups slots={groupGameDay(upcoming)} ratio={data.settings.ratio} collapsed={collapsed} toggle={toggleCollapsed} />
         </div>
       )}
+      </>}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { ChevronRight, Loader2, X } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Avatar, Headshot, MatchupChip, StatLine, WeatherChip } from "./common.jsx";
 import { ClaimSection } from "./claimForm.jsx"; // v4.6
+import { CopyEntries, useCopyClaims } from "./copyClaims.jsx"; // v4.7
 import { ADV_COLOR, backupLine, C, POS_COLOR, SOURCE_TAG, SRC_COLOR, TEAM_COLORS, fmtAdv, fmtInt, normTeam, ordinalN, rankColor, readPref, teamRankColor, timeAgo, writePref } from "./theme.js";
 
 /* ------------------------------------------------------------------ */
@@ -128,12 +129,15 @@ export function PlayerCardModal({ target, onClose, league = null, onOpenAccount 
     let alive = true;
     setCard(null);
     setError(null);
+    setAddOpen(false);
     api.getPlayerCard(p.id, target.leagueId).then((c) => alive && setCard(c)).catch((e) => alive && setError(e.message));
     return () => {
       alive = false;
     };
-    setAddOpen(false);
   }, [p.id, target.leagueId]);
+  // v4.7: your claims on this player in your other leagues of the same type (only for players free in this league)
+  const copy = useCopyClaims(league?.id, Boolean(league && !league.bestBall));
+  const copyEntries = copy.data?.items?.find((i) => String(i.id) === String(p.id))?.entries || [];
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -192,6 +196,12 @@ export function PlayerCardModal({ target, onClose, league = null, onOpenAccount 
               {addOpen ? "Close claim" : `Add to ${league.name || "this team"}`}
             </button>
             {addOpen && <ClaimSection league={league} player={{ id: String(p.id), name }} onOpenAccount={onOpenAccount} onRefresh={onRefresh} />}
+          </div>
+        )}
+        {copyEntries.length > 0 && (
+          <div className="px-4 py-2 space-y-1" style={{ borderBottom: `1px solid ${C.border}` }} data-card-copy>
+            <div style={{ color: C.text }} className="text-xs font-semibold tracking-wide">YOUR CLAIMS IN YOUR OTHER LEAGUES</div>
+            <CopyEntries entries={copyEntries} />
           </div>
         )}
         {/* availability */}

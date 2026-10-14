@@ -174,3 +174,57 @@ export async function runClaims(username, built, deps, { moved = 0, now = Date.n
   if (sent.length) deps.notify?.(username, `${built.name}: auto mode`, `$0 claim${sent.length === 1 ? "" : "s"} placed for ${sent.map((x) => x.name).join(", ")}.`);
   return sent;
 }
+
+const fmtAt = (ms) => new Date(ms).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET";
+
+/**
+ * v4.7: what Auto mode would do in this league right now, as text lines plus the claims it would place (a dry run —
+ * nothing is sent). Uses the same planners as the real run. → { on, paused, eligible, claimsApply, lines, moves, claims,
+ * claimsAt, counts }
+ */
+export function preview(username, built, { perms = {}, waiverAt = null, leadMs = 60 * 60 * 1000, now = Date.now() } = {}) {
+  const s = getSettings(username);
+  const on = s.leagues[String(built?.id)] === true;
+  const eligible = eligibleLeague(built);
+  const out = { on, paused: s.paused, eligible, claimsApply: claimsApply(built), lines: [], moves: { ir: [], taxi: [] }, claims: [], claimsAt: null, counts: {} };
+  if (!eligible) {
+    out.lines.push("Auto mode isn't available for best ball leagues.");
+    return out;
+  }
+  if (!on) out.lines.push("Auto mode is off for this league — this is what it would do if it were on.");
+  else if (s.paused) out.lines.push("Auto mode is paused in every league — nothing will run until you un-pause it. This is what it would do.");
+  const plan = planMoves(built, now);
+  out.moves = plan;
+  const openIr = Math.max(0, (Number(built.irSlots) || 0) - (built.ir || []).filter(Boolean).length);
+  const openTaxi = Math.max(0, (Number(built.taxiSlots) || 0) - (built.taxi || []).filter(Boolean).length);
+  const bench = (built.bench || []).filter(Boolean).length;
+  const pendingAdds = (built.privateInfo?.claims?.pending || []).flatMap((c) => c.adds || []);
+  const openBench = Math.max(0, (Number(built.benchSlots) || 0) - bench - pendingAdds.length);
+  out.counts = { openIr, openTaxi, openBench, pendingClaims: pendingAdds.length };
+  for (const x of plan.ir) out.lines.push(`Move ${x.name} from the bench to injured reserve.`);
+  for (const x of plan.taxi) out.lines.push(`Move ${x.name} from the bench to the taxi squad.`);
+  if (!plan.ir.length && !plan.taxi.length) {
+    out.lines.push(openIr || openTaxi ? `No IR or taxi moves: ${[openIr ? `${openIr} open IR spot${openIr === 1 ? "" : "s"}` : null, openTaxi ? `${openTaxi} open taxi spot${openTaxi === 1 ? "" : "s"}` : null].filter(Boolean).join(" and ")}, but nobody on the bench is eligible.` : "No IR or taxi moves: those spots are full (or the league has none).");
+  } else if ((plan.ir.length || plan.taxi.length) && !perms.roster) {
+    out.lines.push('These moves would be skipped: "Roster changes" is switched off in Account → Sleeper access.');
+  }
+  if (!out.claimsApply) {
+    out.lines.push("No claims: this isn't a FAAB league (Auto mode never claims in waiver-priority leagues).");
+    return out;
+  }
+  const moved = plan.ir.length + plan.taxi.length;
+  const claims = planClaims(built, { pendingAdds, moved, now });
+  const byId = new Map((built.freeAgents || []).map((p) => [String(p.id), p]));
+  out.claims = claims.map((c) => {
+    const p = byId.get(c.addId) || {};
+    return { ...c, team: p.team || null, trendCount: p.trendCount ?? null, value: p.value ?? null };
+  });
+  if (claims.length) out.lines.push(`Place ${claims.length} $0 claim${claims.length === 1 ? "" : "s"} with no drop: ${claims.map((c) => c.name).join(", ")}.`);
+  else out.lines.push(Math.max(0, (Number(built.benchSlots) || 0) - Math.max(0, bench - moved) - pendingAdds.length) ? "No claims: no free agent passes the filters (QB/RB/WR/TE, healthy, game not started)." : "No claims: no open bench spots" + (pendingAdds.length ? " (your pending claims already fill them)." : "."));
+  if (claims.length && !perms.claims) out.lines.push('These claims would be skipped: "Waiver claims" is switched off in Account → Sleeper access.');
+  if (waiverAt) {
+    out.claimsAt = waiverAt - leadMs;
+    out.lines.push(`Claims go in an hour before waivers process (${fmtAt(waiverAt)}), so around ${fmtAt(waiverAt - leadMs)}; the list is worked out again then.`);
+  }
+  return out;
+}

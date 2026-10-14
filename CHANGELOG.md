@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,40 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.7 — Auto and Copy views, Cheer meter + Primetime, Value opportunities
+
+**Manual step required: yes (both optional, nothing breaks without them).** `docker-compose.yml` changed: (1) a new `PARSE_API_KEY` environment line — add your parse.bot key to your `.env` / Portainer variables (never in chat) to switch on the KeepTradeCut source; without it Value opportunities compares Roster Audit and FantasyCalc only. (2) the data mount is now `${DATA_PATH:-fantasy-manager-data}:/app/data` — leave `DATA_PATH` unset and the named volume is used exactly as before; set it to an absolute host folder (e.g. `/mnt/disk2/fantasy-manager`) to keep the data there (create the folder first; the container fixes its ownership at start). Redeploy the stack after changing the compose file (a Git/Portainer sync that pulls only the image will not pick it up).
+
+**Commit (short):** `v4.7: feat: Auto/Copy views, Primetime, values`
+
+**Commit (extended):**
+v4.7 adds two Waivers views, two Game Day tabs and a Trade page.
+
+Waivers → Available: views now sit in two rows. Auto shows in text what Auto mode would do right now and the $0 claims that follow, and holds the Auto mode check box (the old Auto card is gone). Copy lists your claims in your other leagues of the same type, pending and already processed (won or lost, with the winning bid), for players free in this league; player cards show them too.
+
+Game Day: everything under the league cards moved into a Cheer meter tab. The new Primetime tab shows, per league, a win % bar, both sides' points, who still has to play Sunday and Monday night with projections, the lead on the leading side and what the trailing side needs. It follows the games live.
+
+Trade → Value opportunities: dynasty values from Roster Audit, FantasyCalc and KeepTradeCut on a 0-100 scale, sorted by the gap between sources. KeepTradeCut comes through the third-party parse.bot API.
+
+Manual step required (both optional): PARSE_API_KEY env var and DATA_PATH in docker-compose.yml.
+
+Unverified: parse.bot responses, the 1QB scoring value, Primetime on a live Sunday.
+
+**What changed (details):**
+- **Waivers → Available, two rows.** Top row: All, Auto, Trending, Copy, Drops. Bottom row, in their old order: Hype Train, Spot Start, ROS, Stashes, Handcuff.
+- **Auto view.** Holds the Auto mode check box (and the pause-all box and log) — the Auto card that sat above every Waivers page is gone. Under it a text list of what Auto mode would do right now (move X to IR / taxi, place N $0 claims, when the claims go in, anything that would be skipped because a switch in Account → Sleeper access is off) and the resulting claims as rows. It is a dry run through the same planners the real run uses (`planMoves`, `planClaims`); nothing is sent from the page. Best ball leagues say Auto mode isn't available.
+- **Copy view.** Your claims in your other leagues of the same type (dynasty vs redraft/keeper; best ball left out) for players who are free in the league on screen: pending claims (read from Sleeper), and claims that already processed in the last 7 days — Won or Lost with your bid and, for a lost claim, the winning bid (from the FAAB database). One card per player with its claims underneath; the position filter and $ / % toggle work. The player card shows the same lines ("Your claims in your other leagues").
+- **Game Day.** Everything below the league cards is now the **Cheer meter** tab (game slot, For/Balanced/Against filters, the player list; tapping league cards still filters it). New **Primetime** tab: per league a win % bar under the title (your side left, the opponent right, like the Pick'em bar), both sides' points, the players on each side still to play in the Sunday-night and Monday-night games with their projections, the lead shown on the side that is ahead, and a line saying what the trailing side needs (its remaining players must outscore the leader's remaining players by more than the lead). Stage text: waiting for the last 4 pm game → Sunday night + Monday night → Monday night only → final. It is live (the page re-reads every minute), so it moves on by itself after the last 4 pm game and after the Sunday-night game.
+- **Trade → Value opportunities.** Trade now has two pages (Trade, Value opportunities). The new page lists dynasty players the value sources disagree on most: Roster Audit, FantasyCalc (dynasty) and KeepTradeCut. Each source is put on 0–100 (0 = its lowest-valued player, 100 = its highest) and the page shows each source's scaled value (and raw value) with the gap between the highest and lowest, biggest gap first. Superflex / 1QB and position filters. PPR, no tight-end premium.
+- **KeepTradeCut data.** KeepTradeCut itself has no API (its FAQ forbids scraping), so the values come through the third-party **parse.bot** wrapper you chose (`get_dynasty_rankings`, 3 credits a call, key in the `PARSE_API_KEY` env var, header `X-API-Key`). Each table (Superflex, 1QB) is kept for 2 days, only fetched when someone opens the page, and a monthly guard stops calls at 190 of the free tier's 200 credits. KTC players are matched to Sleeper players by name + position + team; the page shows how many could not be matched and how many credits this month's calls used.
+- **Compose / env.** `PARSE_API_KEY` and `DATA_PATH` as above (also in `.env.example`). The other API keys (Gemini, FantasyPros, Tank01, RapidAPI) stay env vars, as you decided.
+
+**Unverified:** I had no parse.bot key, so the KTC fetch was tested against a mock built from the documented response (`data.players[]` with `playerName`, `position`, `team`, `age`, `value`); the real response, the `scoring` value for 1QB (the page's sample shows `superflex`; I use `1qb`, a guess) and name matching of real KTC names are untested. A 1QB rejection shows as an error on the KeepTradeCut line of the page. The parse.bot wrapper reads a site whose terms forbid scraping — your call. Copy's processed claims exist only for leagues the FAAB database has collected (it reads each league after its waiver run), and the winning bid needs the winner's row there; pending claims need Account → Sleeper access and the other leagues to have been read. Primetime's windows (Sunday night = Sunday kickoffs at 7 pm ET or later; Monday night = Monday or later) and its win % (the existing Game Day estimate) were tested on constructed games, not on a live Sunday. The Auto preview is built from the last read of the league, not a fresh read. The `DATA_PATH` mount was only checked as valid YAML, not run.
+
+**My own choices (not confirmed with you):** the 0–100 scale is set over the players that every loaded source lists (so a source with a longer tail of cheap players isn't stretched differently) and falls back to each source's own table when fewer than 40 players are in common; a player needs two sources to appear; Value opportunities starts on Superflex or 1QB by the league you're in; Primetime lists the leagues that have a matchup, whether or not they're included in the Cheer meter; Copy's window for processed claims is 7 days; Auto's preview shows its own claims and counts pending claims as filling spots, like the real run; the Trade page's existing content is unchanged under a "Trade" tab.
 
 ---
 

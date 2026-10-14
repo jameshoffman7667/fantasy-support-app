@@ -53,6 +53,10 @@ services:
       - TANK01_RESERVE=${TANK01_RESERVE:-}
       # v2.7 Pick'em article scan (optional): Google AI Studio key + model id.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # v4.7 (optional): parse.bot API key — KeepTradeCut dynasty values for Trade → Value opportunities.
+      # Third-party wrapper (KeepTradeCut has no API). Free key: 200 credits a month. Leave empty and the page
+      # compares the other value sources only. Never paste the key anywhere but your .env / Portainer variables.
+      - PARSE_API_KEY=${PARSE_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-}
       - PORT=4000
       # Web Push (v2, pre-kickoff alerts) — optional; leave unset in your
@@ -68,10 +72,14 @@ services:
     ports:
       - "${SERVER_PORT:-4000}:4000"
     volumes:
-      # Named volume, not a bind mount — survives image pulls/updates
-      # and container recreation. Without this, the SQLite cache/injury
-      # history/session would reset every time you pull a new image tag.
-      - fantasy-manager-data:/app/data
+      # Named volume by default — survives image pulls/updates and container
+      # recreation. Without this, the SQLite cache/injury history/session would
+      # reset every time you pull a new image tag.
+      # v4.7: set DATA_PATH (in your .env or Portainer's variables) to keep the
+      # data in a folder you choose instead, e.g. DATA_PATH=/mnt/disk2/fantasy-manager
+      # (an absolute path on the host; create it first and make it writable —
+      # the container fixes ownership of it at start). Unset = the named volume.
+      - ${DATA_PATH:-fantasy-manager-data}:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
