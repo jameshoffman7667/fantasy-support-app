@@ -243,11 +243,14 @@ export function pushLineup(leagueId, starters, marks = {}) {
 export function pushReserve(leagueId, reserve) {
   return jsonPost(`/api/private/reserve`, { leagueId, reserve, confirm: true });
 }
+export function pushDrop(leagueId, playerId) {
+  return jsonPost(`/api/private/drop`, { leagueId, playerId, confirm: true });
+}
 export function pushTaxi(leagueId, taxi) {
   return jsonPost(`/api/private/taxi`, { leagueId, taxi, confirm: true });
 }
 export function pushClaim(leagueId, claim, marks = {}) {
-  return jsonPost(`/api/private/claim`, { leagueId, addId: claim.addId, dropId: claim.dropId || null, bid: claim.bid, confirm: true, keys: marks.keys });
+  return jsonPost(`/api/private/claim`, { leagueId, addId: claim.addId, dropId: claim.dropId || null, bid: claim.bid, confirm: true, keys: marks.keys, baseline: marks.baseline });
 }
 export function cancelClaim(leagueId, transactionId, leg = null) {
   return jsonPost(`/api/private/claim/cancel`, { leagueId, transactionId, leg, confirm: true });
@@ -361,6 +364,9 @@ export function getStatsConfig() {
 }
 export function queryStats(body) {
   return jsonPost(`/api/stats/query`, body);
+}
+export function getFaPerformance(leagueId) {
+  return jsonPost(`/api/stats/performance`, { leagueId });
 }
 export function getStatsView(key) {
   return request(`/api/stats/view?key=${encodeURIComponent(key)}`);

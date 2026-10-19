@@ -1,37 +1,29 @@
-// Supplemental usage data (snap share, targets, carries) from nflverse's
-// free, public community data releases — used to add context alongside
-// FantasyPros/ESPN projections, not to replace them.
+// Supplemental usage data (snap share, targets, carries) from nflverse's free, public community data releases —
+// context alongside the projections, not a replacement.
 //
-// NOT INDEPENDENTLY VERIFIED against a live response while building this
-// (same limitation noted elsewhere in this project for other unofficial
-// sources): the URLs and column names below are nflverse's documented
-// release layout (github.com/nflverse/nflverse-data), but the exact
-// header names are discovered and logged at runtime rather than assumed,
-// the same defensive pattern already used for the ffb_ids crosswalk.
-// If nflverse changes a release path or header name, this degrades to
-// "no usage data" for that week rather than a build failure.
+// v4.8: the old single files (snap_counts.csv, player_stats.csv) no longer exist (404). Both now come from the
+// per-season release files that server/nflverseStats.js already reads (snap_counts/snap_counts_<season>.csv and
+// stats_player/stats_player_week_<season>.csv). A failed fetch keeps the last good data for that season/week and the
+// miss is logged once, then at most once a day — not on every league refresh.
+// NOT verified against a live response from the build sandbox (no access to github.com there): the column names are
+// the ones nflverseStats.js already declares.
 import { cacheGet, cacheSet } from "./db.js";
+import * as nfl from "./nflverseStats.js";
 
-const SNAP_COUNTS_URL = "https://github.com/nflverse/nflverse-data/releases/download/snap_counts/snap_counts.csv";
-const WEEKLY_STATS_URL_TEMPLATE = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.csv";
-const USAGE_TTL_MS = 6 * 60 * 60 * 1000; // usage data updates roughly weekly; 6h just keeps a stuck build from serving day-old data forever
+const USAGE_TTL_MS = 6 * 60 * 60 * 1000;
+const LOG_EVERY_MS = 24 * 60 * 60 * 1000;
+const lastGood = new Map(); // cache key -> [[name, value], ...] from the last successful fetch
+const lastLogged = new Map(); // what -> ms
 
-let _loggedSnapHeaders = false;
-let _loggedStatsHeaders = false;
-
-function parseCsv(text) {
-  // Minimal CSV parser (no quoted-comma fields expected in these
-  // releases' relevant columns) — avoids pulling in a CSV dependency for
-  // a small, well-known file shape.
-  const lines = text.split("\n").filter((l) => l.trim().length);
-  if (!lines.length) return [];
-  const headers = lines[0].split(",").map((h) => h.trim());
-  return lines.slice(1).map((line) => {
-    const cells = line.split(",");
-    const row = {};
-    headers.forEach((h, i) => (row[h] = cells[i]));
-    return row;
-  });
+function logMissOnce(what, err, now = Date.now()) {
+  if (now - (lastLogged.get(what) || 0) < LOG_EVERY_MS) return false;
+  lastLogged.set(what, now);
+  console.warn(`[nflverseUsage] Couldn't fetch ${what} (${err.message}) — keeping the last data we had; usage badges may be missing until it returns. (Logged once a day.)`);
+  return true;
+}
+export function _resetForTests() {
+  lastGood.clear();
+  lastLogged.clear();
 }
 
 function normalizeName(name) {
@@ -42,29 +34,17 @@ function normalizeName(name) {
     .trim();
 }
 
-async function fetchCsv(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`nflverse fetch error ${res.status} on ${url}`);
-  return res.text();
-}
-
 /** Returns a Map keyed by normalized player name -> { snapPct, position, team }, for one season+week. */
 export async function getSnapShareForWeek(season, week) {
   const cacheKey = `nflverse:snaps:${season}:${week}`;
   const cached = cacheGet(cacheKey);
   if (cached !== null) return new Map(cached);
-
   try {
-    const csv = await fetchCsv(SNAP_COUNTS_URL);
-    const rows = parseCsv(csv);
-    if (!_loggedSnapHeaders && rows.length) {
-      console.log("[nflverseUsage] snap_counts.csv columns:", Object.keys(rows[0]).join(", "));
-      _loggedSnapHeaders = true;
-    }
+    const rows = await nfl.snaps(season, season);
     const map = new Map();
     for (const row of rows) {
-      if (String(row.season) !== String(season) || String(row.week) !== String(week)) continue;
-      const name = row.player || row.player_display_name || row.full_name;
+      if (String(row.week) !== String(week)) continue;
+      const name = row.player;
       if (!name) continue;
       const offensePct = row.offense_pct != null ? Number(row.offense_pct) : null;
       map.set(normalizeName(name), {
@@ -74,10 +54,11 @@ export async function getSnapShareForWeek(season, week) {
       });
     }
     cacheSet(cacheKey, [...map.entries()], USAGE_TTL_MS);
+    lastGood.set(cacheKey, [...map.entries()]);
     return map;
   } catch (err) {
-    console.warn(`[nflverseUsage] Couldn't fetch snap counts (${err.message}) — usage badges will be unavailable this refresh.`);
-    return new Map();
+    logMissOnce("snap counts", err);
+    return new Map(lastGood.get(cacheKey) || []);
   }
 }
 
@@ -86,18 +67,12 @@ export async function getUsageStatsForWeek(season, week) {
   const cacheKey = `nflverse:usage:${season}:${week}`;
   const cached = cacheGet(cacheKey);
   if (cached !== null) return new Map(cached);
-
   try {
-    const csv = await fetchCsv(WEEKLY_STATS_URL_TEMPLATE);
-    const rows = parseCsv(csv);
-    if (!_loggedStatsHeaders && rows.length) {
-      console.log("[nflverseUsage] player_stats.csv columns:", Object.keys(rows[0]).join(", "));
-      _loggedStatsHeaders = true;
-    }
+    const rows = await nfl.weekly(season, season);
     const map = new Map();
     for (const row of rows) {
-      if (String(row.season) !== String(season) || String(row.week) !== String(week)) continue;
-      const name = row.player_display_name || row.player_name;
+      if (String(row.week) !== String(week)) continue;
+      const name = row.player_display_name;
       if (!name) continue;
       map.set(normalizeName(name), {
         targets: row.targets != null ? Number(row.targets) : null,
@@ -105,10 +80,11 @@ export async function getUsageStatsForWeek(season, week) {
       });
     }
     cacheSet(cacheKey, [...map.entries()], USAGE_TTL_MS);
+    lastGood.set(cacheKey, [...map.entries()]);
     return map;
   } catch (err) {
-    console.warn(`[nflverseUsage] Couldn't fetch weekly usage stats (${err.message}) — usage badges will be unavailable this refresh.`);
-    return new Map();
+    logMissOnce("weekly usage stats", err);
+    return new Map(lastGood.get(cacheKey) || []);
   }
 }
 

@@ -121,8 +121,7 @@ async function refreshUser(state) {
         setBuiltLeague(state.username, leagueSummary.league_id, built);
         performance.record(state.username, built); // v3.3: timeline of the app's suggestions (for My performance)
         await scanForAlerts(state.username, built).catch((err) => console.warn(`[scheduler] Alert scan failed for league ${leagueSummary.league_id}: ${err.message}`));
-        // v4.4: Auto mode — every roster check fills empty IR / taxi spots with players already on the bench
-        await autoMode.runMoves(state.username, built, autoDeps()).catch((err) => console.warn(`[scheduler] Auto mode moves failed for league ${leagueSummary.league_id}: ${err.message}`));
+        // v4.8: Auto mode no longer runs at every roster check — see autoTick (6 am Toronto, 1 h before kickoffs and waivers).
       } catch (err) {
         console.warn(`[scheduler] Background refresh failed for ${state.username} / league ${leagueSummary.league_id}: ${err.message}`);
       }
@@ -300,11 +299,24 @@ async function startSitTick() {
 }
 
 /**
- * v4.4: Auto mode's claims. One hour before each switched-on FAAB league's waivers process (once per waiver run) the
- * league is read fresh, any empty IR / taxi spots are filled from the bench, and every remaining empty bench spot gets a
- * $0 claim. Checked every 10 minutes; the waiver time comes from faabDb.waiverSchedule (league settings or your setting).
+ * v4.8: Auto mode's packages (IR, Roster, Lineup, Flex — in that order) run for each switched-on league:
+ *   • every day at 6 am Toronto time,
+ *   • one hour before each kickoff among the players on the league's roster,
+ *   • one hour before the league's waivers process.
+ * Checked every 10 minutes. Each trigger runs once (a cache key), and triggers that are due together share one run.
  */
 export const AUTO_CLAIM_LEAD_MS = 60 * 60 * 1000;
+export const AUTO_DAILY_HOURS = [6, 7]; // 6:00–7:59 Toronto, so a restart around 6 doesn't skip the day
+/** The triggers that are due now. Pure. kickoffs = ms list; waiverNext = ms or null. → ["daily:2026-10-18", "kick:…", "waiver:…"] */
+export function autoDueTriggers(now, { kickoffs = [], waiverNext = null, torontoHourDate = null } = {}) {
+  const out = [];
+  const t = torontoHourDate || sleeper.torontoNow(now);
+  if (AUTO_DAILY_HOURS.includes(t.hour)) out.push(`daily:${t.date}`);
+  for (const k of [...new Set(kickoffs.filter((x) => Number.isFinite(x)))]) if (now >= k - AUTO_CLAIM_LEAD_MS && now < k) out.push(`kick:${k}`);
+  if (waiverNext != null && now >= waiverNext - AUTO_CLAIM_LEAD_MS && now < waiverNext) out.push(`waiver:${waiverNext}`);
+  return out;
+}
+const kickoffsOf = (b) => [...(b?.starters || []).map((x) => x.player), ...(b?.bench || [])].filter(Boolean).map((p) => p.kickoff).filter((k) => k != null);
 async function autoClaimTick(now = Date.now()) {
   for (const state of getAllUserStates()) {
     const user = getUser(state.username);
@@ -312,15 +324,16 @@ async function autoClaimTick(now = Date.now()) {
     const settings = autoMode.getSettings(state.username);
     if (settings.paused) continue;
     for (const leagueId of state.leagueIds) {
-      if (settings.leagues[String(leagueId)] !== true) continue;
+      if (!autoMode.isOn(state.username, leagueId)) continue;
       try {
         const league = await sleeper.getLeague(leagueId);
-        if (!faabDb.isFaab(league) || faabDb.isBestBall(league)) continue;
-        const sched = faabDb.waiverSchedule(league, faabDb.getSettings(state.username).waiverTimes[String(leagueId)], now);
-        if (now < sched.next - AUTO_CLAIM_LEAD_MS || now >= sched.next) continue;
-        const k = `automode:run:claims:${state.username}:${leagueId}:${sched.next}`;
-        if (cacheGet(k) !== null) continue;
-        cacheSet(k, true, 3 * 24 * 60 * 60 * 1000);
+        if (faabDb.isBestBall(league)) continue;
+        const sched = faabDb.isFaab(league) ? faabDb.waiverSchedule(league, faabDb.getSettings(state.username).waiverTimes[String(leagueId)], now) : null;
+        const cached = getBuiltLeague(state.username, leagueId)?.data;
+        const due = autoDueTriggers(now, { kickoffs: kickoffsOf(cached), waiverNext: sched?.next ?? null });
+        const fresh = due.filter((d) => cacheGet(`automode:run:${state.username}:${leagueId}:${d}`) === null);
+        if (!fresh.length) continue;
+        for (const d of fresh) cacheSet(`automode:run:${state.username}:${leagueId}:${d}`, true, 3 * 24 * 60 * 60 * 1000);
         const sleeperUser = await sleeper.getUser(state.username);
         const sleeperState = await sleeper.getState();
         const summary = (await sleeper.getUserLeagues(sleeperUser.user_id, sleeperState.season)).find((l) => l.league_id === leagueId);
@@ -328,12 +341,10 @@ async function autoClaimTick(now = Date.now()) {
         const trending = await sleeper.getTrendingAdds(200, 24);
         const built = await buildFullLeague(sleeperUser.user_id, summary, state.week || sleeperState.week, trending, []);
         setBuiltLeague(state.username, leagueId, built);
-        const deps = autoDeps();
-        const moved = await autoMode.runMoves(state.username, built, deps, now);
-        const sent = await autoMode.runClaims(state.username, built, deps, { moved: moved.length, now });
-        console.log(`[scheduler] Auto mode (${built.name}): ${moved.length} move(s), ${sent.length} $0 claim(s).`);
+        const res = await autoMode.runAll(state.username, built, autoDeps(), now);
+        console.log(`[scheduler] Auto mode (${built.name}; ${fresh.map((f) => f.split(":")[0]).join("+")}): ${res.moves.length} IR/taxi move(s), ${res.claims.length} $0 claim(s), ${res.lineup.length} lineup change(s), ${res.flex.length} flex swap(s).`);
       } catch (err) {
-        console.warn(`[scheduler] Auto mode claims failed for league ${leagueId}: ${err.message}`);
+        console.warn(`[scheduler] Auto mode failed for league ${leagueId}: ${err.message}`);
       }
     }
   }

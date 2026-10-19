@@ -34,11 +34,11 @@ export function generateClaims({ bids = [], drops = [], openSpots = 0 }) {
   const warnings = [];
   sorted.forEach((b, i) => {
     const k = i + 1;
-    if (openSpots > 0) claims.push({ key: claimKey(b.id), addId: b.id, addName: b.name, pos: b.pos, bid: b.bid, dropId: null, dropName: null, source: "plan", dropPriority: -1 });
+    if (openSpots > 0) claims.push({ key: claimKey(b.id), addId: b.id, addName: b.name, pos: b.pos, bid: b.bid, dropId: null, dropName: null, source: "plan", dropPriority: -1, entryIdx: b._i });
     const need = Math.max(0, k - openSpots);
     const n = Math.min(willing.length, need);
     for (let j = 0; j < n; j++) {
-      claims.push({ key: claimKey(b.id, willing[j].id), addId: b.id, addName: b.name, pos: b.pos, bid: b.bid, dropId: willing[j].id, dropName: willing[j].name, source: "plan", dropPriority: j });
+      claims.push({ key: claimKey(b.id, willing[j].id), addId: b.id, addName: b.name, pos: b.pos, bid: b.bid, dropId: willing[j].id, dropName: willing[j].name, source: "plan", dropPriority: j, entryIdx: b._i });
     }
     if (need > willing.length) {
       warnings.push(`${b.name} (bid #${k}) needs ${need} willing drop(s) to be covered if every earlier claim wins, but only ${willing.length} ${willing.length === 1 ? "is" : "are"} marked willing.`);
@@ -74,7 +74,9 @@ export function effectiveClaims(plan, { openSpots = 0 } = {}) {
 /**
  * Claims grouped by bid (highest first). Inside a group: the user's saved
  * order (`order`, from the drag handle) first; anything not in it — new
- * claims — goes to the bottom, ordered by the dropped player's priority.
+ * claims — goes to the bottom. v4.8: those are ordered by the player being picked up first — in the order the
+ * bids were entered on the Available page (`entryIdx`; changing a bid later keeps the original place) — and
+ * second by the player being dropped (his priority in the drop list). Before v4.8 the drop came first.
  */
 export function groupClaims(claims, order = []) {
   const idx = new Map(order.map((k, i) => [k, i]));
@@ -93,6 +95,9 @@ export function groupClaims(claims, order = []) {
           const ix = idx.has(x.c.key) ? idx.get(x.c.key) : Infinity;
           const iy = idx.has(y.c.key) ? idx.get(y.c.key) : Infinity;
           if (ix !== iy) return ix === Infinity ? 1 : iy === Infinity ? -1 : ix - iy;
+          const ex = x.c.entryIdx ?? Infinity;
+          const ey = y.c.entryIdx ?? Infinity;
+          if (ex !== ey) return ex === Infinity ? 1 : ey === Infinity ? -1 : ex - ey;
           return x.c.dropPriority - y.c.dropPriority || x.gi - y.gi;
         })
         .map((x) => x.c),

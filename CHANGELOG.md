@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -33,6 +33,25 @@ instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
 
 ---
+
+## v4.8 — Waivers rework, Performance view, Auto packages
+
+**Manual step required: none.** No `docker-compose.yml` change; `PARSE_API_KEY` was added in v4.7. Optional: set `PARSE_KTC_SCRAPER_ID` only if your parse.bot scraper id differs from the built-in account one.
+
+**Commit message (short):** v4.8: Waivers rework, Performance, Auto packages
+
+**Commit message (extended):** v4.8: Waivers gets a Drop candidates page (first tab) with a roster-compliance card that fixes IR and roster-limit problems in stages, a shared live FAAB card and per-bid % maths on Available, copy-all-bids by %, and a new Performance view (points from games with >20% of snaps). Claim Generator orders equal bids by entry order, drag lifts the card with a drop-line, and a larger handle moves all of a player's claims together. After a claims push every waiver variance (yellow and red) is quiet until that week's last game; the push button locks at once and the server refuses duplicate claims. Own players on bye no longer count in "beats a starter/bench" variances. Auto mode splits into IR, Roster, Lineup and Flex packages per league, run at 6 am Toronto and an hour before kickoffs and waivers; Roster picks from a chosen ranking with 2 spare claims. Also: position boxes on player cards, tab counts, Roster tab resets on league change, proposals in Auto order, Cheer meter scoped to selected leagues, snap-count badges fixed (per-season nflverse file), KTC calls fixed (POST, account scraper id, clear 401/402 messages). No compose change; optional env PARSE_KTC_SCRAPER_ID.
+
+### What changed
+- **Waivers pages** are now Drop candidates · Available · Claim Generator · Pending Claims · Opponents, with counts in brackets (selected drops, players with a bid). The willing-to-drop ranking moved to Drop candidates.
+- **Roster compliance card** (Drop candidates): lists non-eligible players in IR, IR-eligible players not on IR and a roster over its limit; red with suggested moves, each ticked; the number of suggested drops (5 lowest-rostered shown) updates live as IR moves are (un)ticked. "Push to Sleeper" runs IR-out, then IR-in, then drops with a 10 s pause and stops at the first unconfirmed step. **Unverified:** the IR move call and the drop call have never been seen working live.
+- **Available:** FAAB card identical to the Claim Generator's (left = real budget, right = after the bids entered, live); under each bid, bid/remaining as % (dollars mode) or dollars (% mode). Copy view: "Copy all bids by %" from another league (overwrites); tapping a league or bid fills that % of this league's budget (also on the player card).
+- **Claim Generator:** equal bids ordered by Available-page entry order (a changed bid keeps its entry position); drag lifts the card with a "+" drop line; a larger second handle moves all of a player's same-bid claims as a stacked deck; claims just pushed are removed locally and the server refuses an identical claim (same player, drop, bid) already queued or just sent.
+- **Variances:** after a claims push every waiver-page variance existing at that moment (yellow and red) stays quiet until the end of that week's last game; only new ones (or yellow→red) show. Scope: waiver page, per league (the Roster-page suggestions and other leagues are not included — not confirmed). Own starters/bench on bye are ignored by "beats a starter / bench player".
+- **Performance view** (Available, top row): free agents by actual points, games with >20% snaps only; Last week / This season / 4 weeks / Weighted avg (1, ½, ¼, ⅛ ÷ 1.875, same in Total and PPG); Total vs PPG. **Unverified:** the snap-share fields (nflverse offense_pct, Sleeper off_snp/tm_off_snp) were not checked against live data.
+- **Auto mode** split into Auto IR (in/out of IR, plus taxi), Auto roster, Auto lineup, Auto flex, each on/off per league in a collapsible section; run order IR, Roster, Lineup, Flex at 6 am Toronto daily, 1 h before kickoffs and 1 h before waivers. Old Auto mode = all four on. Roster picks from a chosen ranking (All, Trending, Hype, Spot, ROS, Stash, Handcuff) with 2 more claims than empty bench spots (the cap of 5 is gone; hard cap 12).
+- **Smaller:** coloured position box on player cards; Roster tab resets to Current lineup when the league changes; Roster proposals ordered IR, Roster, Lineup, Flex; Cheer meter uses only the selected leagues.
+- **Fixes:** usage (snap) badges use nflverse's per-season files, keep the last good data and log a miss once a day; KTC now POSTs to the account's scraper with a JSON body and shows plain 401/402/missing-key messages (the 1QB `scoring` value and field names remain unverified).
 
 ## v4.7 — Auto and Copy views, Cheer meter + Primetime, Value opportunities
 

@@ -14,6 +14,8 @@ export const CATEGORIES = [
   // v4.7: not ranked lists of free agents — Auto shows what Auto mode would do, Copy your claims in your other leagues.
   { key: "auto", label: "Auto", blurb: "What Auto mode would do in this league right now: the moves, and the claims that result." },
   { key: "trending", label: "Trending", blurb: "Most added on Sleeper in the last 24 hours." },
+  // v4.8: actual fantasy points from games with more than 20% of snaps (own endpoint, own data).
+  { key: "perf", label: "Performance", blurb: "Free agents ranked by the fantasy points they actually scored (games with more than 20% of snaps only)." },
   { key: "copy", label: "Copy", blurb: "Your claims in your other leagues of the same type, for players who are free in this league." },
   // v4.4.2: not a ranked list of free agents — other teams' drops in the last 14 days (own page, own data).
   { key: "drops", label: "Drops", blurb: "Players other teams dropped in the last 14 days." },
@@ -24,7 +26,7 @@ export const CATEGORIES = [
   { key: "handcuff", label: "Handcuff", blurb: "Backups whose starter is out, doubtful or likely to miss." },
 ];
 // v4.7: the views are drawn in two rows — these five first, the rest below in their order above.
-export const TOP_ROW = ["all", "auto", "trending", "copy", "drops"];
+export const TOP_ROW = ["all", "auto", "trending", "perf", "copy", "drops"]; // v4.8: Performance joins the top row (shorter labels = more room)
 export const categoryRows = () => [TOP_ROW.map((k) => CATEGORIES.find((c) => c.key === k)), CATEGORIES.filter((c) => !TOP_ROW.includes(c.key))];
 export const POSITION_FILTERS = ["ALL", "QB", "RB", "WR", "TE", "FLEX"];
 export const CAPS = { all: 5, position: 15, flex: 25 };
@@ -51,4 +53,13 @@ export function keyLabel(category, card) {
   if (category === "ros" && card.ros != null) return `ROS ${Number(card.ros).toFixed(1)} pts`;
   if (category === "stash" && card.value != null) return `Value ${Math.round(card.value).toLocaleString()}`;
   return null;
+}
+
+// v4.8: Performance view — the sort options and the number shown for each
+export const PERF_SORTS = [["lastWeek", "Last week"], ["season", "This season"], ["last4", "4 weeks"], ["weighted", "Weighted avg"]];
+export function perfValue(r, sort, mode) {
+  if (sort === "lastWeek") return r.lastWeek;
+  if (sort === "season") return mode === "ppg" ? r.seasonPpg : r.seasonTotal;
+  if (sort === "last4") return mode === "ppg" ? r.last4Ppg : r.last4Total;
+  return r.weighted; // weighted average: the same in Total and PPG
 }

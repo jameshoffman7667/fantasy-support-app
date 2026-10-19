@@ -340,8 +340,33 @@ export async function updateReserve(username, { leagueId, rosterId, reserve, con
   return doWrite(username, leagueId, "update_reserve", { rosterId, reserve: list }, async () => {
     const d = await call(username, `mutation($l:Snowflake!,$r:Int!,$s:[String]){ roster_update_reserve(league_id:$l, roster_id:$r, reserve:$s){ roster_id reserve } }`, { l: String(leagueId), r: Number(rosterId), s: list });
     const got = (d.roster_update_reserve?.reserve || []).map(String);
-    const ok = list.every((id) => got.includes(id));
+    const ok = got.length === list.length && list.every((id) => got.includes(id)); // v4.8: exact match, so a move OUT of IR is checked too
     return { ok, verified: ok, readBack: got, detail: ok ? "reserve updated and verified" : "Sleeper's response didn't list the reserve change — check Sleeper." };
+  });
+}
+
+/**
+ * v4.8: drop one player outright (no claim). UNVERIFIED: the mutation name/shape has never been seen working, so it is
+ * judged by reading the roster back from Sleeper's public API — the player must no longer be on it. If Sleeper
+ * refuses, the detail says to drop him in Sleeper instead.
+ */
+export async function dropPlayer(username, { leagueId, rosterId, playerId, confirm }) {
+  guardWrite(username, confirm, "roster");
+  return doWrite(username, leagueId, "drop_player", { rosterId, playerId: String(playerId) }, async () => {
+    try {
+      await call(username, `mutation($l:Snowflake!,$r:Int!,$p:String!){ roster_drop_player(league_id:$l, roster_id:$r, player_id:$p){ roster_id } }`, { l: String(leagueId), r: Number(rosterId), p: String(playerId) });
+    } catch (e) {
+      return { ok: false, detail: `Sleeper refused the drop: ${e.message}. Drop him in Sleeper instead.` };
+    }
+    let gone = null;
+    try {
+      const rosters = await sleeperPublic.getRosters(leagueId, { fresh: true });
+      const mine = (rosters || []).find((r) => Number(r.roster_id) === Number(rosterId));
+      if (mine) gone = ![...(mine.players || []), ...(mine.reserve || []), ...(mine.taxi || [])].map(String).includes(String(playerId));
+    } catch {
+      /* read-back unavailable */
+    }
+    return { ok: gone === true, verified: gone === true, detail: gone === true ? "player dropped and verified" : gone === false ? "Sleeper answered but the player is still on the roster — drop him in Sleeper." : "Sleeper answered but the roster could not be read back — check Sleeper." };
   });
 }
 

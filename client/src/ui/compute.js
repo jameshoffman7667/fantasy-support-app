@@ -102,6 +102,8 @@ export function faCanCount(fa, league) {
   if (isLocked(fa, league)) return false;
   return true;
 }
+// v4.8: one of YOUR players on bye (projected 0) is never the player a free agent "beats".
+export const onBye = (p) => Boolean(p) && (p.status === "Bye" || p.kickoffLabel === "On bye");
 export function compareToRoster(league, fa) {
   const eligible = slotEligible;
   const projOf = (p) => (p && p.proj != null ? p.proj : 0);
@@ -110,14 +112,14 @@ export function compareToRoster(league, fa) {
   let severity = "ok";
   if (fa.proj != null && faCanCount(fa, league)) {
     // v3.4: a locked starter can't be replaced this week, so he's not a comparison
-    const slots = (league.starters || []).filter((s) => eligible(s.slot, fa.pos) && !isLocked(s.player, league));
+    const slots = (league.starters || []).filter((s) => eligible(s.slot, fa.pos) && !isLocked(s.player, league) && !onBye(s.player));
     const weakest = slots.length ? slots.reduce((m, s) => (projOf(s.player) < projOf(m.player) ? s : m)) : null;
     if (weakest && fa.proj > projOf(weakest.player)) {
       rule = "Free agent outprojects a starter";
       severity = "major";
       note = `projected ${fa.proj.toFixed(1)} vs ${weakest.player ? weakest.player.name : "(empty)"} ${projOf(weakest.player).toFixed(1)} at ${weakest.slot}`;
     } else {
-      const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos && !isLocked(p, league)); // v3.4: nor can a locked bench player be dropped
+      const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos && !isLocked(p, league) && !onBye(p)); // v3.4, v4.8: nor can a locked bench player be dropped
       // v4.6: dynasty leagues compare a free agent with the bench by dynasty (trade) value, not points. When the free agent
       // or every bench player at the position has no value, the comparison falls back to this week's projection.
       const byValue = league.leagueType === "dynasty" && fa.value != null && bench.some((p) => p.value != null);
@@ -213,4 +215,40 @@ export function computeInjury(league) {
   const rows = league.injuryEvents || [];
   const status = rows.some((r) => !r.seen) ? "major" : "ok"; // v4.4.2: a status seen before is listed but no longer yellow
   return { rows, status };
+}
+
+/**
+ * v4.8: roster compliance for Waivers → Drop candidates.
+ *   badIr         — players in an IR slot who are not IR-eligible (move out → bench)
+ *   inCandidates  — IR-eligible starters/bench players who are not on IR (move in), only while an IR slot is free
+ *   Selections: outIds / inIds (arrays of ids). The roster-limit maths follows them live:
+ *   moving a player OUT of IR adds a roster spot used; moving one IN frees a spot.
+ * Returns { badIr, inCandidates, irSlots, irOpenAfterOuts, spots, players, over, dropsNeeded, dropList, issues }.
+ * dropList = the 5 lowest-rostered droppable bench players (not locked, not moving to IR), lowest first.
+ */
+export function rosterCompliance(league, { outIds = null, inIds = null } = {}) {
+  const starters = (league.starters || []).map((s) => s.player).filter(Boolean);
+  const bench = (league.bench || []).filter(Boolean);
+  const ir = (league.ir || []).filter(Boolean);
+  const irSlots = Number.isFinite(league.irSlots) ? league.irSlots : 0;
+  const badIr = ir.filter((p) => !p.irEligible);
+  const outSel = new Set((outIds ?? badIr.map((p) => String(p.id))).map(String));
+  const irOpenAfterOuts = Math.max(0, irSlots - ir.length + badIr.filter((p) => outSel.has(String(p.id))).length);
+  const inCandidates = irSlots - ir.length + badIr.length > 0 ? [...starters, ...bench].filter((p) => p.irEligible && !isLocked(p, league)) : [];
+  const inSel = new Set((inIds ?? inCandidates.slice(0, irOpenAfterOuts).map((p) => String(p.id))).map(String));
+  const movingIn = inCandidates.filter((p) => inSel.has(String(p.id))).length;
+  const spots = starters.length + (Number.isFinite(league.benchSlots) ? league.benchSlots : bench.length);
+  const outCount = badIr.filter((p) => outSel.has(String(p.id))).length;
+  const players = starters.length + bench.length + outCount - movingIn;
+  const over = Math.max(0, players - spots);
+  const rawPlayers = starters.length + bench.length;
+  const dropList = bench
+    .filter((p) => !isLocked(p, league) && !inSel.has(String(p.id)))
+    .sort((a, b) => (a.rostered ?? 101) - (b.rostered ?? 101) || (a.proj ?? 0) - (b.proj ?? 0))
+    .slice(0, 5);
+  const issues = [];
+  if (badIr.length) issues.push(`${badIr.length} player${badIr.length === 1 ? " is" : "s are"} in IR but not eligible`);
+  if (inCandidates.length) issues.push(`${inCandidates.length} IR-eligible player${inCandidates.length === 1 ? " is" : "s are"} not on IR`);
+  if (rawPlayers > spots) issues.push(`roster over the limit by ${rawPlayers - spots}`);
+  return { badIr, inCandidates, inSelDefault: inCandidates.slice(0, irOpenAfterOuts).map((p) => String(p.id)), irSlots, irOpenAfterOuts, spots, players, over, dropsNeeded: over, dropList, issues, rawOver: Math.max(0, rawPlayers - spots) };
 }

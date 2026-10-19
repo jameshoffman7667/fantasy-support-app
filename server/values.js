@@ -41,7 +41,14 @@ async function getJson(url, { method = "GET", body = null, timeoutMs = 20000, he
       body: body ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
+    if (!res.ok) {
+      let detail = null;
+      try { const j = await res.json(); detail = typeof j?.error === "string" ? j.error : typeof j?.error?.message === "string" ? j.error.message : null; } catch { /* not JSON */ }
+      const err = new Error(`HTTP ${res.status} from ${new URL(url).host}${detail ? ` — ${detail}` : ""}`);
+      err.status = res.status;
+      err.detail = detail;
+      throw err;
+    }
     return await res.json();
   } finally {
     clearTimeout(t);
@@ -279,7 +286,17 @@ export async function fcValues({ dynasty = false, numQbs = 1, numTeams = 12, ppr
  * UNVERIFIED (no key in the build sandbox): the response is parsed as documented ({data:{players:[{playerName, position,
  * team, age, value, rank, ...}]}}), and the `scoring` values: "superflex" is in the page's sample, "1qb" is a guess.
  */
-const KTC_BASE = process.env.KTC_API_BASE || "https://api.parse.bot/scraper/52095a49-4d80-48b7-9495-40d7716e1e65";
+// v4.8: calls are POST https://api.parse.bot/scraper/{scraper_id}/{endpoint} with a JSON body. The scraper id is the one on
+// the account that owns the key (optional env PARSE_KTC_SCRAPER_ID overrides it); replies are { data, status } envelopes.
+export const KTC_SCRAPER_ID_DEFAULT = "32ee308d-54ca-494a-b31f-23a56db6d6b2";
+export const ktcScraperId = () => process.env.PARSE_KTC_SCRAPER_ID || KTC_SCRAPER_ID_DEFAULT;
+export const ktcBase = () => process.env.KTC_API_BASE || `https://api.parse.bot/scraper/${ktcScraperId()}`;
+/** A plain-English reason for a failed parse.bot call (401 bad key, 402 out of credits, else the error it sent). */
+export function ktcErrorMessage(err) {
+  if (err?.status === 401) return "parse.bot rejected the API key (401) — check PARSE_API_KEY on the server";
+  if (err?.status === 402) return "parse.bot says the account is out of credits (402) — top up at parse.bot or wait for the monthly reset";
+  return err?.message || "unknown error";
+}
 export const KTC_TTL = 2 * DAY;
 export const KTC_CALL_CREDITS = 3;
 export const KTC_MONTH_GUARD = 190;
@@ -310,7 +327,13 @@ export async function ktcValues({ superflex = true } = {}) {
     const used = ktcCreditsUsed();
     if (used + KTC_CALL_CREDITS > KTC_MONTH_GUARD) throw new Error(`monthly credit guard reached (${used} of the free 200 credits used this month)`);
     cacheSet(ktcCreditKey(), used + KTC_CALL_CREDITS, 35 * DAY);
-    const json = await getJson(`${KTC_BASE}/get_dynasty_rankings?limit=400&scoring=${scoring}&position=all&tep=0`, { headers: { "X-API-Key": process.env.PARSE_API_KEY } });
+    let json;
+    try {
+      json = await getJson(`${ktcBase()}/get_dynasty_rankings`, { method: "POST", body: { scoring, position: "all", tep: 0, limit: 400 }, headers: { "X-API-Key": process.env.PARSE_API_KEY } });
+    } catch (e) {
+      if (e.status === 401 || e.status === 402) cacheSet(ktcCreditKey(), used, 35 * DAY); // the call was not charged
+      throw new Error(ktcErrorMessage(e));
+    }
     const list = parseKtcRankings(json);
     if (!list.length) throw new Error("no usable players in the response");
     return list;

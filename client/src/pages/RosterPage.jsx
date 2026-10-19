@@ -12,31 +12,8 @@ import { StartSitButton, StartSitIcon } from "../ui/startSit.jsx"; // v4.3
 /* ------------------------------------------------------------------ */
 /*  v3.6 ROSTER PAGE: "Current lineup" and "Proposed lineup" tabs        */
 /* ------------------------------------------------------------------ */
-// Sleeper-style slot colours: positions from POS_COLOR, bench / IR / taxi their own.
-const SLOT_EXTRA = { BN: "#5E7570", IR: "#D6533B", TAXI: "#A08BE0" };
-const slotColor = (slot) => POS_COLOR[slot] || SLOT_EXTRA[slot] || POS_COLOR.FLEX;
-// v4.5: a flex slot is shown as vertical bands in the colours of the positions that can play it.
-const flexBands = (label) => (FLEX_ELIGIBLE[label] ? FLEX_ELIGIBLE[label].map((p) => POS_COLOR[p]).filter(Boolean) : null);
-const bandBackground = (label) => {
-  const bands = flexBands(label);
-  if (!bands || bands.length < 2) return null;
-  const w = 100 / bands.length;
-  return `linear-gradient(to right, ${bands.map((c, i) => `${c} ${i * w}%, ${c} ${(i + 1) * w}%`).join(", ")})`;
-};
-export function PosBox({ label, small = false }) {
-  const bands = bandBackground(label);
-  return (
-    <span
-      style={{ background: bands || slotColor(label), color: "#0E1416", fontFamily: "Oswald, sans-serif", letterSpacing: "0.02em", textShadow: bands ? "0 0 3px rgba(255,255,255,0.75), 0 0 1px rgba(255,255,255,0.9)" : undefined }}
-      className={`inline-flex items-center justify-center rounded font-bold shrink-0 ${small ? "text-[9px] w-9 h-5" : "text-[11px] w-11 h-7"}`}
-      data-pos-box={label}
-      {...(bands ? { "data-flex-bands": flexBands(label).length } : {})}
-    >
-      {label}
-    </span>
-  );
-}
-
+import { PosBox } from "../ui/posBox.jsx"; // v4.8: moved to ui/ so the player card shares it
+export { PosBox };
 const PROP_ORDER = ["passyds", "passtd", "intsthrown", "comp", "passatt", "rushyds", "longrush", "recs", "recyds", "rushrec", "anytd", "kickpts"];
 const PROP_LABEL = { passyds: "pass yd", passtd: "pass TD", intsthrown: "INT", comp: "cmp", passatt: "att", rushyds: "rush yd", longrush: "long rush", recs: "rec", recyds: "rec yd", rushrec: "rush+rec yd", kickpts: "kick pts" };
 export function propText(props) {
@@ -715,6 +692,8 @@ function LineupTab({ league, onSaveRanking, hideWeather = false }) {
 /* ------------------------------------------------------------------ */
 export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, onOpenTab = null }) {
   const [sub, setSub] = useState("current");
+  // v4.8: switching leagues from the top bar always returns to the Current lineup tab.
+  useEffect(() => { setSub("current"); }, [league.id]);
   const suggested = useMemo(() => proposeChanges(league), [league]);
   // v4.4: hand-made changes from the Proposed lineup (tap a position box), applied after the ticked suggestions
   const [customs, setCustoms] = useState([]);

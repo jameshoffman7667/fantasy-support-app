@@ -3,7 +3,8 @@ import { ChevronRight, Loader2, X } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Avatar, Headshot, MatchupChip, StatLine, WeatherChip } from "./common.jsx";
 import { ClaimSection } from "./claimForm.jsx"; // v4.6
-import { CopyEntries, useCopyClaims } from "./copyClaims.jsx"; // v4.7
+import { CopyEntries, applyCopiedBid, useCopyClaims } from "./copyClaims.jsx"; // v4.7, v4.8
+import { PosBox } from "./posBox.jsx"; // v4.8
 import { ADV_COLOR, backupLine, C, POS_COLOR, SOURCE_TAG, SRC_COLOR, TEAM_COLORS, fmtAdv, fmtInt, normTeam, ordinalN, rankColor, readPref, teamRankColor, timeAgo, writePref } from "./theme.js";
 
 /* ------------------------------------------------------------------ */
@@ -138,6 +139,17 @@ export function PlayerCardModal({ target, onClose, league = null, onOpenAccount 
   // v4.7: your claims on this player in your other leagues of the same type (only for players free in this league)
   const copy = useCopyClaims(league?.id, Boolean(league && !league.bestBall));
   const copyEntries = copy.data?.items?.find((i) => String(i.id) === String(p.id))?.entries || [];
+  // v4.8: tap a league name or bid in the claims list → this league's bid is filled with that percentage of budget
+  const [usedBid, setUsedBid] = useState(null);
+  const canUseBid = Boolean(league?.waiverInfo?.faab && league?.waiverInfo?.budget);
+  const useBid = async (e) => {
+    try {
+      const dollars = await applyCopiedBid(league, { id: String(p.id), name: card?.name || p.name || "Player", pos: card?.pos || p.pos }, e.pct);
+      setUsedBid({ key: `${e.leagueId}:${e.kind}:${e.at ?? ""}`, dollars, pct: e.pct });
+    } catch (err) {
+      setUsedBid({ key: null, err: err.message });
+    }
+  };
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -172,7 +184,7 @@ export function PlayerCardModal({ target, onClose, league = null, onOpenAccount 
               <div style={{ color: "#fff", fontFamily: "Oswald, sans-serif" }} className="text-lg font-semibold leading-tight uppercase">{first}</div>
               <div style={{ color: "#fff", fontFamily: "Oswald, sans-serif" }} className="text-2xl font-bold leading-tight uppercase truncate">{last}</div>
               <div className="text-xs mt-0.5" style={{ color: "#ffffffdd" }}>
-                <span style={{ color: posColor, background: "#00000055" }} className="font-bold rounded px-1">{pos}</span> · {team || "FA"}{card?.number != null ? ` · #${card.number}` : ""}
+                <PosBox label={pos} small /> · {team || "FA"}{card?.number != null ? ` · #${card.number}` : ""}
                 {card?.bye != null || p.bye != null ? ` · Bye ${card?.bye ?? p.bye}` : ""}
               </div>
             </div>
@@ -201,7 +213,8 @@ export function PlayerCardModal({ target, onClose, league = null, onOpenAccount 
         {copyEntries.length > 0 && (
           <div className="px-4 py-2 space-y-1" style={{ borderBottom: `1px solid ${C.border}` }} data-card-copy>
             <div style={{ color: C.text }} className="text-xs font-semibold tracking-wide">YOUR CLAIMS IN YOUR OTHER LEAGUES</div>
-            <CopyEntries entries={copyEntries} />
+            <CopyEntries entries={copyEntries} onUse={canUseBid ? useBid : null} usedKey={usedBid?.key ?? null} />
+            {usedBid && <div style={{ color: usedBid.err ? C.major : C.ok }} className="text-[11px]" data-card-copy-result>{usedBid.err || `Bid set to $${usedBid.dollars} (${usedBid.pct}% of budget) — it is on this league's Claim Generator.`}</div>}
           </div>
         )}
         {/* availability */}

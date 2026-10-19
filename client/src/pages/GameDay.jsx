@@ -1,3 +1,4 @@
+import { scopeCheer } from "../gameDayCheer.js"; // v4.8
 import * as api from "../api.js";
 import { ChevronRight, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -355,10 +356,10 @@ export function GameDayScreen() {
   if (error && !data) return <div className="px-4 py-6"><ErrorScreen message={error} /></div>;
   if (!data) return <BootstrapScreen />;
   const slots = [...new Set(data.players.map((p) => p.kickoffLabel).filter(Boolean))];
-  const inLeagues = (p) => leagueSel.size === 0 || p.leagues.some((l) => leagueSel.has(l.leagueId));
-  const shown = data.players.filter((p) => inLeagues(p) && (slot === "all" || p.kickoffLabel === slot) && (cat === "all" || p.category === cat));
+  const scoped = scopeCheer(data.players, leagueSel, data.settings.ratio); // v4.8
+  const shown = scoped.filter((p) => (slot === "all" || p.kickoffLabel === slot) && (cat === "all" || p.category === cat));
   const counts = { for: 0, balanced: 0, against: 0 };
-  data.players.filter(inLeagues).forEach((p) => counts[p.category]++);
+  scoped.forEach((p) => counts[p.category]++);
   const complete = shown.filter((p) => p.state === "post");
   const upcoming = shown.filter((p) => p.state !== "post");
   const completeOpen = !collapsed.has("__complete");

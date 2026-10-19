@@ -92,8 +92,10 @@ export function proposeChanges(league) {
       }
     }
   }
-  return out;
+  // v4.8: proposals are worked through in the same order as Auto mode: IR, Roster (adds), Lineup, Flex (swaps).
+  return out.map((c, i) => ({ c, i })).sort((a, b) => (CHANGE_ORDER[a.c.type] ?? 2) - (CHANGE_ORDER[b.c.type] ?? 2) || a.i - b.i).map((x) => x.c);
 }
+export const CHANGE_ORDER = { ir: 0, taxi: 0, add: 1, lineup: 2, custom: 2, swap: 3 };
 
 /**
  * v4.4: the best bench player for a lineup slot whose suggested player is a free agent — eligible for the slot, not

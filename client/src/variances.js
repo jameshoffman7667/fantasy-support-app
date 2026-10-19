@@ -56,10 +56,16 @@ export function collectVariances(lg) {
   const lineupMark = pm.lineup && String(pm.lineup.week) === String(lg.week) ? pm.lineup : null;
   const waiverMark = pm.waiver && Date.now() - (pm.waiver.at || 0) < 7 * 86400000 ? pm.waiver : null;
   const marked = new Set([...(lineupMark?.keys || []), ...(waiverMark?.keys || [])]);
+  // v4.8: after claims are pushed, every waiver-page variance that existed at that moment (yellow and red) stays
+  // quiet until the end of that week's last game; only NEW ones (or a yellow that turned red) show. Then all return.
+  const wb = pm.waiverBase;
+  const baseActive = Boolean(wb) && Number.isFinite(Number(wb.week)) && (Number(lg.week) < Number(wb.week) || (Number(lg.week) === Number(wb.week) && !lg.weekOver));
+  const baseKeys = baseActive ? new Set(wb.keys || []) : null;
   const gapQuiet = (gap) => lineupMark != null && gap <= lineupMark.gap + 1;
   const add = (page, rule, subject, severity, text, auto = false) => {
     if (severity !== "minor" && severity !== "major" && severity !== "info") return;
     if (marked.has(varianceKey(lg.id, lg.week, page, rule, subject))) return;
+    if (baseKeys && page === "waiver" && baseKeys.has(severity === "major" ? varianceKey(lg.id, lg.week, page, rule, subject) + RED_SUFFIX : varianceKey(lg.id, lg.week, page, rule, subject))) return;
     out.push({ key: varianceKey(lg.id, lg.week, page, rule, subject), leagueId: lg.id, league: lg.name, page, rule, subject, severity, text: text || subject, auto: Boolean(auto) && severity === "minor" });
   };
 
@@ -289,6 +295,10 @@ export const LINEUP_PUSH_RULES = new Set([RULE.PLAY_OPP]);
 export function pushKeys(lg, kind) {
   const rules = kind === "lineup" ? LINEUP_PUSH_RULES : WAIVER_PUSH_RULES;
   return (lg?.variances || []).filter((v) => rules.has(v.rule) && !v.cleared).map((v) => v.key);
+}
+/** v4.8: every waiver-page variance showing now (the baseline stored when claims are pushed), as acknowledgement keys. */
+export function waiverBaselineKeys(lg) {
+  return (lg?.variances || []).filter((v) => v.page === "waiver" && v.severity !== "info").map((v) => ackKey(v));
 }
 /** The gap the V09 / V10 rules are currently measuring (points), 0 when none. */
 export function lineupGap(lg) {

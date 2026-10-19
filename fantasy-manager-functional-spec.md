@@ -686,6 +686,15 @@ This state lives in the server's SQLite database, not an in-memory diff — it s
 
 ---
 
+### 8.2ac v4.8 — Waivers rework, Performance, Auto packages
+
+- Waivers pages in order: Drop candidates, Available, Claim Generator, Pending Claims, Opponents; counts in brackets on the first three. Drop candidates holds the roster-compliance card (IR ineligible/eligible, roster limit) with staged push (IR out, IR in, drops; 10 s pause) and the willing-to-drop ranking.
+- Available shows the shared FAAB card (live), per-bid percentage/dollar maths against the live remaining budget, Copy-all-by-% and tap-to-fill; new Performance view (games with more than 20% of snaps; Last week, This season, 4 weeks, Weighted avg; Total/PPG).
+- Claim Generator: equal bids in entry order, lifted-card dragging with a drop line, group handle, local sent-lock plus server duplicate refusal.
+- After a claims push all waiver variances are quiet until the end of that week's last game (baseline stored per league). Own players on bye are ignored by the "beats a starter / bench player" variances.
+- Auto mode = four packages (IR, Roster, Lineup, Flex) per league; runs 6 am Toronto, 1 h before kickoffs and waivers; Roster ranking choice and +2 claims.
+- Roster tab resets on league change; proposals in Auto order; Cheer meter scoped to selected leagues; snap badges from per-season nflverse files; KTC via POST.
+
 ## 8b. Pre-Kickoff Push Alerts (v2)
 
 **Purpose:** Notify the user, via a real system push notification (not just an in-app banner), ahead of lineup lock when action may be needed.
@@ -907,3 +916,11 @@ Collected here since they cut across multiple sections:
 159. **KeepTradeCut (v4.7):** values come through the third-party parse.bot API (key in the `PARSE_API_KEY` env var, cached 2 days, monthly credit guard); KTC has no API of its own and its FAQ forbids scraping.
 160. **API keys (v4.7):** stay environment variables (an Account field was asked for, then withdrawn).
 161. **Data location (v4.7):** the compose data mount is `${DATA_PATH:-fantasy-manager-data}:/app/data`.
+162. **Claim order (v4.8):** equal bids are processed in the order the players were first entered on Available; a changed bid moves group but keeps its entry position.
+163. **Post-push variances (v4.8):** after claims are pushed all waiver-page variances (yellow and red) of that league are quiet until the end of that week's last game; new ones show. Scope (waiver page, per league) is an assumption.
+164. **Bye (v4.8):** your own starters/bench on bye are not compared in "beats a starter / bench player".
+165. **Performance (v4.8):** only games with more than 20% of snaps; weighted avg 1, 0.5, 0.25, 0.125 over their sum, identical in Total and PPG; 4-week PPG divides by the games counted (up to 4).
+166. **Compliance push (v4.8):** IR out, IR in, then drops, 10 s apart, stopping at the first unconfirmed step; drops list shows the 5 lowest-rostered with as many ticked as needed.
+167. **Auto packages (v4.8):** IR (with taxi), Roster, Lineup, Flex, per league; old Auto mode counts as all on; triggers 6 am Toronto, 1 h before kickoffs, 1 h before waivers; Roster claims = open spots + 2.
+168. **Roster tab / order (v4.8):** league switch resets to Current lineup; proposals ordered IR, Roster, Lineup, Flex.
+169. **Cheer meter (v4.8):** with leagues selected, each player's meter counts only those leagues.

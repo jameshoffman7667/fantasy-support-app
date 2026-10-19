@@ -14,6 +14,7 @@ import { nameIndex } from "./waiverCategories.js";
 import { buildFpIndex, lookupFpMulti } from "./matching.js";
 import { propLines } from "./buildLeague.js";
 import { DEFS } from "./statDefs.js";
+import * as faPerformance from "./faPerformance.js"; // v4.8
 
 /**
  * v4.2 routes: the stats list (and its spreadsheet), the stats query behind Waivers → All and Analytics → Scouting,
@@ -243,6 +244,31 @@ export function registerStatsRoutes(app, { requireAuth, requireOwner, builtLeagu
     } catch (err) {
       console.warn(`[statsApi] query failed: ${err.stack || err.message}`);
       res.status(502).json({ error: err.message || "The stats query failed." });
+    }
+  });
+
+  // v4.8: Waivers → Available → Performance — actual points of a league's free agents from games with > 20% of snaps.
+  app.post("/api/stats/performance", async (req, res) => {
+    try {
+      const leagueId = String(req.body?.leagueId || "");
+      if (!trackedLeagueIds(req.user.username).includes(leagueId)) return res.status(404).json({ error: "That league isn't one of your tracked leagues." });
+      const lg = builtLeague(req.user.username, leagueId);
+      if (!lg) return res.status(400).json({ error: "That league hasn't been built yet — refresh first." });
+      const cur = await curOf();
+      const through = lg.weekOver ? Number(cur.week) : Number(cur.week) - 1;
+      if (through < 1) return res.json({ rows: [], through, note: "No games have been played yet this season." });
+      const players = await sleeper.getPlayers();
+      const league = await sleeper.getLeague(leagueId).catch(() => null);
+      const settings = league?.scoring_settings || {};
+      const universe = buildUniverse(players, { positions: ["QB", "RB", "WR", "TE"], scope: "fa", faSearch: lg.faSearch, curSeason: cur.season });
+      const pairs = Array.from({ length: through }, (_, i) => [Number(cur.season), i + 1]);
+      const loaded = await statsStore.ensureWeeks("stat", pairs, cur);
+      const per = faPerformance.performanceByPlayer(statsStore.linesFor("stat", pairs), { settings, through });
+      const rows = universe.filter((p) => per.has(p.id)).map((p) => ({ ...p, ...per.get(p.id) }));
+      res.json({ rows, through, season: cur.season, note: loaded.some((x) => !x.ok) ? `Some weeks couldn't load: ${loaded.filter((x) => !x.ok).map((x) => `wk ${x.week}`).slice(0, 5).join(", ")}` : null });
+    } catch (err) {
+      console.warn(`[statsApi] performance failed: ${err.stack || err.message}`);
+      res.status(502).json({ error: err.message || "The performance query failed." });
     }
   });
 

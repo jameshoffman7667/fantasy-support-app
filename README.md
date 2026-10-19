@@ -474,6 +474,10 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.8 additions
+
+Waivers: Drop candidates page with roster compliance, live FAAB card, Performance view, copy-all-bids by %, claim ordering and drag changes, post-push variance quiet period. Auto mode is four packages (IR, Roster, Lineup, Flex). Optional env `PARSE_KTC_SCRAPER_ID` overrides the built-in parse.bot scraper id. No compose change.
+
 ### v4.7 additions
 - **Waivers → Available:** two rows of views. **Auto** shows what Auto mode would do right now (text) and the claims that follow, and holds the Auto mode check box. **Copy** lists your claims in your other leagues of the same type — pending and already processed (won/lost, winning bid) — for players free here; player cards show them too.
 - **Game Day:** the old list is the **Cheer meter** tab; **Primetime** shows each league's win %, the Sunday/Monday-night players still to play and what to cheer for.

@@ -24,11 +24,21 @@ const marksKey = (u, l) => `push_marks:${u}:${l}`;
  *  - waiver push: records the keys of waiver-page variances it clears.
  * The client sends the gap and keys (it computed them); this just stores them, per user and league.
  */
-export function recordPush(username, leagueId, kind, { week, gap, keys } = {}) {
+export function recordPush(username, leagueId, kind, { week, gap, keys, baseline, weekOver } = {}) {
   const cur = store.getState(marksKey(username, leagueId), null) || {};
   const cleanKeys = (Array.isArray(keys) ? keys : []).map(String).slice(0, 300);
   if (kind === "lineup") cur.lineup = { week: week ?? null, gap: Number.isFinite(Number(gap)) ? Number(gap) : 0, keys: cleanKeys, at: Date.now() };
-  else if (kind === "waiver") cur.waiver = { keys: [...new Set([...(cur.waiver?.keys || []), ...cleanKeys])].slice(0, 600), at: Date.now() };
+  else if (kind === "waiver") {
+    cur.waiver = { keys: [...new Set([...(cur.waiver?.keys || []), ...cleanKeys])].slice(0, 600), at: Date.now() };
+    // v4.8: baseline of every waiver-page variance at push time; quiet until the end of that week's last game
+    // (a push made after the week's games are over covers the following week).
+    const w = Number(week);
+    if (Number.isFinite(w) && Array.isArray(baseline)) {
+      const until = weekOver ? w + 1 : w;
+      const same = cur.waiverBase && Number(cur.waiverBase.week) === until;
+      cur.waiverBase = { week: until, keys: [...new Set([...(same ? cur.waiverBase.keys : []), ...baseline.map(String)])].slice(0, 800), at: Date.now() };
+    }
+  }
   else return null;
   store.setState(marksKey(username, leagueId), cur);
   return cur;

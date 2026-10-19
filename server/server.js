@@ -53,6 +53,7 @@ import { getLastSummary, cachedPick } from "./projectionHub.js";
 import { searchFreeAgents } from "./playerSearch.js"; // v4.1
 import { registerStatsRoutes } from "./statsApi.js"; // v4.2: stats list, Waivers → All, Analytics → Scouting
 import * as autoMode from "./autoMode.js";
+import { duplicateClaim, forgetClaim, rememberClaim } from "./claimGuard.js"; // v4.8
 import * as copyClaims from "./copyClaims.js"; // v4.7
 import * as valueOpps from "./valueOpps.js"; // v4.7
 import * as aiSources from "./aiSources.js"; // v4.3: AI sources per feature
@@ -580,12 +581,29 @@ app.post("/api/private/reserve", async (req, res) => {
     privError(res, e);
   }
 });
+// v4.8: drop one player (Drop candidates → roster compliance; staged after the IR moves). Unverified mutation.
+app.post("/api/private/drop", async (req, res) => {
+  const lg = ownBuilt(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    res.json(await priv.dropPlayer(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, playerId: req.body?.playerId, confirm: req.body?.confirm }));
+  } catch (e) {
+    privError(res, e);
+  }
+});
 // v4.4: Auto mode — per-league check box, a pause-all switch, and the log of what it did.
 app.use("/api/automode", requireAuth);
 app.get("/api/automode", (req, res) => {
   const s = autoMode.getSettings(req.user.username);
-  res.json({ paused: s.paused, leagues: s.leagues, log: autoMode.getLog(req.user.username, req.query.leagueId || null).slice(0, 20) });
+  res.json(autoState(req.user.username, s, req.query.leagueId || null));
 });
+// v4.8: the four packages (and the roster ranking) for every league that has settings, plus the one asked for.
+function autoState(username, s, leagueId) {
+  const ids = new Set([...Object.keys(s.leagues), ...Object.keys(s.packages), ...(leagueId ? [String(leagueId)] : [])]);
+  const packages = {};
+  for (const id of ids) packages[id] = autoMode.packagesFor(s, id);
+  return { paused: s.paused, leagues: Object.fromEntries([...ids].map((id) => [id, autoMode.PACKAGES.some((k) => packages[id][k])])), packages, rankings: autoMode.RANKINGS, log: autoMode.getLog(username, leagueId).slice(0, 20) };
+}
 // v4.7: what Auto mode would do right now in this league (a dry run — nothing is written).
 app.get("/api/automode/preview", async (req, res) => {
   const lg = ownBuilt(req, res, req.query.leagueId);
@@ -604,14 +622,22 @@ app.get("/api/automode/preview", async (req, res) => {
 app.post("/api/automode", (req, res) => {
   const u = req.user.username;
   if (typeof req.body?.paused === "boolean") autoMode.setPaused(u, req.body.paused);
-  if (req.body?.leagueId != null && typeof req.body?.on === "boolean") {
-    const lg = req.body.on ? ownBuilt(req, res, req.body.leagueId) : true;
+  if (req.body?.leagueId != null && (typeof req.body?.on === "boolean" || req.body?.ranking != null)) {
+    const turningOn = req.body.on === true;
+    const lg = turningOn ? ownBuilt(req, res, req.body.leagueId) : true;
     if (!lg) return;
-    if (req.body.on && !autoMode.eligibleLeague(lg)) return res.status(400).json({ error: "Auto mode isn't available for best ball leagues." });
-    autoMode.setLeague(u, req.body.leagueId, req.body.on);
+    if (turningOn && !autoMode.eligibleLeague(lg)) return res.status(400).json({ error: "Auto mode isn't available for best ball leagues." });
+    try {
+      if (req.body.ranking != null) autoMode.setRanking(u, req.body.leagueId, String(req.body.ranking));
+      if (typeof req.body.on === "boolean") {
+        if (req.body.pkg != null) autoMode.setPackage(u, req.body.leagueId, String(req.body.pkg), req.body.on);
+        else autoMode.setLeague(u, req.body.leagueId, req.body.on);
+      }
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
   }
-  const s = autoMode.getSettings(u);
-  res.json({ paused: s.paused, leagues: s.leagues, log: autoMode.getLog(u, req.body?.leagueId || null).slice(0, 20) });
+  res.json(autoState(u, autoMode.getSettings(u), req.body?.leagueId || null));
 });
 app.post("/api/private/taxi", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
@@ -626,9 +652,14 @@ app.post("/api/private/claim", async (req, res) => {
   const lg = ownBuilt(req, res, req.body?.leagueId);
   if (!lg) return;
   try {
+    const cl = { addId: req.body?.addId, dropId: req.body?.dropId || null, bid: req.body?.bid };
+    if (duplicateClaim(req.user.username, lg, cl)) return res.json({ ok: false, duplicate: true, detail: "This exact claim (same player, drop and bid) is already queued or was just sent — not sending it twice." });
     const leg = await sleeperLeg(lg);
     const out = await priv.submitClaim(req.user.username, { leagueId: lg.id, rosterId: lg.myRosterId, leg, legs: [leg, leg + 1, Number(lg.week)], addId: req.body?.addId, dropId: req.body?.dropId, bid: req.body?.bid, confirm: req.body?.confirm });
-    if (out?.ok) privateData.recordPush(req.user.username, lg.id, "waiver", { keys: req.body?.keys });
+    if (out?.ok) {
+      rememberClaim(req.user.username, lg, cl);
+      privateData.recordPush(req.user.username, lg.id, "waiver", { keys: req.body?.keys, baseline: req.body?.baseline, week: lg.week, weekOver: Boolean(lg.weekOver) });
+    }
     res.json(out);
   } catch (e) {
     privError(res, e);
@@ -688,7 +719,12 @@ app.post("/api/private/claim/cancel", async (req, res) => {
   try {
     // v4.1: the claim's own leg when the client knows it (a claim can be filed under next week).
     const leg = Number(req.body?.leg) > 0 ? Number(req.body.leg) : await sleeperLeg(lg);
-    res.json(await priv.cancelClaim(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg, confirm: req.body?.confirm }));
+    const out = await priv.cancelClaim(req.user.username, { leagueId: lg.id, transactionId: req.body?.transactionId, leg, confirm: req.body?.confirm });
+    if (out?.ok) {
+      const x = (lg.privateInfo?.claims?.pending || []).find((q) => String(q.id) === String(req.body?.transactionId));
+      if (x) forgetClaim(req.user.username, lg, { addId: x.adds?.[0], dropId: x.drops?.[0], bid: x.bid });
+    }
+    res.json(out);
   } catch (e) {
     privError(res, e);
   }

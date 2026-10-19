@@ -1,6 +1,6 @@
 import * as api from "../api.js";
 import { fromDollars, toDollars } from "../waiverPlan.js";
-import { Cloud, CloudRain, CloudSnow, GripVertical, Loader2, Wind, X, XCircle } from "lucide-react";
+import { Cloud, CloudRain, CloudSnow, GripHorizontal, GripVertical, Loader2, Wind, X, XCircle } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { C, SOURCE_TAG, SRC_COLOR, STATUS, TIER_COLORS, TIER_LABELS, formatStatLine, initials, inputStyle, normTeam, ordinal } from "./theme.js";
 
@@ -253,61 +253,74 @@ export function RowChips({ player, profile }) {
 
 // Reusable vertical drag list. Items can only move inside their own list, so
 // one list per FAAB group keeps claims from being dragged between groups.
-export function DragList({ items, getKey, render, onReorder, label = "Drag to reorder" }) {
-  const [live, setLive] = useState(null);
-  const [dragKey, setDragKey] = useState(null);
+//
+// v4.8: while a handle is held the card is LIFTED — a floating copy follows the finger / cursor — and a light line
+// with a plus sign shows between the cards where it would land if let go; the list itself only changes on release
+// (the original card stays put, dimmed, so the handle keeps receiving the touch). `groupOf(key)` (optional) gives the
+// keys that travel together when the second, larger "group" handle is used; they float as a stacked deck of cards and
+// land in the same order they had.
+export function DragList({ items, getKey, render, onReorder, label = "Drag to reorder", groupOf = null }) {
+  const [drag, setDrag] = useState(null); // { key, keys, group, rect, dx, dy, x, y, moved }
   const refs = useRef(new Map());
-  const lastY = useRef(0);
-  const liveRef = useRef(null);
+  const dragRef = useRef(null);
   const keys = items.map(getKey);
   const keysSig = keys.join("\n");
-  const order = live || keys;
+  const keysRef = useRef(keys);
+  keysRef.current = keys;
   const byKey = new Map(items.map((i) => [getKey(i), i]));
-  const orderRef = useRef(order);
-  orderRef.current = order;
 
-  const reorderToPointer = useCallback(() => {
-    const key = dragKey;
-    if (!key) return;
-    const cur = liveRef.current || orderRef.current;
-    const without = cur.filter((k) => k !== key);
+  // Where the lifted card(s) would land: index among the other cards = how many have their middle above the pointer.
+  const slotFor = useCallback((d, y) => {
+    const rest = keysRef.current.filter((k) => !d.keys.includes(k));
     let idx = 0;
-    for (const k of without) {
+    for (const k of rest) {
       const el = refs.current.get(k);
       if (!el) continue;
       const r = el.getBoundingClientRect();
-      if (lastY.current > r.top + r.height / 2) idx++;
+      if (y > r.top + r.height / 2) idx++;
       else break;
     }
-    const next = [...without.slice(0, idx), key, ...without.slice(idx)];
-    if (next.some((k, i) => k !== cur[i])) {
-      liveRef.current = next;
-      setLive(next);
-    }
-  }, [dragKey]);
+    return { rest, idx };
+  }, []);
 
+  const finish = useCallback(
+    (apply) => {
+      const d = dragRef.current;
+      dragRef.current = null;
+      setDrag(null);
+      if (!d || !apply || !d.moved) return;
+      const { rest, idx } = slotFor(d, d.y);
+      const next = [...rest.slice(0, idx), ...d.keys, ...rest.slice(idx)];
+      if (next.join("\n") !== keysRef.current.join("\n")) onReorder(next);
+    },
+    [onReorder, slotFor]
+  );
+
+  const active = Boolean(drag);
   useEffect(() => {
-    if (!dragKey) return undefined;
+    if (!active) return undefined;
     const onMove = (e) => {
-      lastY.current = e.clientY;
-      reorderToPointer();
+      const d = dragRef.current;
+      if (!d) return;
+      const moved = d.moved || Math.abs(e.clientY - d.startY) > 4 || Math.abs(e.clientX - d.startX) > 4;
+      const next = { ...d, x: e.clientX, y: e.clientY, moved };
+      dragRef.current = next;
+      setDrag(next);
     };
-    const onUp = () => {
-      const result = liveRef.current;
-      liveRef.current = null;
-      setLive(null);
-      setDragKey(null);
-      if (result && result.join("\n") !== keysSig) onReorder(result);
-    };
+    const onUp = () => finish(true);
+    const onKey = (e) => e.key === "Escape" && finish(false);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
+    window.addEventListener("keydown", onKey);
     let raf;
     const tick = () => {
-      const y = lastY.current;
-      if (y < 90) window.scrollBy(0, -14);
-      else if (y > window.innerHeight - 90) window.scrollBy(0, 14);
-      reorderToPointer();
+      const d = dragRef.current;
+      if (d) {
+        if (d.y < 90) window.scrollBy(0, -14);
+        else if (d.y > window.innerHeight - 90) window.scrollBy(0, 14);
+        setDrag((cur) => (cur ? { ...cur } : cur)); // re-measure the landing slot while the page scrolls
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -315,51 +328,97 @@ export function DragList({ items, getKey, render, onReorder, label = "Drag to re
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("keydown", onKey);
       cancelAnimationFrame(raf);
     };
-  }, [dragKey, reorderToPointer, onReorder, keysSig]);
+  }, [active, finish]);
 
-  const handleFor = (key) => ({
-    onPointerDown: (e) => {
-      if (e.button !== undefined && e.button !== 0) return;
-      e.preventDefault();
-      lastY.current = e.clientY;
-      liveRef.current = null;
-      setDragKey(key);
-    },
+  // The list changed under a drag (another claim appeared): drop the drag rather than move the wrong cards.
+  useEffect(() => {
+    if (dragRef.current) finish(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keysSig]);
+
+  const begin = (key, group, e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const el = refs.current.get(key);
+    const rect = el ? el.getBoundingClientRect() : { left: e.clientX, top: e.clientY, width: 280, height: 56 };
+    const moving = group && groupOf ? groupOf(key).filter((k) => keysRef.current.includes(k)) : [key];
+    const ordered = keysRef.current.filter((k) => moving.includes(k));
+    const d = { key, keys: ordered.length ? ordered : [key], group: Boolean(group && ordered.length > 1), rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }, dx: e.clientX - rect.left, dy: e.clientY - rect.top, startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, moved: false };
+    dragRef.current = d;
+    setDrag(d);
+  };
+
+  const handleFor = (key, group = false) => ({
+    onPointerDown: (e) => begin(key, group, e),
     onKeyDown: (e) => {
       if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
       e.preventDefault();
-      const from = keys.indexOf(key);
-      const to = from + (e.key === "ArrowUp" ? -1 : 1);
-      if (from < 0 || to < 0 || to >= keys.length) return;
-      const next = [...keys];
-      next.splice(from, 1);
-      next.splice(to, 0, key);
-      onReorder(next);
+      const moving = group && groupOf ? keys.filter((k) => groupOf(key).includes(k)) : [key];
+      const from = keys.indexOf(moving[0]);
+      const rest = keys.filter((k) => !moving.includes(k));
+      const to = Math.max(0, Math.min(rest.length, from + (e.key === "ArrowUp" ? -1 : 1)));
+      if (from < 0 || to === from) return;
+      onReorder([...rest.slice(0, to), ...moving, ...rest.slice(to)]);
     },
-    "aria-label": `${label}. Or use the up and down arrow keys.`,
+    "aria-label": `${group ? "Drag to move all of this player's claims. " : ""}${label}. Or use the up and down arrow keys.`,
   });
 
+  const slot = drag && drag.moved ? slotFor(drag, drag.y) : null;
+  const lifted = new Set(drag ? drag.keys : []);
+  const indicator = (
+    <div className="flex items-center gap-2 py-0.5" data-drop-slot aria-hidden="true">
+      <div style={{ flex: 1, borderTop: `2px dashed ${C.brand}99` }} />
+      <div style={{ width: 22, height: 22, borderRadius: 11, background: `${C.brand}33`, border: `1px solid ${C.brand}99`, color: C.brand }} className="flex items-center justify-center text-sm font-semibold leading-none">+</div>
+      <div style={{ flex: 1, borderTop: `2px dashed ${C.brand}99` }} />
+    </div>
+  );
+  const out = [];
+  let seen = 0; // cards that aren't lifted, counted as we go
+  keys.forEach((k) => {
+    const item = byKey.get(k);
+    if (!item) return;
+    if (slot && !lifted.has(k) && seen === slot.idx) out.push(<div key="__slot">{indicator}</div>);
+    if (!lifted.has(k)) seen++;
+    out.push(
+      <div key={k} ref={(el) => (el ? refs.current.set(k, el) : refs.current.delete(k))} style={lifted.has(k) && drag?.moved ? { opacity: 0.35 } : undefined}>
+        {render(item, { dragging: drag?.key === k && Boolean(drag?.moved), handleProps: handleFor(k), groupHandleProps: groupOf ? handleFor(k, true) : null })}
+      </div>
+    );
+  });
+  if (slot && slot.idx >= seen) out.push(<div key="__slot">{indicator}</div>);
+
+  const ghostItem = drag && drag.moved ? byKey.get(drag.key) : null;
+  const layers = drag?.group ? Math.min(3, drag.keys.length) : 1;
   return (
     <div className="space-y-1.5">
-      {order.map((k) => {
-        const item = byKey.get(k);
-        if (!item) return null;
-        return (
-          <div key={k} ref={(el) => (el ? refs.current.set(k, el) : refs.current.delete(k))}>
-            {render(item, { dragging: dragKey === k, handleProps: handleFor(k) })}
+      {out}
+      {ghostItem && (
+        <div style={{ position: "fixed", left: drag.x - drag.dx, top: drag.y - drag.dy, width: drag.rect.width, zIndex: 80, pointerEvents: "none" }} data-drag-ghost={drag.group ? "stack" : "card"} aria-hidden="true">
+          {Array.from({ length: layers - 1 }, (_, i) => layers - 1 - i).map((n) => (
+            <div key={n} style={{ position: "absolute", left: n * 5, top: n * 6, width: "100%", height: drag.rect.height, background: C.surfaceRaised, border: `1px solid ${C.borderStrong || C.border}`, borderRadius: 6, boxShadow: "0 2px 8px rgba(0,0,0,0.35)" }} />
+          ))}
+          <div style={{ position: "relative", boxShadow: "0 10px 26px rgba(0,0,0,0.55)", borderRadius: 6, transform: "scale(1.02)" }}>
+            {render(ghostItem, { dragging: true, ghost: true, handleProps: {}, groupHandleProps: null })}
+            {drag.group && (
+              <div style={{ position: "absolute", right: -6, top: -8, background: C.brand, color: "#fff" }} className="rounded-full px-1.5 text-[11px] font-semibold">
+                ×{drag.keys.length}
+              </div>
+            )}
           </div>
-        );
-      })}
+        </div>
+      )}
     </div>
   );
 }
 
-export function DragHandle({ handleProps, dragging }) {
+export function DragHandle({ handleProps, dragging, big = false }) {
+  if (!handleProps) return null;
   return (
-    <button type="button" {...handleProps} data-drag-handle style={{ touchAction: "none", cursor: dragging ? "grabbing" : "grab", color: C.textFaint }} className="p-1 -ml-1 shrink-0">
-      <GripVertical size={18} />
+    <button type="button" {...handleProps} data-drag-handle={big ? "group" : "one"} title={big ? "Drag to move all of this player's claims at this bid" : undefined} style={{ touchAction: "none", cursor: dragging ? "grabbing" : "grab", color: big ? C.brand : C.textFaint, ...(big ? { border: `1px solid ${C.brand}66`, borderRadius: 6, width: 34, minHeight: 40, background: `${C.brand}14` } : {}) }} className={big ? "shrink-0 flex items-center justify-center -ml-1" : "p-1 -ml-1 shrink-0"}>
+      {big ? <GripHorizontal size={22} /> : <GripVertical size={18} />}
     </button>
   );
 }
