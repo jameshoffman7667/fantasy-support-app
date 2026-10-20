@@ -81,12 +81,14 @@ export function getUser(username, opts = {}) {
   return cached(`sl:user:${String(username).toLowerCase()}`, TTL.user, () => sleeperFetch(`/user/${encodeURIComponent(username)}`), opts);
 }
 /**
- * v3.9: the app moves to the next week on Tuesday at 10:00 Toronto time, without waiting for Sleeper's own week
- * change (which comes later in the week). Week N counts as finished at the first Tuesday 10:00 that is at least a
- * day after the app first saw Sleeper report week N (remembered in SQLite, so restarts don't reset it); from then
- * on `week` is N + 1 until Sleeper itself moves on. Regular season only, never past week 18. `sleeperWeek` keeps
- * Sleeper's own number (waiver claims and trades are filed under it).
+ * v4.9: the app moves to the next week once the week's last game is over — the last kickoff plus 4 hours (it used to
+ * be Tuesday 10:00 Toronto). `lastKickoff` is the latest kickoff of week N (ESPN schedule); when it is unknown the
+ * old rule is the fallback: the first Tuesday 10:00 Toronto at least a day after the app first saw Sleeper report
+ * week N (remembered in SQLite, so restarts don't reset it). From then on `week` is N + 1 until Sleeper itself moves
+ * on. Regular season only, never past week 18. `sleeperWeek` keeps Sleeper's own number (waiver claims and trades are
+ * filed under it).
  */
+export const GAME_OVER_MS = 4 * HOUR;
 export function nextTuesday10(from) {
   let t = Math.floor(from / (5 * MIN)) * 5 * MIN + 5 * MIN;
   for (let i = 0; i < 8 * 24 * 12; i++, t += 5 * MIN) {
@@ -95,11 +97,23 @@ export function nextTuesday10(from) {
   }
   return from + 7 * DAY;
 }
-export function advanceWeek(state, firstSeen, now) {
+export function advanceWeek(state, firstSeen, now, lastKickoff = null) {
   if (!state || state.season_type !== "regular") return state ? { ...state, sleeperWeek: state.week } : state;
   const w = Number(state.week) || 0;
-  const done = w >= 1 && firstSeen != null && now >= nextTuesday10(firstSeen + DAY);
+  const over = Number.isFinite(lastKickoff) ? now >= lastKickoff + GAME_OVER_MS : firstSeen != null && now >= nextTuesday10(firstSeen + DAY);
+  const done = w >= 1 && over;
   return { ...state, sleeperWeek: state.week, week: done ? Math.min(18, w + 1) : state.week, weekAdvanced: done && w < 18 };
+}
+/** Latest kickoff (ms) of the week's games, or null when the schedule can't be read. Cached for 15 minutes by schedule.js. */
+async function lastKickoffOf(season, week) {
+  try {
+    const { getWeekSchedule } = await import("./schedule.js");
+    const sched = await getWeekSchedule(Number(season), Number(week));
+    const ks = (sched?.games || []).map((g) => g.kickoffMillis).filter(Number.isFinite);
+    return ks.length ? Math.max(...ks) : null;
+  } catch {
+    return null;
+  }
 }
 export async function getState(opts = {}) {
   const fresh = opts.fresh || bootFresh;
@@ -113,7 +127,8 @@ export async function getState(opts = {}) {
     seen = now;
     cacheSet(seenKey, seen, 60 * DAY);
   }
-  return advanceWeek(st, Number(seen), now);
+  const last = st.season_type === "regular" ? await lastKickoffOf(st.season, st.week) : null;
+  return advanceWeek(st, Number(seen), now, last);
 }
 export function getUserLeagues(userId, season, opts = {}) {
   // R16: the league list changes once a season (opts.ttl lets cross-ownership use a weekly lifetime instead).

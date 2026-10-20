@@ -202,24 +202,100 @@ export function resetClaims(plan) {
 
 /* ---------------- v4.1: Drops list, selection, clear all ---------------- */
 /**
- * The Drops list's DEFAULT order: least-rostered first (rostered % from ESPN), players without a rostered % last,
- * ties by lowest projection. Once the user drags the list (`arranged`), his order is kept as it is.
+ * v4.9: every roster player a claim could drop — bench players first, lowest projection first, then the starters
+ * below, sorted the same. Locked (already kicked off) players can't be dropped. Rows carry `where` ("bench" |
+ * "starter") and, for a starter, `slot`.
  */
-export function orderDrops(drops = [], bench = [], arranged = false) {
+export function dropPool(league, isLockedFn = () => false) {
+  const proj = (p) => p.proj ?? 0;
+  const bench = (league?.bench || []).filter((p) => p && !isLockedFn(p, league)).map((p) => ({ ...p, where: "bench" }));
+  const starters = (league?.starters || []).filter((s) => s?.player && !isLockedFn(s.player, league)).map((s) => ({ ...s.player, where: "starter", slot: s.slot }));
+  const byProj = (x, y) => proj(x.p) - proj(y.p) || x.i - y.i;
+  const sorted = (rows) => rows.map((p, i) => ({ p, i })).sort(byProj).map((x) => x.p);
+  return [...sorted(bench), ...sorted(starters)];
+}
+
+/**
+ * The Drop candidates list's DEFAULT order (v4.9): the pool's own order — bench by lowest projection, then starters by
+ * lowest projection. Once the user drags the list (`arranged`), his order is kept as it is.
+ */
+export function orderDrops(drops = [], pool = [], arranged = false) {
   if (arranged) return drops;
-  const byId = new Map(bench.filter(Boolean).map((p) => [String(p.id), p]));
-  const r = (d) => byId.get(String(d.id))?.rostered;
-  const pr = (d) => byId.get(String(d.id))?.proj;
+  const byId = new Map(pool.filter(Boolean).map((p) => [String(p.id), p]));
+  const grp = (d) => (byId.get(String(d.id))?.where === "starter" ? 1 : 0);
+  const pr = (d) => byId.get(String(d.id))?.proj ?? 0;
   return drops
     .map((d, i) => ({ d, i }))
-    .sort((a, b) => {
-      const ra = r(a.d), rb = r(b.d);
-      if ((ra == null) !== (rb == null)) return ra == null ? 1 : -1;
-      if (ra != null && ra !== rb) return ra - rb;
-      const pa = pr(a.d) ?? 0, pb = pr(b.d) ?? 0;
-      return pa - pb || a.i - b.i;
-    })
+    .sort((a, b) => grp(a.d) - grp(b.d) || pr(a.d) - pr(b.d) || a.i - b.i)
     .map((x) => x.d);
+}
+
+/* ---------------- v4.9: bid timestamps, Claim rankings, clearing after a push ---------------- */
+/** Stamps `at` on every bid that is new or whose amount changed (others keep theirs). Positions never change. */
+export function stampBids(prev = [], next = [], now = Date.now()) {
+  const old = new Map(prev.map((b) => [b.id, b]));
+  return next.map((b) => {
+    const o = old.get(b.id);
+    return o && o.bid === b.bid && o.at != null ? { ...b, at: o.at } : { ...b, at: now };
+  });
+}
+
+/** Bid groups for the Claim rankings page: highest bid first; inside a group the saved order (Claim Generator drags), then the order bids were entered. */
+export function bidGroups(plan) {
+  const idx = new Map((plan.order || []).map((k, i) => [String(k).split("|")[0], i])); // first saved position of any of the player's claims
+  const groups = new Map();
+  (plan.bids || []).forEach((b, i) => {
+    if (!groups.has(b.bid)) groups.set(b.bid, []);
+    groups.get(b.bid).push({ b, i });
+  });
+  const rank = (x) => (idx.has(x.b.id) ? idx.get(x.b.id) : Infinity);
+  return [...groups.keys()]
+    .sort((a, b) => b - a)
+    .map((bid) => ({
+      bid,
+      bids: groups.get(bid).sort((x, y) => {
+        const rx = rank(x), ry = rank(y);
+        if (rx !== ry) return rx === Infinity ? 1 : ry === Infinity ? -1 : rx - ry;
+        return x.i - y.i;
+      }).map((x) => x.b),
+    }));
+}
+
+/**
+ * Drag inside one bid group: the group's players take the group's positions in the new order, and their saved claim
+ * order is dropped so this order is what the Claim Generator uses. Manual reorder beats entry order.
+ */
+export function reorderBids(plan, bid, orderedIds) {
+  const ids = orderedIds.map(String);
+  const members = (plan.bids || []).map((b, i) => ({ b, i })).filter((x) => x.b.bid === bid && ids.includes(String(x.b.id)));
+  const slots = members.map((x) => x.i).sort((a, b) => a - b);
+  const byId = new Map(members.map((x) => [String(x.b.id), x.b]));
+  const bids = [...plan.bids];
+  ids.forEach((id, n) => {
+    if (byId.has(id) && slots[n] != null) bids[slots[n]] = byId.get(id);
+  });
+  const mine = new Set(ids);
+  return { ...plan, bids, order: (plan.order || []).filter((k) => !mine.has(String(k).split("|")[0])) };
+}
+
+/** Removes a bid everywhere: the bid, its edits / removals / saved order / unticks, and any custom claim for the player. */
+export function deleteBid(plan, playerId) {
+  const id = String(playerId);
+  const mine = (k) => String(k).split("|")[0] === id;
+  return {
+    ...plan,
+    bids: (plan.bids || []).filter((b) => String(b.id) !== id),
+    custom: (plan.custom || []).filter((c) => String(c.addId) !== id),
+    edits: Object.fromEntries(Object.entries(plan.edits || {}).filter(([k]) => !mine(k))),
+    removed: (plan.removed || []).filter((k) => !mine(k)),
+    order: (plan.order || []).filter((k) => !mine(k)),
+    unselected: (plan.unselected || []).filter((k) => !mine(k)),
+  };
+}
+
+/** After claims were pushed to Sleeper: the players that went in leave the Claim Generator (their bids, edits, custom claims, order). */
+export function afterPush(plan, pushed = []) {
+  return [...new Set(pushed.map((c) => String(c.addId)))].reduce((pl, id) => deleteBid(pl, id), plan);
 }
 
 /** Claims ticked for pushing (every claim is ticked unless the user unticked it). */

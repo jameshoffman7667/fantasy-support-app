@@ -1,7 +1,7 @@
 import * as api from "../api.js";
 import { isLocked } from "../lineup.js";
 import { rosterCompliance } from "../ui/compute.js";
-import { clearDrops, orderDrops, syncDrops } from "../waiverPlan.js";
+import { clearDrops, dropPool, orderDrops, syncDrops } from "../waiverPlan.js";
 import { useEffect, useMemo, useState } from "react";
 import { DragHandle, DragList, MatchupChip, PrivateGate, PushResults, SectionLabel } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
@@ -12,8 +12,8 @@ export const STAGE_PAUSE_MS = 10000;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function useDropState(league, plan, setPlan) {
-  const allBench = league.bench || [];
-  const bench = allBench.filter((p) => !p || !isLocked(p, league));
+  // v4.9: every roster player can be a drop — bench first (lowest projection first), then starters the same way.
+  const bench = useMemo(() => dropPool(league, isLocked), [league]);
   const syncedDrops = useMemo(() => orderDrops(syncDrops(plan.drops, bench), bench, plan.dropsArranged), [plan.drops, plan.dropsArranged, bench]);
   useEffect(() => {
     const same = syncedDrops.length === plan.drops.length && syncedDrops.every((d, i) => d.id === plan.drops[i].id && d.name === plan.drops[i].name);
@@ -121,7 +121,7 @@ function ComplianceCard({ league, onRefresh, onOpenAccount }) {
 
 export function DropCandidatesPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
   const { bench, syncedDrops } = useDropState(league, plan, setPlan);
-  const benchById = useMemo(() => new Map((league.bench || []).filter(Boolean).map((p) => [String(p.id), p])), [league.bench]);
+  const benchById = useMemo(() => new Map(bench.map((p) => [String(p.id), p])), [bench]);
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     if (!armed) return undefined;
@@ -140,7 +140,7 @@ export function DropCandidatesPage({ league, plan, setPlan, onRefresh, onOpenAcc
         <SectionLabel>Drop candidates</SectionLabel>
         <div className="flex items-center gap-2 pt-3">
           {plan.dropsArranged && (
-            <button type="button" onClick={() => setPlan((pl) => ({ ...pl, dropsArranged: false }))} style={{ color: C.textMuted }} className="text-[11px] underline" data-drops-default>Sort by rostered %</button>
+            <button type="button" onClick={() => setPlan((pl) => ({ ...pl, dropsArranged: false }))} style={{ color: C.textMuted }} className="text-[11px] underline" data-drops-default>Sort by projection</button>
           )}
           <button type="button" onClick={() => { if (!armed) return setArmed(true); setArmed(false); setPlan((pl) => ({ ...pl, drops: clearDrops(syncDrops(pl.drops, bench)) })); }} disabled={!syncedDrops.some((d) => d.willing)} style={{ color: armed ? C.major : C.textMuted, border: `1px solid ${armed ? C.major : C.border}`, opacity: syncedDrops.some((d) => d.willing) ? 1 : 0.5 }} className="text-xs rounded-md px-2 py-1" data-clear-drops>
             {armed ? "Tap again to clear" : "Clear all"}
@@ -148,10 +148,10 @@ export function DropCandidatesPage({ league, plan, setPlan, onRefresh, onOpenAcc
         </div>
       </div>
       <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
-        Tick the bench players you're willing to drop, most willing first. {plan.dropsArranged ? "Your own order is kept." : "Least-rostered first until you drag them into your own order."} The Claim Generator is built from this.
+        Tick the players you're willing to drop, most willing first. {plan.dropsArranged ? "Your own order is kept." : "Bench players first, then starters, each lowest projection first, until you drag them into your own order."} The Claim Generator is built from this.
       </div>
       {syncedDrops.length === 0 ? (
-        <div style={{ color: C.textMuted }} className="text-sm px-1 pb-2">No bench players to drop.</div>
+        <div style={{ color: C.textMuted }} className="text-sm px-1 pb-2">No players to drop.</div>
       ) : (
         <DragList
           items={syncedDrops}
@@ -172,6 +172,7 @@ export function DropCandidatesPage({ league, plan, setPlan, onRefresh, onOpenAcc
                   <div style={{ color: C.textMuted }} className="text-[11px] flex items-center gap-1.5 flex-wrap mt-0.5" data-drop-info>
                     <span data-drop-rostered>{p.rostered != null ? `${p.rostered}% rostered` : "rostered % n/a"}</span>
                     <span>· {p.proj != null ? `Proj ${p.proj.toFixed(1)}` : "No projection"}</span>
+                    <span data-drop-where>· {p.where === "starter" ? `Starter${p.slot ? ` (${p.slot})` : ""}` : "Bench"}</span>
                     {st && <span style={{ color: st === "Bye" ? C.textMuted : C.minor }} data-drop-status>· {st}</span>}
                     {p.matchup && <MatchupChip player={p} profile={league.scoringProfile} />}
                   </div>

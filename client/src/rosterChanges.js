@@ -421,3 +421,121 @@ export function changeNotes(league, changes = []) {
   }
   return out;
 }
+
+/* ---------------- v4.9: layered (dependent) suggestions ---------------- */
+
+const MAX_LAYERS = 4;
+
+/** The starting-slot indexes a change uses. */
+export function touchedSlots(c) {
+  if (c.type === "swap") return [c.slotA, c.slotB];
+  if (c.type === "lineup" || c.type === "add" || c.type === "custom") return [c.slotIndex, ...(c.otherSlot != null ? [c.otherSlot] : [])];
+  return [];
+}
+
+/**
+ * v4.9: the league as it would stand after the ticked changes — starters, bench, IR and taxi taken from arrangement().
+ * `remaining` = starting slots an UNticked lineup / add suggestion still wants (they keep counting as "changing" when
+ * the roster rules are re-run on the result). Pure; used for the Proposed lineup's variance notes.
+ */
+export function leagueAfter(league, arr, remaining = new Set()) {
+  const starters = (league?.starters || []).map((s, i) => ({ ...s, slot: arr.starters[i].slot, player: arr.starters[i].player, adding: Boolean(arr.starters[i].adding) }));
+  return {
+    ...league,
+    starters,
+    bench: arr.bench.map((b) => b.player),
+    ir: arr.ir.map((b) => b.player),
+    taxi: arr.taxi.map((b) => b.player),
+    lineup: { ...(league?.lineup || {}), rows: starters.map((_, i) => ({ changed: remaining.has(i), locked: false })) },
+  };
+}
+
+/** New suggestions that only exist because of ticked ones: the flex-timing rule re-run on the roster after them. */
+function dependents(league, all, ticked) {
+  const arr = arrangement(league, all, ticked);
+  const lg = leagueAfter(league, arr);
+  const skip = new Set();
+  for (const c of all) if (!c.blocked && !ticked.has(c.key) && c.type !== "custom") touchedSlots(c).forEach((s) => skip.add(s)); // an unticked suggestion still uses those slots
+  arr.starters.forEach((s, i) => s.adding && skip.add(i)); // an add isn't on the roster yet — nothing can be swapped with him now
+  const out = [];
+  for (const { flexIdx: i, posIdx: j } of flexTimingPairs(lg, skip)) {
+    const fp = lg.starters[i].player;
+    const sp = lg.starters[j].player;
+    if (fp?.id == null || sp?.id == null) continue;
+    const parent = [...all].reverse().find((c) => ticked.has(c.key) && !c.blocked && c.type !== "custom" && touchedSlots(c).some((s) => s === i || s === j));
+    if (!parent) continue; // no ticked move behind it: it would be a plain (layer 0) suggestion, and isn't one
+    out.push({
+      key: `D:${parent.key}>S:${i}:${j}:${fp.id}:${sp.id}`,
+      type: "swap",
+      slotA: i,
+      slotB: j,
+      slot: lg.starters[i].slot,
+      slotB_label: lg.starters[j].slot,
+      idA: String(fp.id),
+      nameA: fp.name,
+      kickA: fp.kickoffLabel || null,
+      idB: String(sp.id),
+      nameB: sp.name,
+      kickB: sp.kickoffLabel || null,
+      delta: 0,
+      blocked: null,
+      parent: parent.key,
+      depth: (parent.depth || 0) + 1,
+    });
+  }
+  return out;
+}
+
+/**
+ * v4.9: the suggestion list "multiple layers deep". Starts from the layer-0 suggestions (`base`) and the ticked keys;
+ * the roster after the ticked moves is re-checked, and any new problem (today: the flex-timing rule) becomes a
+ * dependent suggestion hung under the ticked move that caused it (`parent`, `depth`), then again for those, up to
+ * MAX_LAYERS. A dependent exists only while its parent is ticked. `tickChildren` ticks every dependent found (used for
+ * the default). Returns { changes, checked } — `checked` has anything stale (a dependent whose parent was unticked) removed.
+ */
+export function layerChanges(league, base, checked, { tickChildren = false } = {}) {
+  const all = [...base];
+  const keys = new Set(all.map((c) => c.key));
+  const ticked = new Set(checked);
+  for (let d = 0; d < MAX_LAYERS; d += 1) {
+    const kids = dependents(league, all, ticked).filter((k) => !keys.has(k.key));
+    if (!kids.length) break;
+    for (const k of kids) {
+      all.push(k);
+      keys.add(k.key);
+      if (tickChildren) ticked.add(k.key);
+    }
+  }
+  const valid = new Set(all.filter((c) => !c.blocked).map((c) => c.key));
+  return { changes: all, checked: new Set([...ticked].filter((k) => valid.has(k))) };
+}
+
+/**
+ * v4.9: what is ticked until he changes anything — every suggestion that isn't a free agent / waiver add. A suggestion
+ * that needs an add (it moves in a player the add replaces) can't stand alone, so it starts unticked too.
+ */
+export function defaultChecked(changes) {
+  const set = new Set(changes.filter((c) => !c.blocked && c.type !== "add").map((c) => c.key));
+  let again = true;
+  while (again) {
+    again = false;
+    for (const c of changes) if (set.has(c.key) && needs(changes, c).some((n) => !set.has(n.key))) { set.delete(c.key); again = true; }
+  }
+  return set;
+}
+
+/** Accept all: everything usable, except a bench option when the add for the same slot is on offer (the two are alternatives). */
+export function acceptAllKeys(changes) {
+  return new Set(
+    changes
+      .filter((c) => !c.blocked && !(c.alt && changes.some((o) => o.type === "add" && !o.blocked && o.slotIndex === c.slotIndex)))
+      .map((c) => c.key)
+  );
+}
+
+/** Slots an unticked lineup / add suggestion still uses (passed to the roster rules as "changing"). */
+export function remainingSlots(changes, checked) {
+  const s = new Set();
+  for (const c of changes) if (!c.blocked && !checked.has(c.key) && (c.type === "lineup" || c.type === "add")) touchedSlots(c).forEach((i) => s.add(i));
+  return s;
+}

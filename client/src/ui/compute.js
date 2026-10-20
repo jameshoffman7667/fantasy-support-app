@@ -252,3 +252,24 @@ export function rosterCompliance(league, { outIds = null, inIds = null } = {}) {
   if (rawPlayers > spots) issues.push(`roster over the limit by ${rawPlayers - spots}`);
   return { badIr, inCandidates, inSelDefault: inCandidates.slice(0, irOpenAfterOuts).map((p) => String(p.id)), irSlots, irOpenAfterOuts, spots, players, over, dropsNeeded: over, dropList, issues, rawOver: Math.max(0, rawPlayers - spots) };
 }
+
+/* ------------------------------------------------------------------ */
+/*  v4.9: the roster rules re-run on the lineup after the ticked moves  */
+/* ------------------------------------------------------------------ */
+/**
+ * The Proposed lineup's variances: computeRoster() on the roster as it would stand (`leagueAfter` result), with the ones
+ * already cleared on the real lineup (same league / week / rule / row) kept quiet. Returns { lg, rows, irRows } where
+ * rows = starters then bench (same order as the arrangement) and irRows follow the arrangement's IR list.
+ */
+export function computeProposedRoster(league, after) {
+  const r = computeRoster(after);
+  const cleared = new Set((league?.variances || []).filter((v) => v.cleared).map((v) => `${v.key}|${v.severity}`));
+  const keyOf = (row, issue) => [league.id, `W${league.week ?? "?"}`, "roster", issue.rule, `${row.slot} ${row.label}`].join("|") + `|${issue.severity}`;
+  const settle = (rows) =>
+    rows.map((row) => {
+      const issues = (row.issues || []).map((i) => ({ ...i, cleared: cleared.has(keyOf(row, i)) }));
+      const open = issues.filter((i) => !i.cleared);
+      return { ...row, issues, severity: worst(open.map((i) => i.severity)), reason: open.map((i) => i.text).join(" ") || null };
+    });
+  return { lg: after, rows: settle(r.rows), irRows: settle(r.irRows) };
+}

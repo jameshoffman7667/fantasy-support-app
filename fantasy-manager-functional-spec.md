@@ -903,7 +903,7 @@ Collected here since they cut across multiple sections:
 146. **Pushed lineup (v4.5.1):** the just-written lineup is used for up to 5 minutes while Sleeper's public read lags; the league is re-read after every push attempt.
 147. **Clearing reds (v4.6):** a red variance is cleared one at a time from the variance report, with a confirmation pop-up; no clear-all for red. Yellows can be cleared the same way; the yellow clear-all buttons stay.
 148. **Team list colours (v4.6):** each name in the league drop-down is coloured by its worst live variance.
-149. **Weekly clear (v4.6):** after a league's weekly waiver run its Claim Generator and every willing-to-drop tick are cleared.
+149. **Weekly clear (v4.6, replaced by 174 in v4.9):** after a league's weekly waiver run its Claim Generator and every willing-to-drop tick are cleared.
 150. **Player card (v4.6):** replacement names open the card; an unowned player can be claimed from it (bid, drop, submit).
 151. **Pending Claims (v4.6):** Waivers → Claim Generator + Pending Claims; queued claims are read with every roster read; bids can be changed and claims cancelled.
 152. **Rules (v4.6):** an opportunity already starting is no variance; dynasty bench comparisons use dynasty value; an injured bench player's replacement suggestion is yellow at most.
@@ -924,3 +924,12 @@ Collected here since they cut across multiple sections:
 167. **Auto packages (v4.8):** IR (with taxi), Roster, Lineup, Flex, per league; old Auto mode counts as all on; triggers 6 am Toronto, 1 h before kickoffs, 1 h before waivers; Roster claims = open spots + 2.
 168. **Roster tab / order (v4.8):** league switch resets to Current lineup; proposals ordered IR, Roster, Lineup, Flex.
 169. **Cheer meter (v4.8):** with leagues selected, each player's meter counts only those leagues.
+170. **Layered suggestions (v4.9):** every tick or untick treats the result as the roster and recalculates the suggestions, up to 4 layers deep; a dependent move shows inside its parent's card (↳, indented); unticking a parent removes its child; a child can't be ticked alone; applies to lineup moves and waiver adds.
+171. **Shared ticks (v4.9):** Current lineup and Proposed lineup share one tick set per league; default = every non-waiver move ticked; kept when leaving the page, reset after a lineup push.
+172. **Current vs Proposed (v4.9):** Current lineup shows the lineup as Sleeper has it with all variance notes regardless of ticks; Proposed lineup shows the resulting lineup and variances after the ticked moves, with the moves list and tick boxes at the bottom.
+173. **Claims after a push (v4.9):** players pushed to Sleeper leave the Claim Generator.
+174. **Weekly claim clear (v4.9, replaces 149):** at each league's weekly "after games" waiver time, claims made before it are cleared; claims made since stay. Daily-waiver leagues share the weekly clear time. Willing-to-drop ticks clear only when nothing is kept.
+175. **App week (v4.9):** advances at the last game's kickoff plus 4 hours (was Tuesday 10:00 Toronto, now only the fallback).
+176. **Drop candidates (v4.9):** all roster players (bench first, then starters), each by lowest projection; a manual order wins; locked players excluded; Waivers always opens on this page.
+177. **Claim rankings (v4.9):** bids grouped by bid (highest first); inside a group the entry order unless dragged (a manual reorder wins); that order feeds the Claim Generator; editing a bid regroups the player; Delete removes the bid on every page.
+178. **Waivers bottom bar (v4.9):** sticky; Drop candidates full-width Next; Available / Claim rankings / Claim Generator Back (1/3) + Next (2/3), Next replaced by Push to Sleeper on the Claim Generator; none on Pending Claims or Opponents.

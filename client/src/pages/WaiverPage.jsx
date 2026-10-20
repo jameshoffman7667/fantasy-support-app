@@ -4,7 +4,7 @@ import { pushKeys, waiverBaselineKeys } from "../variances.js";
 import { CATEGORIES, PERF_SORTS, POSITION_FILTERS, categoryRows, categoryView, keyLabel, perfValue } from "../waiverLists.js"; // v3.9, v4.8
 import { CopyEntries, applyCopiedBid, useCopyClaims } from "../ui/copyClaims.jsx"; // v4.7, v4.8
 import { availableElsewhere, compareToRoster, waiverRosterWarnings } from "../ui/compute.js"; // v3.9, v4.1
-import { claimKey, clearClaims, clearDrops, describeClaim, effectiveClaims, flatten, groupClaims, orderDrops, resetClaims, selectedClaims, setBid, simulate, syncDrops, toDollars } from "../waiverPlan.js";
+import { claimKey, clearClaims, clearDrops, afterPush, bidGroups, deleteBid, describeClaim, dropPool, effectiveClaims, flatten, groupClaims, orderDrops, reorderBids, resetClaims, selectedClaims, setBid, simulate, stampBids, syncDrops, toDollars } from "../waiverPlan.js";
 import { ChevronRight, Loader2, Search, SlidersHorizontal, X } from "lucide-react";
 import { expandPositions, fmtValue, normalizeView, sortRows } from "../statsView.js"; // v4.2
 import { StatPickers } from "../ui/statPickers.jsx"; // v4.2
@@ -472,7 +472,7 @@ function ElsewhereModal({ player, leagues, mode, onClose }) {
   const save = async (l, dollars) => {
     const pl = plans[l.id];
     if (!pl) return;
-    const next = { ...pl, bids: setBid(pl.bids || [], player, dollars) };
+    const next = { ...pl, bids: stampBids(pl.bids || [], setBid(pl.bids || [], player, dollars)) };
     setPlans((m) => ({ ...m, [l.id]: next }));
     try {
       const saved = await api.saveWaiverPlan(l.id, next);
@@ -1050,16 +1050,16 @@ function SimulatorBox({ mc }) {
   );
 }
 
-function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
+function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSignal = 0 }) {
   const [sentTick, setSentTick] = useState(0); // bumps when a push marks claims as sent
   const budget = league.waiverInfo?.budget || 0;
   const used = league.waiverInfo?.used || 0;
   const isFaab = Boolean(league.waiverInfo?.faab);
   const mode = plan.entryMode;
   const allBench = league.bench || [];
-  const bench = allBench.filter((p) => !p || !isLocked(p, league)); // v3.4: a locked player can't be dropped
-  // v3.7: drop lists show the bench lowest projection first.
-  const benchByProj = useMemo(() => [...bench].filter(Boolean).sort((a, b) => (a.proj ?? 0) - (b.proj ?? 0)), [bench]);
+  // v3.4: a locked player can't be dropped. v4.9: any roster player can be — bench lowest projection first, then starters.
+  const bench = useMemo(() => dropPool(league, isLocked), [league]);
+  const benchByProj = bench;
   const openSpots = Math.max(0, (league.benchSlots ?? allBench.length) - allBench.length);
 
   // Keep the drop ranking in step with the bench (new bench players go to the bottom, unticked).
@@ -1069,7 +1069,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
     const same = syncedDrops.length === plan.drops.length && syncedDrops.every((d, i) => d.id === plan.drops[i].id && d.name === plan.drops[i].name);
     if (!same) setPlan((pl) => ({ ...pl, drops: orderDrops(syncDrops(pl.drops, bench), bench, pl.dropsArranged) }));
   }, [syncedDrops, plan.drops, bench, setPlan]);
-  const benchById = useMemo(() => new Map(allBench.filter(Boolean).map((p) => [String(p.id), p])), [allBench]);
+  const benchById = useMemo(() => new Map(bench.map((p) => [String(p.id), p])), [bench]);
 
   const eff = useMemo(() => effectiveClaims({ ...plan, drops: syncedDrops }, { openSpots }), [plan, syncedDrops, openSpots]);
   // v3.0: claims already queued in Sleeper aren't proposed again. A queued claim matches a
@@ -1252,7 +1252,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
         </div>
       )}
 
-      <ClaimsPush league={league} ordered={toPush} onSent={() => setSentTick((t) => t + 1)} existing={existing} isFaab={isFaab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} nameOf={nameOf} />
+      <ClaimsPush league={league} ordered={toPush} onSent={(pushed) => { setSentTick((t) => t + 1); if (pushed?.length) setPlan((pl) => afterPush(pl, pushed)); }} pushSignal={pushSignal} existing={existing} isFaab={isFaab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} nameOf={nameOf} />
 
       {toPush.length > 0 && (
         <>
@@ -1278,7 +1278,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount }) {
 // v3.0: push the proposed claims to Sleeper (private API, opt-in, confirm, read-back).
 // The FIRST push is a single claim; once one has been read back from Sleeper — or the user has confirmed he can
 // see it in Sleeper (v4.1) — every ticked claim goes in one go.
-function ClaimsPush({ league, ordered, onSent = null, existing, isFaab, onRefresh, onOpenAccount, nameOf = (id) => ({ id, name: id }) }) {
+function ClaimsPush({ league, ordered, onSent = null, pushSignal = 0, existing, isFaab, onRefresh, onOpenAccount, nameOf = (id) => ({ id, name: id }) }) {
   const [st, setSt] = useState(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1291,16 +1291,25 @@ function ClaimsPush({ league, ordered, onSent = null, existing, isFaab, onRefres
   const proven = Boolean(st?.claimsProven) || Boolean(st?.log?.some((l) => l.action === "submit_waiver_claim" && l.ok && /and verified/.test(l.detail || "")));
   const batch = proven ? ordered : ordered.slice(0, 1);
   const label = (c) => (isFaab ? describeClaim(c) : `Claim ${c.addName}${c.dropName ? ` and drop ${c.dropName}` : " (no drop)"}`);
+  const rootRef = useRef(null);
+  useEffect(() => {
+    // v4.9: the bar's "Push to Sleeper" button opens the confirm box here and scrolls it into view.
+    if (!pushSignal) return;
+    if (ordered.length > 0) setConfirming(true);
+    rootRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pushSignal]);
   const sentUnverified = !proven && results?.some((r) => r.ok && r.verified === false);
   const send = async () => {
     if (busy) return;
     setBusy(true);
     const out = [];
+    const okClaims = [];
     for (const c of batch) {
       try {
         const r = await api.pushClaim(league.id, { addId: c.addId, dropId: c.dropId, bid: c.bid }, { keys: pushKeys(league, "waiver"), baseline: waiverBaselineKeys(league) });
         out.push({ label: label(c), ok: r.ok, verified: r.verified, detail: r.detail });
-        if (r.ok || r.duplicate) markSent(league.id, c);
+        if (r.ok || r.duplicate) { markSent(league.id, c); okClaims.push(c); }
         if (!r.ok) break; // stop at the first claim Sleeper doesn't accept
       } catch (e) {
         out.push({ label: label(c), ok: false, detail: e.message });
@@ -1310,7 +1319,7 @@ function ClaimsPush({ league, ordered, onSent = null, existing, isFaab, onRefres
     setResults(out);
     setBusy(false);
     setConfirming(false);
-    onSent?.();
+    onSent?.(okClaims);
     loadStatus();
     if (out.some((o) => o.ok)) onRefresh?.();
   };
@@ -1334,7 +1343,7 @@ function ClaimsPush({ league, ordered, onSent = null, existing, isFaab, onRefres
     }
   };
   return (
-    <div className="mt-3 space-y-2" data-claims-push>
+    <div ref={rootRef} className="mt-3 space-y-2" data-claims-push>
       <SectionLabel>Push to Sleeper</SectionLabel>
       <PrivateGate league={league} group="claims" onOpenAccount={onOpenAccount}>
         {league.privateInfo?.claims?.error && <div style={{ color: C.minor }} className="text-[11px] px-1">Couldn't read your queued claims from Sleeper ({league.privateInfo.claims.error}) — proposed claims may duplicate ones already there.</div>}
@@ -1682,8 +1691,82 @@ function PendingClaimsPage({ league, onRefresh, onOpenAccount }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  v4.9 CLAIM RANKINGS: players with bids grouped by bid (highest      */
+/*  first); inside a group the order they were entered, or the one you  */
+/*  drag. That order is the Claim Generator's order.                    */
+/* ------------------------------------------------------------------ */
+function RankingsPage({ league, plan, setPlan }) {
+  const budget = league.waiverInfo?.budget || 0;
+  const isFaab = Boolean(league.waiverInfo?.faab);
+  const mode = plan.entryMode;
+  const remaining = Math.max(0, budget - (league.waiverInfo?.used || 0));
+  const totalBids = (plan.bids || []).reduce((t, b) => t + (Number(b.bid) || 0), 0);
+  const remainingLive = remaining - totalBids;
+  const wc = league.waiverCategories || fallbackLists(league);
+  const rowsById = useMemo(() => new Map((league.waiver?.rows || []).map((r) => [r.id, r])), [league.waiver]);
+  const groups = useMemo(() => bidGroups(plan), [plan]);
+  const cardOf = (b) => wc.cards?.[b.id] || rowsById.get(b.id) || { id: b.id, name: b.name, pos: b.pos };
+  const onBid = (b, dollars) => setPlan((pl) => (dollars == null ? deleteBid(pl, b.id) : { ...pl, bids: setBid(pl.bids || [], { id: b.id, name: b.name, pos: b.pos }, dollars) }));
+  return (
+    <div data-rankings>
+      {isFaab && budget > 0 && (
+        <FaabCard current={remaining} currentPct={pctOf1(remaining, budget)} spent={totalBids} wins={(plan.bids || []).length} after={remainingLive} afterPct={pctOf1(remainingLive, budget)}>
+          <div style={{ color: C.textFaint }} className="text-[10px] mt-2">Left: the budget available in Sleeper. Right: that minus every bid entered, updated as you type.</div>
+        </FaabCard>
+      )}
+      <div className="flex items-center justify-between gap-2 px-1 pb-2">
+        <SectionLabel>Claim rankings</SectionLabel>
+        {isFaab && <EntryModeToggle mode={mode} onChange={(m) => setPlan((pl) => ({ ...pl, entryMode: m }))} />}
+      </div>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 pb-2">
+        Players with bids, highest bid first. Within the same bid, drag the handle to set which claim goes first — this is the order the Claim Generator uses. Clearing a bid box deletes the bid everywhere.
+      </div>
+      {groups.length === 0 ? (
+        <div style={{ color: C.textMuted }} className="text-sm px-1 py-3" data-rankings-empty>No bids yet. Enter a bid on the Available page and it shows up here.</div>
+      ) : (
+        groups.map((g) => (
+          <div key={g.bid} className="mb-3" data-rank-group={g.bid}>
+            {isFaab && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-1">{fmtMoney(g.bid)}{pctOf1(g.bid, budget) != null ? ` · ${pctOf1(g.bid, budget)}% of budget` : ""} · {g.bids.length} player{g.bids.length === 1 ? "" : "s"}</div>}
+            <DragList
+              items={g.bids}
+              getKey={(b) => b.id}
+              onReorder={(ids) => setPlan((pl) => reorderBids(pl, g.bid, ids))}
+              label="Drag to set the claim order within this bid"
+              render={(b, { handleProps, dragging }) => {
+                const p = cardOf(b);
+                return (
+                  <div style={{ background: C.surface, border: `1px solid ${C.border}`, opacity: dragging ? 0.92 : 1 }} className="rounded-md px-2.5 py-2 flex items-center gap-2" data-rank-row={b.id}>
+                    <DragHandle handleProps={handleProps} dragging={dragging} />
+                    <PlayerLink player={p} className="shrink-0 rounded-full">
+                      <Headshot player={p} size={30} />
+                    </PlayerLink>
+                    <div className="min-w-0 flex-1">
+                      <PlayerLink player={p} className="block min-w-0 truncate">
+                        <span style={{ color: C.text }} className="text-sm">{b.name}</span> <span style={{ color: C.textFaint }} className="text-[11px]">{b.pos}{p.team ? ` · ${p.team}` : ""}</span>
+                      </PlayerLink>
+                      <div style={{ color: C.textMuted }} className="text-[11px]">{p.proj != null ? `Proj ${Number(p.proj).toFixed(1)}` : "No projection"}{p.status && p.status !== "Healthy" ? ` · ${p.status}` : ""}</div>
+                    </div>
+                    <div className="shrink-0 flex flex-col items-end gap-1">
+                      {isFaab && <BidBox dollars={b.bid} mode={mode} budget={budget} onCommit={(d) => onBid(b, d)} ariaLabel={`Bid for ${b.name}`} />}
+                      {isFaab && <BidMath mode={mode} bid={b.bid} budget={budget} remaining={remainingLive} />}
+                      <button type="button" onClick={() => setPlan((pl) => deleteBid(pl, b.id))} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="text-[11px] rounded px-2 py-0.5" data-rank-delete={b.id} aria-label={`Delete the claim for ${b.name}`}>Delete</button>
+                    </div>
+                  </div>
+                );
+              }}
+            />
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+const PAGE_FLOW = ["drops", "available", "rankings", "claims"]; // v4.9: pages the bottom Back / Next bar cycles through
 export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeagues = [] }) {
-  const [sub, setSub] = useState("available");
+  const [sub, setSub] = useState("drops"); // v4.9: always opens on Drop candidates
+  const [pushSignal, setPushSignal] = useState(0);
   const [plan, setPlanState] = useState(null);
   const [planError, setPlanError] = useState(null);
   const [faab, setFaab] = useState({ loading: false, result: null, error: null });
@@ -1692,6 +1775,7 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
   const leagueId = league.id;
 
   useEffect(() => {
+    setSub("drops");
     let cancelled = false;
     setPlanState(null);
     api.getWaiverPlan(leagueId).then((p) => !cancelled && setPlanState(p)).catch((e) => !cancelled && setPlanError(e.message));
@@ -1715,7 +1799,11 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
     (fn) => {
       setPlanState((prev) => {
         if (!prev) return prev;
-        const next = typeof fn === "function" ? fn(prev) : fn;
+        let next = typeof fn === "function" ? fn(prev) : fn;
+        // v4.9: bids and custom claims remember when they were made / last changed (the weekly clear keeps recent ones).
+        const now = Date.now();
+        if (next.bids !== prev.bids) next = { ...next, bids: stampBids(prev.bids || [], next.bids || [], now) };
+        if (next.custom !== prev.custom) next = { ...next, custom: (next.custom || []).map((c) => (c.at != null ? c : { ...c, at: now })) };
         latest.current = next;
         clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(flush, 500);
@@ -1752,11 +1840,15 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
     window.addEventListener("fm-plan-bid", on);
     return () => window.removeEventListener("fm-plan-bid", on);
   }, [leagueId, setPlan]);
+  const go = (key) => {
+    setSub(key);
+    try { window.scrollTo?.({ top: 0 }); } catch { /* no window */ }
+  };
   const dropCount = plan ? (plan.drops || []).filter((d) => d.willing).length : 0;
   const bidCount = plan ? (plan.bids || []).length : 0;
   const claimCount = plan ? effectiveClaims(plan, { openSpots: Math.max(0, (league.benchSlots ?? (league.bench || []).length) - (league.bench || []).length) }).claims.length : 0;
   const tab = (key, label) => (
-    <button key={key} onClick={() => setSub(key)} aria-current={sub === key ? "page" : undefined} data-waiver-tab={key} style={{ color: sub === key ? C.text : C.textMuted, borderBottom: `2px solid ${sub === key ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium leading-tight">
+    <button key={key} onClick={() => setSub(key)} aria-current={sub === key ? "page" : undefined} data-waiver-tab={key} style={{ color: sub === key ? C.text : C.textMuted, borderBottom: `2px solid ${sub === key ? C.brand : "transparent"}` }} className="flex-1 py-2 px-0.5 text-xs font-medium leading-tight">
       {label}
     </button>
   );
@@ -1765,6 +1857,7 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
       <div className="flex mb-3" style={{ borderBottom: `1px solid ${C.border}` }}>
         {tab("drops", `Drop candidates${dropCount ? ` (${dropCount})` : ""}`)}
         {tab("available", `Available${bidCount ? ` (${bidCount})` : ""}`)}
+        {tab("rankings", `Claim rankings${bidCount ? ` (${bidCount})` : ""}`)}
         {tab("claims", `Claim Generator${claimCount ? ` (${claimCount})` : ""}`)}
         {tab("pending", `Pending Claims${(league.privateInfo?.claims?.pending || []).length ? ` (${league.privateInfo.claims.pending.length})` : ""}`)}
         {league.waiverInfo?.faab && tab("opponents", "Opponents")}
@@ -1783,8 +1876,22 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
         <AvailablePage league={league} plan={plan} setPlan={setPlan} faab={faab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} allLeagues={allLeagues} />
       ) : sub === "opponents" ? (
         <OpponentsPage league={league} />
+      ) : sub === "rankings" ? (
+        <RankingsPage league={league} plan={plan} setPlan={setPlan} />
       ) : (
-        <ClaimsPage league={league} plan={plan} setPlan={setPlan} onRefresh={onRefresh} onOpenAccount={onOpenAccount} />
+        <ClaimsPage league={league} plan={plan} setPlan={setPlan} onRefresh={onRefresh} onOpenAccount={onOpenAccount} pushSignal={pushSignal} />
+      )}
+      {plan && PAGE_FLOW.includes(sub) && (
+        <div style={{ background: C.bg, borderTop: `1px solid ${C.border}`, bottom: 0 }} className="sticky z-20 -mx-4 px-4 py-2 mt-3 flex items-center gap-2" data-waiver-nav>
+          {sub !== PAGE_FLOW[0] && (
+            <button type="button" onClick={() => go(PAGE_FLOW[PAGE_FLOW.indexOf(sub) - 1])} style={{ flex: "1 1 0", color: C.text, border: `1px solid ${C.border}`, background: C.surface }} className="rounded-md py-2.5 text-sm font-medium" data-nav-back>← Back</button>
+          )}
+          {sub === "claims" ? (
+            <button type="button" onClick={() => setPushSignal((n) => n + 1)} style={{ flex: "2 1 0", background: C.brand, color: C.text }} className="rounded-md py-2.5 text-sm font-medium" data-nav-push>Push to Sleeper</button>
+          ) : (
+            <button type="button" onClick={() => go(PAGE_FLOW[PAGE_FLOW.indexOf(sub) + 1])} style={{ flex: sub === PAGE_FLOW[0] ? "1 1 100%" : "2 1 0", background: C.brand, color: C.text }} className="rounded-md py-2.5 text-sm font-medium" data-nav-next>Next →</button>
+          )}
+        </div>
       )}
     </div>
   );

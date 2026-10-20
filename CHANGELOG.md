@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, v4.9, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,34 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.9 — Layered roster moves, Claim rankings, waiver clean-up
+
+**Manual step required: none.** No `docker-compose.yml` change and no new environment variable.
+
+**Commit message (short):** v4.9: Layered roster moves, Claim rankings
+
+**Commit message (extended):** v4.9: Roster suggestions are now layered: ticking or unticking a move recalculates the rest, so a swap that breaks the flex rule gets its own indented follow-up move (↳) in the same card; unticking a parent removes its child, and a child can't be ticked alone. This works for lineup moves and waiver adds. Proposed lineup shows the resulting lineup and variances for the ticked moves, with the move list and tick boxes at the bottom; ticks are shared with Current lineup (default: every non-waiver move), kept when leaving the page, reset after a push, and the push confirm scrolls into view. Waivers gets a Claim rankings page (bids grouped highest first, drag within a group, edit or delete bids) between Available and Claim Generator, a sticky Back / Next / Push to Sleeper bar, and always opens on Drop candidates, which now lists every roster player (bench, then starters, lowest projection first). Pushed claims leave the Claim Generator; after each weekly waiver clear, claims made before it are cleared (daily-waiver leagues too). The app week advances at the last kickoff plus 4 hours. No compose or environment changes.
+
+### What changed
+- **Roster → Current lineup (layered suggestions):** every tick or untick treats the result as the roster and recalculates the suggestions (up to 4 layers). Example: a bye WR swapped for a Monday bench WR now breaks the flex timing rule, so a flex ↔ WR swap appears inside the same card, indented with ↳. Unticking a parent removes its child; a child cannot be ticked alone. Works for lineup moves and for waiver adds. A "Reset" button returns the ticks to the default.
+- **Ticks (shared):** Current lineup and Proposed lineup share one set of ticks per league. Default: every non-waiver move ticked, waiver adds unticked. Ticks are kept when you leave the page (while the app stays open) and reset after a lineup push. Current lineup still shows the lineup as Sleeper has it with all variance notes; only the suggestion list recalculates.
+- **Roster → Proposed lineup:** shows the resulting lineup and its variances for the ticked moves, updating instantly. The moves list with tick boxes sits at the bottom. After "Push to Sleeper" the screen scrolls so "Yes, update my roster" is visible.
+- **Waivers → Claim rankings (new, between Available and Claim Generator):** players with bids grouped by bid, highest first; inside a group in the order the bids were entered, with a handle to reorder (that order is what the Claim Generator uses; a manual reorder beats entry order). FAAB boxes are editable here (the player moves to the matching group), Delete removes the bid on every page, and the same FAAB card sits at the top.
+- **Waivers bottom bar (sticky):** Drop candidates = full-width Next →; Available, Claim rankings, Claim Generator = ← Back (1/3) + Next → (2/3); on Claim Generator Next is replaced by Push to Sleeper (it opens the confirm box and scrolls to it). No bar on Pending Claims or Opponents. The Waivers screen always opens on Drop candidates.
+- **Drop candidates:** now lists every roster player: bench first, then starters, each sorted by lowest projection (rows say Bench or Starter (slot)); your own drag order still wins. The Claim Generator's drop choices use the same list. Locked (already kicked off) players stay out.
+- **Claims clear after a push:** the players that were pushed leave the Claim Generator (their bids, edits, custom claims and order).
+- **Weekly claim clear (replaces the v4.6 whole-plan wipe):** at each league's weekly "after games" waiver time, claims made BEFORE that time are cleared; claims made since stay. Bids and custom claims now carry a timestamp (older saved bids are dated by the plan's last save). Daily-waiver leagues are handled too, using the weekly clear time. The willing-to-drop ticks clear only when no claim is kept.
+- **App week:** advances once the week's last game is over — the last kickoff plus 4 hours (was Tuesday 10:00 Toronto; that remains the fallback if the schedule can't be read). The "week over" checks elsewhere use 4 hours as well (was 4.5).
+
+### Unverified / assumptions
+- The weekly clear time comes from Sleeper's league settings (`waiver_day_of_week`, `daily_waivers_hour`), which I assumed also apply to daily-waiver leagues; the field names are not in Sleeper's help article. A per-league time set in Opponents overrides it.
+- Drop candidates lists bench and starters only (not IR / taxi players).
+- Ticks are kept per league while the app is open, not across a page reload.
+- When you tick a parent move yourself its follow-up move starts unticked.
+- Not run against live Sleeper data; checked with the test suites (new: t53 Roster layering, t54 Waivers) and the browser harness.
 
 ---
 

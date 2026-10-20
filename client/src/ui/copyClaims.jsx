@@ -1,5 +1,5 @@
 import * as api from "../api.js";
-import { setBid } from "../waiverPlan.js";
+import { setBid, stampBids } from "../waiverPlan.js";
 import { useEffect, useState } from "react";
 import { C, fmtWhen } from "./theme.js";
 
@@ -50,7 +50,7 @@ export async function applyCopiedBid(league, player, pct) {
   window.dispatchEvent(ev);
   if (!ev.defaultPrevented) {
     const plan = await api.getWaiverPlan(league.id);
-    await api.saveWaiverPlan(league.id, { ...plan, bids: setBid(plan.bids || [], player, dollars) });
+    await api.saveWaiverPlan(league.id, { ...plan, bids: stampBids(plan.bids || [], setBid(plan.bids || [], player, dollars)) });
   }
   return dollars;
 }

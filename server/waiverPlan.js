@@ -38,7 +38,7 @@ export function sanitize(input) {
   out.bids = (Array.isArray(p.bids) ? p.bids : [])
     .slice(0, 200)
     .filter((b) => b && b.id != null)
-    .map((b) => ({ id: str(b.id, 40), name: str(b.name), pos: str(b.pos, 6), bid: num(b.bid, 0, 1e6) }))
+    .map((b) => ({ id: str(b.id, 40), name: str(b.name), pos: str(b.pos, 6), bid: num(b.bid, 0, 1e6), ...(Number.isFinite(Number(b.at)) && Number(b.at) > 0 ? { at: Math.round(Number(b.at)) } : {}) }))
     .filter((b) => b.bid != null && !seen.has(b.id) && seen.add(b.id));
   out.edits = {};
   for (const [key, e] of Object.entries(p.edits && typeof p.edits === "object" ? p.edits : {}).slice(0, 500)) {
@@ -55,7 +55,7 @@ export function sanitize(input) {
   out.custom = (Array.isArray(p.custom) ? p.custom : [])
     .slice(0, 100)
     .filter((c) => c && c.addId != null && num(c.bid, 0, 1e6) != null)
-    .map((c, i) => ({ key: str(c.key || `c:${i}:${c.addId}`, 100), addId: str(c.addId, 40), addName: str(c.addName), pos: str(c.pos, 6), bid: num(c.bid, 0, 1e6), dropId: c.dropId == null || c.dropId === "" ? null : str(c.dropId, 40), dropName: c.dropId ? str(c.dropName) : null }));
+    .map((c, i) => ({ key: str(c.key || `c:${i}:${c.addId}`, 100), addId: str(c.addId, 40), addName: str(c.addName), pos: str(c.pos, 6), bid: num(c.bid, 0, 1e6), dropId: c.dropId == null || c.dropId === "" ? null : str(c.dropId, 40), dropName: c.dropId ? str(c.dropName) : null, ...(Number.isFinite(Number(c.at)) && Number(c.at) > 0 ? { at: Math.round(Number(c.at)) } : {}) }));
   out.order = (Array.isArray(p.order) ? p.order : []).slice(0, 1000).map((x) => str(x, 100));
   out.dropsArranged = p.dropsArranged === true;
   out.unselected = (Array.isArray(p.unselected) ? p.unselected : []).slice(0, 500).map((x) => str(x, 100));

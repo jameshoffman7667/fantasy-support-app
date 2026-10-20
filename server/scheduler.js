@@ -236,7 +236,7 @@ export async function hypeTargetWeek(state, getWeekSchedule = schedule.getWeekSc
   if (state?.weekAdvanced) return week;
   const sched = await getWeekSchedule(Number(state.season), week).catch(() => null);
   const games = sched?.games || [];
-  const over = games.length > 0 && games.every((g) => g.state === "post" || (g.kickoffMillis != null && g.kickoffMillis + 4.5 * 3600e3 < now));
+  const over = games.length > 0 && games.every((g) => g.state === "post" || (g.kickoffMillis != null && g.kickoffMillis + 4 * 3600e3 < now));
   return over ? Math.min(18, week + 1) : week;
 }
 async function hypeTick() {

@@ -165,6 +165,21 @@ export function waiverSchedule(league, override, now = Date.now()) {
   return { next, prev: next - 7 * DAY, daily: false, source: "league settings (estimated)", day: et.dow, hourET: et.hour };
 }
 
+/**
+ * v4.9: the league's WEEKLY "after games" waiver clear (the weekly run every league has; daily waivers are an extra on
+ * top and share the same clear time). Same as waiverSchedule but a daily league is treated as weekly: Sleeper's
+ * `waiver_day_of_week` (assumed to apply to daily leagues too — field names unverified) at `daily_waivers_hour`.
+ */
+export function weeklyWaiverSchedule(league, override, now = Date.now()) {
+  const s = league?.settings || {};
+  if (!(Number(s.daily_waivers) === 1) || (override && Number.isInteger(override.day) && Number.isInteger(override.hour))) return waiverSchedule(league, override, now);
+  const hour = Number.isInteger(Number(s.daily_waivers_hour)) ? Number(s.daily_waivers_hour) : 0;
+  const sleeperDay = Number.isInteger(Number(s.waiver_day_of_week)) ? Number(s.waiver_day_of_week) : 2;
+  const next = nextAt(LA, (sleeperDay + 1) % 7, hour, now);
+  const et = tzParts(ET, next);
+  return { next, prev: next - 7 * DAY, daily: false, source: "league settings (estimated)", day: et.dow, hourET: et.hour };
+}
+
 /* ---------------- collection ---------------- */
 async function mapLimit(items, limit, fn) {
   let next = 0;

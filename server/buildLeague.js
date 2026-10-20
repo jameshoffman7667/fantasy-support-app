@@ -272,7 +272,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   // over when every game is final (or started more than 4.5 h ago, in case ESPN's status lags).
   // No schedule data → nobody is treated as locked (better to over-show than hide everyone).
   const nowMs = Date.now();
-  const weekOver = !weekSchedule?.games?.length || weekSchedule.games.every((g) => g.state === "post" || (g.kickoffMillis != null && g.kickoffMillis + 4.5 * 3600 * 1000 < nowMs));
+  const weekOver = !weekSchedule?.games?.length || weekSchedule.games.every((g) => g.state === "post" || (g.kickoffMillis != null && g.kickoffMillis + 4 * 3600 * 1000 < nowMs));
   const waiverLocked = (teamAbbr) => {
     if (weekOver) return false;
     const { kickoff } = kickoffFor(teamAbbr);
