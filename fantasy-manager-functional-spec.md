@@ -933,3 +933,9 @@ Collected here since they cut across multiple sections:
 176. **Drop candidates (v4.9):** all roster players (bench first, then starters), each by lowest projection; a manual order wins; locked players excluded; Waivers always opens on this page.
 177. **Claim rankings (v4.9):** bids grouped by bid (highest first); inside a group the entry order unless dragged (a manual reorder wins); that order feeds the Claim Generator; editing a bid regroups the player; Delete removes the bid on every page.
 178. **Waivers bottom bar (v4.9):** sticky; Drop candidates full-width Next; Available / Claim rankings / Claim Generator Back (1/3) + Next (2/3), Next replaced by Push to Sleeper on the Claim Generator; none on Pending Claims or Opponents.
+179. **Auto mode location (v4.10):** the Auto mode check boxes live on the League page → Auto mode sub tab; the settings change log is the Change log sub tab.
+180. **Zeros only (v4.10):** under Auto lineup; swaps out only bye / injured starters projected a real 0 (not no projection); Auto flex still runs after.
+181. **Apply to all (v4.10):** one button copies the four boxes, zeros only and the pick-up list to every league.
+182. **Auto pick-ups (v4.10):** for the All, Trending and Spot Start lists the add with the biggest gain to the best projected lineup goes first; other lists in their own order. Package order unchanged: IR out, IR in, pick-ups, lineup, flex.
+183. **Score card (v4.10):** the Current vs Proposed points card is on Current lineup too and follows the ticked moves.
+184. **Roster validity first (v4.10):** IR eligibility and roster limit fixes come before every other roster move; other moves are hidden until the ticked fixes make the roster valid, then pushed together with the fixes first; drops are one card each with a dropdown.

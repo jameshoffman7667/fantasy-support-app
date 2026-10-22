@@ -1,5 +1,5 @@
 import * as store from "./projectionStore.js";
-import { FLEX_ELIGIBLE, solveLineup } from "./lineupSolve.js";
+import { FLEX_ELIGIBLE, slotAccepts, solveLineup } from "./lineupSolve.js";
 
 /**
  * v4.8: Auto mode is four packages, each on/off per league: IR (players into / out of injured reserve, plus taxi moves),
@@ -48,7 +48,7 @@ export function packagesFor(s, leagueId) {
   const own = s.packages?.[id];
   const base = own ? { ...ALL_OFF, ...own } : s.leagues?.[id] === true ? { ...ALL_ON } : { ...ALL_OFF };
   const ranking = RANKINGS.includes(own?.ranking) ? own.ranking : "all";
-  return { ir: Boolean(base.ir), roster: Boolean(base.roster), lineup: Boolean(base.lineup), flex: Boolean(base.flex), ranking };
+  return { ir: Boolean(base.ir), roster: Boolean(base.roster), lineup: Boolean(base.lineup), flex: Boolean(base.flex), ranking, zerosOnly: own?.zerosOnly === true };
 }
 function save(username, s) {
   // `leagues` stays as "any package on", for anything still reading the old shape
@@ -62,7 +62,7 @@ function save(username, s) {
 function ensurePackages(s, leagueId) {
   const id = String(leagueId);
   const cur = packagesFor(s, id);
-  s.packages[id] = { ir: cur.ir, roster: cur.roster, lineup: cur.lineup, flex: cur.flex, ranking: cur.ranking };
+  s.packages[id] = { ir: cur.ir, roster: cur.roster, lineup: cur.lineup, flex: cur.flex, ranking: cur.ranking, zerosOnly: cur.zerosOnly };
   return s.packages[id];
 }
 /** Turns all four packages on or off (the old check box). */
@@ -82,6 +82,24 @@ export function setRanking(username, leagueId, ranking) {
   if (!RANKINGS.includes(ranking)) throw new Error(`Unknown ranking "${ranking}".`);
   const s = getSettings(username);
   ensurePackages(s, leagueId).ranking = ranking;
+  return save(username, s);
+}
+/** v4.10: "zeros only" under Auto lineup — only starters projected 0 (bye / injured) are swapped out. */
+export function setZerosOnly(username, leagueId, on) {
+  const s = getSettings(username);
+  ensurePackages(s, leagueId).zerosOnly = Boolean(on);
+  return save(username, s);
+}
+/** v4.10: copies one league's four switches, zeros only and roster ranking to every league in `leagueIds`. */
+export function applyToAll(username, fromLeagueId, leagueIds = []) {
+  const s = getSettings(username);
+  const src = packagesFor(s, fromLeagueId);
+  for (const id of leagueIds) {
+    const p = ensurePackages(s, id);
+    for (const k of PACKAGES) p[k] = src[k];
+    p.ranking = src.ranking;
+    p.zerosOnly = src.zerosOnly;
+  }
   return save(username, s);
 }
 export function setPaused(username, paused) {
@@ -158,6 +176,26 @@ export function planMoves(built, now = Date.now()) {
   return out;
 }
 
+/** v4.10: rankings whose pickups are re-ordered by what each player adds to the best projected starting lineup. */
+export const LINEUP_GAIN_RANKINGS = new Set(["all", "trending", "spot"]);
+/** Projected points of the best lineup from the roster (started players pinned), optionally with one free agent added. Pure. */
+export function bestLineupTotal(built, extra = null, now = Date.now()) {
+  const rows = built.starters || [];
+  if (!rows.length) return 0;
+  const slots = rows.map((r) => r.slot);
+  const key = (p) => String(p?.id);
+  const pool = [...rows.map((r) => r.player), ...(built.bench || []), ...(extra ? [extra] : [])].filter((p) => p && p.id != null && !hasStarted(p, now));
+  const locked = rows.map((r) => (r.player && hasStarted(r.player, now) ? r.player : null));
+  const picks = solveLineup(slots, pool.map((p) => ({ ...p, origin: p === extra ? "waiver" : "roster" })), locked, { keyOf: key, currentKeyBySlot: rows.map((r) => (r.player ? key(r.player) : null)) });
+  return picks.reduce((t, p) => t + (Number(p?.proj) || 0), 0);
+}
+/** The pool re-ordered: players who raise the best lineup first (biggest gain first), the rest keep their order. Pure. */
+export function rankByLineupGain(built, pool, now = Date.now(), limit = 40) {
+  const base = bestLineupTotal(built, null, now);
+  const scored = pool.map((p, i) => ({ p, i, gain: i < limit ? bestLineupTotal(built, p, now) - base : 0 }));
+  const helps = (x) => x.gain > 0.05;
+  return scored.sort((a, b) => Number(helps(b)) - Number(helps(a)) || (helps(a) && helps(b) ? b.gain - a.gain : 0) || a.i - b.i).map((x) => ({ ...x.p, lineupGain: helps(x) ? Math.round(x.gain * 10) / 10 : 0 }));
+}
 const claimable = (p, pending, built, now) => p && p.id != null && CLAIM_POS.has(p.pos) && !pending.has(String(p.id)) && !NO_CLAIM.has(p.status) && !p.started && !(p.kickoff != null && p.kickoff <= now && !built.weekOver);
 /**
  * $0 claims for the open bench spots. The pool is the chosen ranking (a Waivers → Available view): "all" = the earlier
@@ -182,7 +220,9 @@ export function planClaims(built, { pendingAdds = [], moved = 0, now = Date.now(
     pool = (built.freeAgents || []).filter((p) => claimable(p, pending, built, now));
     pool.sort((a, b) => Number(Boolean(b.trending)) - Number(Boolean(a.trending)) || (Number(b.trendCount) || 0) - (Number(a.trendCount) || 0) || byValue(a, b));
   }
-  return pool.slice(0, Math.min(open + EXTRA_CLAIMS, MAX_CLAIMS)).map((p) => ({ addId: String(p.id), name: p.name, pos: p.pos, bid: 0 }));
+  // v4.10: for All / Trending / Spot Start the pickup that gives the best projected lineup goes first; other lists stay in order
+  if (LINEUP_GAIN_RANKINGS.has(ranking)) pool = rankByLineupGain(built, pool, now);
+  return pool.slice(0, Math.min(open + EXTRA_CLAIMS, MAX_CLAIMS)).map((p) => ({ addId: String(p.id), name: p.name, pos: p.pos, bid: 0, ...(p.lineupGain ? { lineupGain: p.lineupGain } : {}) }));
 }
 
 /**
@@ -190,7 +230,32 @@ export function planClaims(built, { pendingAdds = [], moved = 0, now = Date.now(
  * are never used), with started players pinned. → { starters: [ids in slot order], changes: [{slot, fromId, fromName, toId,
  * toName, delta}], gain } — changes is empty when nothing beats today's lineup by more than a rounding error. Pure.
  */
-export function planLineup(built, now = Date.now()) {
+/** v4.10: a starter projected 0 because he is on bye or injured (a real 0, not a missing projection). */
+export const isZeroStarter = (p) => Boolean(p) && p.proj != null && Number(p.proj) === 0 && Boolean(p.status) && p.status !== "Healthy";
+/**
+ * "Zeros only": each unlocked starter who is a zero (bye / injured, projected 0) is replaced by the best-projected bench
+ * player who fits his slot and is projected above 0; nobody else moves. Same shape as planLineup. Pure.
+ */
+export function planLineupZeros(built, now = Date.now()) {
+  const rows = built.starters || [];
+  const out = { starters: (built.starterIds || rows.map((r) => r.player?.id ?? "0")).map((x) => String(x ?? "0")), changes: [], gain: 0 };
+  if (!eligibleLeague(built) || !rows.length) return out;
+  const used = new Set();
+  const bench = (built.bench || []).filter((p) => p && p.id != null && !hasStarted(p, now) && Number(p.proj) > 0).sort((a, b) => Number(b.proj) - Number(a.proj));
+  rows.forEach((r, i) => {
+    const cur = r.player;
+    if (!cur || hasStarted(cur, now) || !isZeroStarter(cur)) return;
+    const pick = bench.find((b) => !used.has(String(b.id)) && slotAccepts(r.slot, b.pos));
+    if (!pick) return;
+    used.add(String(pick.id));
+    out.starters[i] = String(pick.id);
+    out.changes.push({ slot: r.slot, fromId: String(cur.id), fromName: cur.name, toId: String(pick.id), toName: pick.name, delta: Number(pick.proj) - Number(cur.proj || 0) });
+    out.gain += Number(pick.proj) - Number(cur.proj || 0);
+  });
+  return out;
+}
+export function planLineup(built, now = Date.now(), { zerosOnly = false } = {}) {
+  if (zerosOnly) return planLineupZeros(built, now);
   const rows = built.starters || [];
   const out = { starters: (built.starterIds || rows.map((r) => r.player?.id ?? "0")).map((x) => String(x ?? "0")), changes: [], gain: 0 };
   if (!eligibleLeague(built) || !rows.length) return out;
@@ -352,7 +417,7 @@ const pushStarters = (username, built, deps, starters) => deps.priv.updateStarte
 export async function runLineup(username, built, deps, now = Date.now()) {
   const none = { changes: [], starters: null };
   if (!isPkgOn(username, built?.id, "lineup") || !eligibleLeague(built)) return none;
-  const plan = planLineup(built, now);
+  const plan = planLineup(built, now, { zerosOnly: packagesFor(getSettings(username), built.id).zerosOnly });
   if (!plan.changes.length) return none;
   const list = plan.changes.map((c) => ({ id: `${c.slot}:${c.toId}`, name: `${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName}` }));
   const r = await attempt(username, built, deps, now, { kind: "lineup", list, group: "roster", run: () => pushStarters(username, built, deps, plan.starters), describe: (l) => `Lineup: ${l.map((x) => x.name).join("; ")}.` });
@@ -394,7 +459,7 @@ export function preview(username, built, { perms = {}, waiverAt = null, leadMs =
   const pk = packagesFor(s, built?.id);
   const on = PACKAGES.some((k) => pk[k]);
   const eligible = eligibleLeague(built);
-  const out = { on, paused: s.paused, packages: { ir: pk.ir, roster: pk.roster, lineup: pk.lineup, flex: pk.flex }, ranking: pk.ranking, eligible, claimsApply: claimsApply(built), lines: [], moves: { ir: [], irOut: [], taxi: [] }, claims: [], lineup: [], flex: [], claimsAt: null, counts: {} };
+  const out = { on, paused: s.paused, packages: { ir: pk.ir, roster: pk.roster, lineup: pk.lineup, flex: pk.flex }, ranking: pk.ranking, zerosOnly: pk.zerosOnly, eligible, claimsApply: claimsApply(built), lines: [], moves: { ir: [], irOut: [], taxi: [] }, claims: [], lineup: [], flex: [], claimsAt: null, counts: {} };
   if (!eligible) {
     out.lines.push("Auto mode isn't available for best ball leagues.");
     return out;
@@ -430,15 +495,15 @@ export function preview(username, built, { perms = {}, waiverAt = null, leadMs =
       const p = byId.get(c.addId) || {};
       return { ...c, team: p.team || null, trendCount: p.trendCount ?? null, value: p.value ?? null };
     });
-    if (claims.length) out.lines.push(`Roster: place ${claims.length} $0 claim${claims.length === 1 ? "" : "s"} with no drop (${claims.length - Math.min(EXTRA_CLAIMS, claims.length)} for the empty spots, plus ${Math.min(EXTRA_CLAIMS, claims.length)} spare), from the ${pk.ranking === "all" ? "default order (trending, then value)" : `"${pk.ranking}" list`}: ${claims.map((c) => c.name).join(", ")}.${tag("roster")}`);
+    if (claims.length) out.lines.push(`Roster: place ${claims.length} $0 claim${claims.length === 1 ? "" : "s"} with no drop (${claims.length - Math.min(EXTRA_CLAIMS, claims.length)} for the empty spots, plus ${Math.min(EXTRA_CLAIMS, claims.length)} spare), from the ${pk.ranking === "all" ? "default order (trending, then value)" : `"${pk.ranking}" list`}${LINEUP_GAIN_RANKINGS.has(pk.ranking) ? ", best projected lineup first" : ""}: ${claims.map((c) => c.name).join(", ")}.${tag("roster")}`);
     else out.lines.push(Math.max(0, (Number(built.benchSlots) || 0) - Math.max(0, bench - moved) - pendingAdds.length) ? "Roster: no claims — no free agent passes the filters (QB/RB/WR/TE, healthy, game not started)." : "Roster: no claims — no open bench spots" + (pendingAdds.length ? " (your pending claims already fill them)." : "."));
     if (claims.length && !perms.claims) out.lines.push('These claims would be skipped: "Waiver claims" is switched off in Account → Sleeper access.');
   }
   // 3. Lineup, 4. Flex
-  const lu = planLineup(built, now);
+  const lu = planLineup(built, now, { zerosOnly: pk.zerosOnly });
   out.lineup = lu.changes;
   for (const c of lu.changes) out.lines.push(`Lineup: ${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName} (${c.delta >= 0 ? "+" : ""}${c.delta.toFixed(1)} pts).${tag("lineup")}`);
-  if (!lu.changes.length) out.lines.push("Lineup: no change — your starters are already the best projected lineup from your roster.");
+  if (!lu.changes.length) out.lines.push(pk.zerosOnly ? "Lineup (zeros only): no change — no starter is a bye / injured zero with a bench replacement." : "Lineup: no change — your starters are already the best projected lineup from your roster.");
   const fx = planFlex(built, now, lu.changes.length ? lu.starters : null);
   out.flex = fx.swaps;
   for (const w of fx.swaps) out.lines.push(`Flex: ${w.slot} ↔ ${w.slotB_label} — ${w.nameB} to ${w.slot}, ${w.nameA} to ${w.slotB_label} (later game in the flex).${tag("flex")}`);

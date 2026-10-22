@@ -539,3 +539,9 @@ export function remainingSlots(changes, checked) {
   for (const c of changes) if (!c.blocked && !checked.has(c.key) && (c.type === "lineup" || c.type === "add")) touchedSlots(c).forEach((i) => s.add(i));
   return s;
 }
+
+/** v4.10: does this suggested move involve one of these players (by id)? Used to drop moves that clash with roster-validity moves. */
+export function changeTouchesPlayers(c, ids) {
+  if (!ids || !ids.size) return false;
+  return [c.fromId, c.toId, c.id, c.idA, c.idB].some((x) => x != null && ids.has(String(x)));
+}

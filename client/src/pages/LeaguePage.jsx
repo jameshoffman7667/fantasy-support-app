@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { AutoModeCard, AutoView } from "../ui/autoMode.jsx";
 import { varianceKey } from "../variances.js";
 import { PrivateGate } from "../ui/common.jsx";
 import { C } from "../ui/theme.js";
@@ -5,7 +7,38 @@ import { C } from "../ui/theme.js";
 /* ------------------------------------------------------------------ */
 /*  v3.0 — League page: settings change log                            */
 /* ------------------------------------------------------------------ */
+/* v4.10: sub tabs — Auto mode (the check boxes) and Change log (the settings change log that used to be the whole page). */
 export function LeaguePage({ league, onClearVariances, onOpenAccount }) {
+  const [sub, setSub] = useState("auto");
+  const [tick, setTick] = useState(0);
+  const tab = (key, label) => (
+    <button key={key} type="button" onClick={() => setSub(key)} aria-current={sub === key ? "page" : undefined} data-league-tab={key} style={{ color: sub === key ? C.text : C.textMuted, borderBottom: `2px solid ${sub === key ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium">
+      {label}
+    </button>
+  );
+  return (
+    <div data-league-tabs>
+      <div className="flex mx-4 mt-3" style={{ borderBottom: `1px solid ${C.border}` }}>
+        {tab("auto", "Auto mode")}
+        {tab("log", "Change log")}
+      </div>
+      {sub === "auto" ? (
+        <div className="px-4 py-3" data-league-auto>
+          {league.bestBall ? <div style={{ color: C.textMuted }} className="text-sm">Auto mode isn't available for best ball leagues.</div> : (
+            <>
+              <AutoModeCard league={league} onOpenAccount={onOpenAccount} onChanged={() => setTick((t) => t + 1)} />
+              <AutoView key={`v${tick}`} league={league} onOpenAccount={onOpenAccount} withCard={false} />
+            </>
+          )}
+        </div>
+      ) : (
+        <ChangeLog league={league} onClearVariances={onClearVariances} onOpenAccount={onOpenAccount} />
+      )}
+    </div>
+  );
+}
+
+function ChangeLog({ league, onClearVariances, onOpenAccount }) {
   const lp = league.leaguePage;
   const items = lp?.items || [];
   const open = items.filter((i) => !i.cleared);

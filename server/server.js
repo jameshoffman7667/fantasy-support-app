@@ -622,6 +622,16 @@ app.get("/api/automode/preview", async (req, res) => {
 app.post("/api/automode", (req, res) => {
   const u = req.user.username;
   if (typeof req.body?.paused === "boolean") autoMode.setPaused(u, req.body.paused);
+  if (req.body?.applyAll === true && req.body?.leagueId != null) {
+    // v4.10: copy this league's Auto settings to every league
+    try {
+      const ids = (getUserState(u)?.leagueIds || []).map(String);
+      autoMode.applyToAll(u, req.body.leagueId, ids);
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  }
+  if (req.body?.leagueId != null && typeof req.body?.zerosOnly === "boolean") autoMode.setZerosOnly(u, req.body.leagueId, req.body.zerosOnly);
   if (req.body?.leagueId != null && (typeof req.body?.on === "boolean" || req.body?.ranking != null)) {
     const turningOn = req.body.on === true;
     const lg = turningOn ? ownBuilt(req, res, req.body.leagueId) : true;

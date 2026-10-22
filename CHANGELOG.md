@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, v4.9, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, v4.9, v4.10, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,31 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.10 — Auto mode on the League page, zeros only, roster fixes first
+
+**Manual step required: none.** No `docker-compose.yml` change and no new environment variable.
+
+**Commit message (short):** v4.10: Auto mode tab, roster fixes first
+
+**Commit message (extended):** v4.10: Auto mode's check boxes move to the League page, which now has two sub tabs: Auto mode (boxes, preview) and Change log (the old settings log). Auto lineup gets a "Zeros only" box that swaps out only starters projected 0 because of a bye or injury, and an "Apply these settings to all leagues" button copies the four boxes, zeros only and the pick-up list to every league. Auto roster now picks, for the All, Trending and Spot Start lists, the free agent that adds the most to the best projected lineup; other lists go in their own order. Roster pages show the Current vs Proposed score card on Current lineup too, and a roster-validity card (IR eligibility, roster limit) that comes first: other moves stay hidden until the ticked fixes make the roster valid, drops are one card per drop with a dropdown, and a push sends the fixes first, then the lineup. The same card now serves Drop candidates. No compose or environment changes.
+
+### What changed
+- **League page sub tabs:** *Auto mode* (the four check boxes, Auto roster's pick-up list, pause, log, and the "what Auto mode would do" preview) and *Change log* (the settings change log that used to be the whole page). Waivers → Available → Auto keeps the preview and points to the League page for the boxes.
+- **Zeros only** (under Auto lineup): only starters projected exactly 0 who are on bye or injured (not players with no projection) are swapped out, for the best-projected bench player who fits the slot; nothing else moves. Auto flex still runs after.
+- **Apply these settings to all leagues:** copies the four boxes, zeros only and the pick-up list from the open league to every league (two taps).
+- **Auto roster pick-ups:** for the All, Trending and Spot Start lists the free agent that adds the most projected points to the best starting lineup goes first (then the rest in list order); other lists go straight in their own order. Order of the packages is unchanged: IR out, IR in, pick-ups, lineup, flex.
+- **Roster → Current lineup** now shows the Current / +gain / Proposed score card (it follows the ticked moves, same numbers as Proposed lineup).
+- **Roster validity first (Current and Proposed lineup):** a card lists ineligible players in IR and a roster over its limit. Fixes start unticked; while they don't make the roster valid, every other suggested move is hidden; once they do, the others return (minus any move involving a player being dropped or moved to IR). A push sends the fixes first (IR out, pause, IR in, pause, drops), then the lineup; it stops at the first step Sleeper doesn't confirm. Drops are one card per drop needed, each with a dropdown (lowest-rostered first). The card has its own Push button too. Waivers → Drop candidates uses the same card (there the fixes start ticked, as before).
+
+### Unverified / assumptions
+- "Zeros only" counts a starter as a zero only with a real projection of 0 and a non-Healthy status (bye shows as a status in this app).
+- Pick-up ranking by lineup gain only looks at the first 40 players of a list and only at this week's roster; claims still process at waiver time, so the lineup step doesn't see them until they land.
+- The suggested lineup moves are still computed by the server on the roster as it is now; they are not re-planned after the validity fixes (moves touching a dropped / IR-moved player are simply removed).
+- Only the non-blocking IR-in suggestion is not gated: the roster counts as valid once ineligible IR players are moved out and enough players are dropped.
+- Checked with the unit/integration suites (new t55) and the browser harness; not run against live Sleeper data. The IR and drop calls remain unverified.
 
 ---
 

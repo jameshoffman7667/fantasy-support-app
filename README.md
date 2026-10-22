@@ -474,6 +474,11 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.10 additions
+- **League page:** sub tabs **Auto mode** (the check boxes, pick-up list, preview) and **Change log**. Auto lineup has **Zeros only**; **Apply these settings to all leagues** copies the settings everywhere. Auto roster picks the add that helps the lineup most for the All, Trending and Spot Start lists.
+- **Roster:** the Current / Proposed score card is on Current lineup too; a roster-validity card (IR eligibility, roster limit) comes first, hides the other moves until fixed and is pushed first.
+- No compose or environment changes in this release.
+
 ### v4.9 additions
 - **Roster:** suggestions are layered and recalculate as moves are ticked (dependent moves appear indented with ↳ in the same card); ticks are shared by Current and Proposed lineup; Proposed lineup shows the resulting lineup and variances with the moves at the bottom; the push confirm scrolls into view.
 - **Waivers:** new **Claim rankings** page; a sticky Back / Next / Push to Sleeper bar; the screen opens on Drop candidates, which now lists every roster player (bench, then starters, lowest projection first); pushed claims leave the Claim Generator; claims made before the weekly waiver clear are cleared (daily-waiver leagues too).

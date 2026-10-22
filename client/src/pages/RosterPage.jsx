@@ -1,10 +1,11 @@
 import * as api from "../api.js";
 import { FLEX_ELIGIBLE, GROUP_LABEL, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
-import { acceptAllKeys, arrangement, buildPush, changeNotes, customChange, defaultChecked, dropOptions, layerChanges, leagueAfter, openSpotsForAdd, proposeChanges, remainingSlots, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
+import { acceptAllKeys, arrangement, buildPush, changeNotes, changeTouchesPlayers, customChange, defaultChecked, dropOptions, layerChanges, leagueAfter, openSpotsForAdd, proposeChanges, remainingSlots, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
 import { computeProposedRoster } from "../ui/compute.js"; // v4.9
 import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { ComplianceFixes, runComplianceSteps, useCompliance } from "../ui/rosterCompliance.jsx"; // v4.10
 import { ConfirmPush, Headshot, InfoNote, MatchupChip, Modal, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { BackupList, PlayerLink } from "../ui/playerCard.jsx";
 import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, fmtWhen, formatStatLine } from "../ui/theme.js";
@@ -698,14 +699,40 @@ const tickStore = new Map(); // league id -> { keys: Set | null, plans: {} }
 export const resetTickStore = () => tickStore.clear();
 const EMPTY_PLANS = {};
 
-export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, onOpenTab = null }) {
+// v4.10: one instance per league, so the roster-validity ticks never carry over to another league.
+export function RosterPage(props) {
+  return <RosterPageInner key={props.league.id} {...props} />;
+}
+
+function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOpenTab = null }) {
   const [sub, setSub] = useState("current");
   // v4.8: switching leagues from the top bar always returns to the Current lineup tab.
   useEffect(() => { setSub("current"); }, [league.id]);
   const [, bump] = useReducer((x) => x + 1, 0);
   const entry = tickStore.get(league.id) || { keys: null, plans: EMPTY_PLANS };
   const save = (patch) => { tickStore.set(league.id, { ...(tickStore.get(league.id) || { keys: null, plans: EMPTY_PLANS }), ...patch }); bump(); };
-  const suggested = useMemo(() => proposeChanges(league), [league]);
+  // v4.10: roster validity (IR eligibility, roster limit) comes first. While the ticked fixes don't make the roster valid
+  // every other move is hidden; once they do, the other moves return (minus any that involve a player being dropped or
+  // moved to IR) and a push sends the fixes first, then the lineup.
+  const comp = useCompliance(league, { startTicked: false });
+  const hideMoves = comp.blocking && !comp.valid;
+  const usePre = comp.blocking && comp.valid;
+  const gone = useMemo(() => new Set([...comp.dropIds, ...comp.inIds].map(String)), [comp.dropIds.join(","), comp.inIds.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const suggested = useMemo(() => {
+    if (hideMoves) return [];
+    const all = proposeChanges(league);
+    return usePre ? all.filter((c) => !changeTouchesPlayers(c, gone)) : all;
+  }, [league, hideMoves, usePre, gone]);
+  const pre = useMemo(() => {
+    if (!usePre || !comp.count) return null;
+    const names = (ids, list) => list.filter((p) => ids.includes(String(p.id))).map((p) => p.name).join(", ");
+    const lines = [
+      comp.outIds.length ? `Move out of IR: ${names(comp.outIds, comp.base.badIr)}` : null,
+      comp.inIds.length ? `Move into IR: ${names(comp.inIds, comp.base.inCandidates)}` : null,
+      ...comp.dropIds.map((id) => `Drop ${(league.bench || []).find((p) => p && String(p.id) === id)?.name || id}`),
+    ].filter(Boolean);
+    return { count: comp.count, lines, run: () => runComplianceSteps(league, comp, { onRefresh }) };
+  }, [usePre, comp, league, onRefresh]);
   // v4.4: hand-made changes from the Proposed lineup (tap a position box), applied after the ticked suggestions
   const [customs, setCustoms] = useState([]);
   useEffect(() => setCustoms([]), [league]);
@@ -720,6 +747,7 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
   );
   const changes = useMemo(() => [...layered.changes, ...customs], [layered, customs]);
   const checked = useMemo(() => new Set([...layered.checked, ...customs.map((c) => c.key)]), [layered, customs]);
+  const arrNow = useMemo(() => arrangement(league, changes, checked), [league, changes, checked]); // v4.10: the score card on Current lineup
   // Changing the ticked suggestions would change what the custom changes were made against, so they are undone.
   const onToggle = (key, on) => {
     setCustoms((c) => (c.length ? [] : c));
@@ -772,15 +800,43 @@ export function RosterPage({ league, onSaveRanking, onRefresh, onOpenAccount, on
           onCancel={() => (onToggle(planFor.key, false), setPlanFor(null))}
         />
       )}
+      {comp.base.issues.length > 0 && <ComplianceFixes league={league} comp={comp} onRefresh={onRefresh} onOpenAccount={onOpenAccount} blockedNote />}
       {sub === "current" ? (
         <>
+          {!hideMoves && <TotalsCard t={arrNow.totals} />}
           <PendingMoves league={league} onRefresh={onRefresh} />
           <CurrentLineup league={league} changes={suggested} onRefresh={onRefresh} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
-          <SuggestedChanges league={league} changes={layered.changes} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onReset={resetTicks} isDefault={entry.keys == null} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />
+          {hideMoves ? <HiddenMovesNote /> : <SuggestedChanges league={league} changes={layered.changes} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onReset={resetTicks} isDefault={entry.keys == null} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />}
         </>
       ) : (
-        <ProposedLineup league={league} changes={changes} checked={checked} customs={customs} onAddCustom={addCustom} onUndoCustoms={() => setCustoms([])} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onPushed} onGoCurrent={() => setSub("current")} listProps={{ onToggle, onAcceptAll: acceptAll, onReset: resetTicks, isDefault: entry.keys == null }} />
+        <ProposedLineup league={league} changes={changes} checked={checked} customs={customs} onAddCustom={addCustom} onUndoCustoms={() => setCustoms([])} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onPushed} onGoCurrent={() => setSub("current")} pre={pre} hideMoves={hideMoves} listProps={hideMoves ? null : { onToggle, onAcceptAll: acceptAll, onReset: resetTicks, isDefault: entry.keys == null }} />
       )}
+    </div>
+  );
+}
+
+/** v4.10: shown instead of the suggested moves while the roster still needs fixing. */
+function HiddenMovesNote() {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted }} className="rounded-md px-3 py-2.5 text-xs mt-3" data-moves-hidden>
+      Other suggested moves are hidden until the roster fixes above make the roster valid.
+    </div>
+  );
+}
+
+/** v4.10: Current vs Proposed points — on the Proposed lineup and (since v4.10) the Current lineup page too. */
+function TotalsCard({ t }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg px-4 py-3 mt-3 flex items-center justify-around text-center" data-proposed-totals>
+      <div>
+        <div style={{ color: C.textMuted }} className="text-xs mb-0.5">Current</div>
+        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-2xl font-semibold">{t.current.toFixed(1)}</div>
+      </div>
+      <div style={{ color: t.delta > 0 ? C.ok : t.delta < 0 ? C.major : C.textMuted }} className="text-sm font-medium">{t.delta > 0 ? "+" : ""}{t.delta.toFixed(1)} pts</div>
+      <div>
+        <div style={{ color: C.textMuted }} className="text-xs mb-0.5">Proposed</div>
+        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-2xl font-semibold">{t.proposed.toFixed(1)}</div>
+      </div>
     </div>
   );
 }
@@ -868,7 +924,7 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onR
   );
 }
 
-function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, onUndoCustoms, onRefresh, onOpenAccount, onDone, onGoCurrent, listProps = null }) {
+function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, onUndoCustoms, onRefresh, onOpenAccount, onDone, onGoCurrent, listProps = null, pre = null, hideMoves = false }) {
   const arr = useMemo(() => arrangement(league, changes, checked), [league, changes, checked]);
   // v4.9: the roster rules re-run on the lineup after the ticked moves — the notes on these cards are the variances of the RESULT.
   const view = useMemo(() => computeProposedRoster(league, leagueAfter(league, arr, remainingSlots(changes, checked))), [league, arr, changes, checked]);
@@ -892,17 +948,7 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
   const t = arr.totals;
   return (
     <div data-proposed-lineup>
-      <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg px-4 py-3 mt-3 flex items-center justify-around text-center" data-proposed-totals>
-        <div>
-          <div style={{ color: C.textMuted }} className="text-xs mb-0.5">Current</div>
-          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-2xl font-semibold">{t.current.toFixed(1)}</div>
-        </div>
-        <div style={{ color: t.delta > 0 ? C.ok : t.delta < 0 ? C.major : C.textMuted }} className="text-sm font-medium">{t.delta > 0 ? "+" : ""}{t.delta.toFixed(1)} pts</div>
-        <div>
-          <div style={{ color: C.textMuted }} className="text-xs mb-0.5">Proposed</div>
-          <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-2xl font-semibold">{t.proposed.toFixed(1)}</div>
-        </div>
-      </div>
+      <TotalsCard t={t} />
       {arr.count === 0 && (
         <div style={{ color: C.textMuted }} className="text-xs px-1 pt-2" data-proposed-empty>
           No changes ticked — this is your current lineup. Tick suggestions in the list below, or see{" "}
@@ -960,14 +1006,15 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
         </>
       )}
       {picker && <SwapPicker league={league} arr={arr} target={picker} onClose={() => setPicker(null)} onPick={(opt) => { const c = customChange(arr, picker, opt); if (c) onAddCustom(c); setPicker(null); }} />}
+      {hideMoves && <HiddenMovesNote />}
       {listProps && <SuggestedChanges league={league} changes={listChanges} checked={checked} proposedTab {...listProps} />}
       <div ref={pushRef} className="mt-4">
-        <PushPanel league={league} changes={changes} checked={checked} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onDone} />
+        <PushPanel league={league} changes={changes} checked={checked} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onDone} pre={pre} />
       </div>
-      {arr.count > 0 && !panelVisible && (
+      {(arr.count > 0 || pre) && !panelVisible && (
         <div className="sticky bottom-0 pt-2 pb-3 -mx-4 px-4" style={{ background: `linear-gradient(to top, ${C.bg} 70%, transparent)` }}>
           <button type="button" onClick={() => pushRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} style={{ background: C.brand, color: C.text }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium shadow-lg" data-push-jump>
-            Review &amp; push to Sleeper ({arr.count})
+            Review &amp; push to Sleeper ({arr.count + (pre ? pre.count : 0)})
           </button>
         </div>
       )}
@@ -1001,7 +1048,7 @@ function SwapPicker({ league, arr, target, onClose, onPick }) {
   );
 }
 
-function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone }) {
+function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone, pre = null }) {
   const push = useMemo(() => buildPush(league, changes, checked), [league, changes, checked]);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1022,6 +1069,12 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
     setBusy(true);
     const out = [];
     try {
+      // v4.10: roster-validity moves (IR, drops) always go first; if one isn't confirmed nothing else is sent.
+      if (pre) {
+        const r = await pre.run();
+        out.push(...r.results);
+        if (!r.ok) return;
+      }
       if (push.starters) {
         try {
           const r = await api.pushLineup(league.id, push.starters, { gap: lineupGap(league), keys: pushKeys(league, "lineup") });
@@ -1073,13 +1126,13 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
     <div data-update-roster>
       <PrivateGate league={league} group="roster" onOpenAccount={onOpenAccount}>
         <PrivateGate league={league} group={push.adds.length ? "claims" : null} onOpenAccount={onOpenAccount}>
-        {checked.size === 0 && !results ? null : (
+        {checked.size === 0 && !pre && !results ? null : (
           <div className="space-y-2">
-            {checked.size > 0 && (
+            {(checked.size > 0 || pre) && (
               <>
                 <div style={{ color: C.textMuted }} className="text-xs px-1">Accepted changes</div>
                 <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y" data-approved-summary>
-                  {push.summary.map((l, i) => (
+                  {[...(pre ? pre.lines.map((l) => `First: ${l}`) : []), ...push.summary].map((l, i) => (
                     <div key={i} style={{ color: C.text, borderColor: C.border }} className="px-3 py-2 text-sm">{l}</div>
                   ))}
                 </div>
@@ -1091,7 +1144,7 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone 
                 )}
                 {confirming && (
                   <div ref={confirmRef} style={{ scrollMarginBottom: 96 }} data-confirm-box>
-                  <ConfirmPush title="Send these changes to Sleeper?" lines={push.summary} buttonLabel="Yes, update my roster" busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note="Sleeper is then asked for the roster back to check it. The lineup is written to both your roster and this week's matchup. Moving a player to IR or off the taxi squad is an untested Sleeper call — it is reported honestly if it doesn't take." />
+                  <ConfirmPush title="Send these changes to Sleeper?" lines={[...(pre ? pre.lines.map((l) => `First: ${l}`) : []), ...push.summary]} buttonLabel="Yes, update my roster" busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note="Sleeper is then asked for the roster back to check it. The lineup is written to both your roster and this week's matchup. Moving a player to IR or off the taxi squad is an untested Sleeper call — it is reported honestly if it doesn't take." />
                   </div>
                 )}
               </>
