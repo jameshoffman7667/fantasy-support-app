@@ -15,47 +15,46 @@
 // roster move first) are listed as `blocked` with the reason and can't be ticked.
 
 import { isLocked, flexTimingPairs, slotEligible } from "./lineup.js";
+import { planLineupMoves, addCrossConflicts } from "./movePlanner.js";
 
-export function proposeChanges(league) {
-  const out = [];
+/**
+ * v4.11: the lineup moves come from movePlanner.js (a sequence, points = whole-roster impact, sub moves, no-drop first).
+ * `rejected` = pairs he unticked; the plan is re-run without them and the new moves are added next to the old ones
+ * (the unticked ones stay in the list so he can tick them again).
+ */
+export function proposeChanges(league, { rejected = null } = {}) {
+  const base = buildPlan(league, new Set());
+  if (!rejected || !rejected.size) return addCrossConflicts(base);
+  const alt = buildPlan(league, rejected);
+  const have = new Set(base.map((c) => c.key));
+  return addCrossConflicts([...base, ...alt.filter((c) => !have.has(c.key))]);
+}
+
+function buildPlan(league, rejected) {
+  const out = planLineupMoves(league, { rejected });
   const rows = league?.lineup?.rows || [];
-  const usedAlt = new Set();
+  // a better player sitting on IR / taxi can't be started until a roster move is made — listed, but not tickable
   rows.forEach((r, i) => {
-    if (!r.changed || r.locked) return;
-    const toId = r.optimal?.id != null ? String(r.optimal.id) : null;
-    const fromId = r.current?.id != null ? String(r.current.id) : null;
-    if (!r.optimal) return; // nothing better to put there
-    const isAdd = r.optimal.origin === "waiver";
-    const c = {
+    if (!r || !r.changed || r.locked || !r.optimal) return;
+    if (r.optimal.group !== "ir" && r.optimal.group !== "taxi") return;
+    const toId = r.optimal.id != null ? String(r.optimal.id) : null;
+    out.push({
       key: `L:${i}:${toId}`,
-      type: isAdd ? "add" : "lineup",
-      toPlayer: isAdd ? r.optimal : undefined,
+      type: "lineup",
       slotIndex: i,
       slot: r.slot,
-      fromId,
+      fromId: r.current?.id != null ? String(r.current.id) : null,
       fromName: r.current?.name ?? null,
       toId,
       toName: r.optimal.name,
       delta: r.delta ?? 0,
-      blocked: null,
-    };
-    if (isAdd) { if (!toId) c.blocked = "No player id for this suggestion."; }
-    else if (r.optimal.group === "ir" || r.optimal.group === "taxi") c.blocked = `${r.optimal.name} is on your ${r.optimal.group === "ir" ? "IR" : "taxi squad"} — needs a roster move before he can start.`;
-    else if (!toId) c.blocked = "No player id for this suggestion.";
-    out.push(c);
-    // v4.4: when the better player is a free agent, always offer the best bench player who still beats the current one
-    if (r.optimal.origin === "waiver") {
-      const alt = benchAlternative(league, r, i, usedAlt, out);
-      if (alt) {
-        usedAlt.add(alt.toId);
-        out.push({ ...alt, key: `L:${i}:${alt.toId}`, type: "lineup", slotIndex: i, slot: r.slot, fromId, fromName: r.current?.name ?? null, alt: true, altNote: `Bench option — no add needed (instead of adding ${r.optimal.name})`, blocked: null });
-      }
-    }
+      blocked: `${r.optimal.name} is on your ${r.optimal.group === "ir" ? "IR" : "taxi squad"} — needs a roster move before he can start.`,
+    });
   });
   // v3.6: flex-timing swaps, only between slots no lineup change touches. A flex starter whose game kicks off
   // BEFORE a starter at his own position in a positional slot: swap them, so the flex keeps the later game
   // (more options if someone is ruled out late). Neither player may be locked. The latest such game is chosen.
-  const touched = new Set(out.filter((c) => !c.blocked).map((c) => c.slotIndex)); // a blocked suggestion can't be pushed anyway
+  const touched = new Set(out.filter((c) => !c.blocked).flatMap((c) => touchedSlots(c))); // a blocked suggestion can't be pushed anyway
   const starters = league?.starters || [];
   // v4.5.1: pairs come from lineup.flexTimingPairs (all flex slots at once — the same pairs the "Flex lock order" variance flags)
   for (const { flexIdx: i, posIdx: best } of flexTimingPairs(league, touched)) {
@@ -93,54 +92,42 @@ export function proposeChanges(league) {
     }
   }
   // v4.8: proposals are worked through in the same order as Auto mode: IR, Roster (adds), Lineup, Flex (swaps).
-  return out.map((c, i) => ({ c, i })).sort((a, b) => (CHANGE_ORDER[a.c.type] ?? 2) - (CHANGE_ORDER[b.c.type] ?? 2) || a.i - b.i).map((x) => x.c);
+  // IR / taxi moves first, then the lineup moves in the order they are worked through, flex-timing swaps last
+  const rank = (c) => (c.type === "ir" || c.type === "taxi" ? 0 : c.type === "swap" && !c.why ? 2 : 1);
+  return out.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i).map((x) => x.c);
 }
 export const CHANGE_ORDER = { ir: 0, taxi: 0, add: 1, lineup: 2, custom: 2, swap: 3 };
 
 /**
- * v4.4: the best bench player for a lineup slot whose suggested player is a free agent — eligible for the slot, not
- * locked, projected for MORE points than the player in the slot, and not already used by another suggestion.
+ * v4.11: ticking a move also ticks every move it `requires` (earlier moves its result builds on) and unticks the moves it
+ * `conflicts` with (an add replaces the no-drop move for the same slot; two moves can't bring in / take out the same
+ * player). Unticking a move also unticks every move that requires it.
  */
-function benchAlternative(league, row, i, usedAlt, out) {
-  const cur = Number(row.current?.proj) || 0;
-  const taken = new Set(out.filter((c) => !c.blocked && c.toId).map((c) => c.toId));
-  const pick = (league?.bench || [])
-    .filter((p) => p && p.id != null && p.proj != null && Number(p.proj) > cur && slotEligible(row.slot, p.pos) && !isLocked(p, league) && !taken.has(String(p.id)) && !usedAlt.has(String(p.id)))
-    .sort((a, b) => Number(b.proj) - Number(a.proj))[0];
-  if (!pick) return null;
-  return { toId: String(pick.id), toName: pick.name, delta: Number(pick.proj) - cur };
-}
-
-/** change A needs change B when A puts a player into a slot he is still starting in elsewhere (B moves him out). */
-function needs(changes, a) {
-  if (a.type !== "lineup" || !a.toId) return [];
-  return changes.filter((b) => (b.type === "lineup" || b.type === "add") && b !== a && b.fromId === a.toId);
-}
-
-/** Ticking a change also ticks what it needs; unticking one also unticks whatever needed it. */
 export function toggle(changes, checked, key, on) {
   const next = new Set(checked);
   const byKey = new Map(changes.map((c) => [c.key, c]));
   const target = byKey.get(key);
   if (!target || target.blocked) return next;
+  const untick = (k) => {
+    const stack = [k];
+    while (stack.length) {
+      const x = stack.pop();
+      if (!next.delete(x)) continue;
+      for (const o of changes) if (next.has(o.key) && (o.requires || []).includes(x)) stack.push(o.key);
+    }
+  };
   if (on) {
-    // v4.4: two suggestions for the same slot (the waiver add and its bench option) are alternatives — ticking one unticks the other
-    if (target.type === "lineup" || target.type === "add") for (const o of changes) if (o !== target && (o.type === "lineup" || o.type === "add") && o.slotIndex === target.slotIndex) next.delete(o.key);
     const stack = [target];
     while (stack.length) {
       const c = stack.pop();
-      if (c.blocked) continue;
-      if (next.has(c.key)) continue;
+      if (c.blocked || next.has(c.key)) continue;
+      for (const k of c.conflicts || []) untick(k);
+      for (const o of changes) if ((o.conflicts || []).includes(c.key)) untick(o.key);
       next.add(c.key);
-      stack.push(...needs(changes, c));
+      for (const k of c.requires || []) { const r = byKey.get(k); if (r) stack.push(r); }
     }
   } else {
-    const stack = [target];
-    while (stack.length) {
-      const c = stack.pop();
-      if (!next.delete(c.key)) continue;
-      for (const o of changes) if (next.has(o.key) && needs(changes, o).includes(c)) stack.push(o);
-    }
+    untick(key);
   }
   return next;
 }
@@ -162,22 +149,24 @@ export function buildPush(league, changes, checked) {
   const customs = picked.filter((c) => c.type === "custom");
   if (lineup.length || swaps.length || customs.length) {
     starters = (league.starterIds || []).map(String);
-    for (const c of lineup) {
-      if (c.slotIndex >= starters.length) {
-        errors.push(`Slot ${c.slot} isn't in the roster Sleeper returned — rebuild and try again.`);
+    // v4.11: in the order of the list — a later move builds on the roster the earlier ones leave
+    for (const c of picked.filter((x) => x.type === "lineup" || x.type === "swap")) {
+      if (c.type === "lineup") {
+        if (c.slotIndex >= starters.length) {
+          errors.push(`Slot ${c.slot} isn't in the roster Sleeper returned — rebuild and try again.`);
+          continue;
+        }
+        starters[c.slotIndex] = c.toId;
+        summary.push(`${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName}${c.delta ? ` (${c.delta > 0 ? "+" : ""}${c.delta.toFixed(1)} pts)` : ""}`);
         continue;
       }
-      starters[c.slotIndex] = c.toId;
-      summary.push(`${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName}${c.delta ? ` (${c.delta > 0 ? "+" : ""}${c.delta.toFixed(1)} pts)` : ""}`);
-    }
-    for (const c of swaps) {
       if (Math.max(c.slotA, c.slotB) >= starters.length || starters[c.slotA] !== c.idA || starters[c.slotB] !== c.idB) {
         errors.push(`The ${c.slot} / ${c.slotB_label} swap no longer matches your roster — rebuild and try again.`);
         continue;
       }
       starters[c.slotA] = c.idB;
       starters[c.slotB] = c.idA;
-      summary.push(`${c.slot} ↔ ${c.slotB_label}: ${c.nameB} to ${c.slot} (${c.kickB || "later game"}), ${c.nameA} to ${c.slotB_label} (${c.kickA || "earlier game"})`);
+      summary.push(c.why === "slots" ? `${c.slot} ↔ ${c.slotB_label}: ${c.nameB} to ${c.slot}, ${c.nameA} to ${c.slotB_label} (both stay in the lineup)` : `${c.slot} ↔ ${c.slotB_label}: ${c.nameB} to ${c.slot} (${c.kickB || "later game"}), ${c.nameA} to ${c.slotB_label} (${c.kickA || "earlier game"})`);
     }
     // v4.4: hand-made swaps, applied on top of the ticked suggestions in the order they were made
     for (const c of customs) {
@@ -412,6 +401,9 @@ export function changeNotes(league, changes = []) {
       const toProj = Number(c.toPlayer?.proj);
       const beats = fromProj > 0 && toProj > fromProj;
       if (c.fromId && c.fromId !== "0") put(c.fromId, beats ? `${c.toName} (free agent / waivers) is projected ${toProj.toFixed(1)} vs ${fromProj.toFixed(1)} — suggested add for ${c.slot}${pts(c.delta)}` : `Suggested: replaced at ${c.slot} by ${c.toName} (free agent / waivers)${pts(c.delta)}`);
+    } else if (c.type === "swap" && c.why === "slots") {
+      put(c.idA, `Suggested: swap with ${c.nameB} — move to ${c.slotB_label} (both stay in the lineup)`);
+      put(c.idB, `Suggested: swap with ${c.nameA} — move to ${c.slot} (both stay in the lineup)`);
     } else if (c.type === "swap") {
       put(c.idA, `Suggested: swap with ${c.nameB} — move to ${c.slotB_label}; he plays earlier${c.kickA ? ` (${c.kickA})` : ""}, so the ${c.slot} slot keeps the later game`);
       put(c.idB, `Suggested: swap with ${c.nameA} — move to ${c.slot}${c.kickB ? `; his game is later (${c.kickB})` : ""}`);
@@ -507,30 +499,33 @@ export function layerChanges(league, base, checked, { tickChildren = false } = {
     }
   }
   const valid = new Set(all.filter((c) => !c.blocked).map((c) => c.key));
-  return { changes: all, checked: new Set([...ticked].filter((k) => valid.has(k))) };
+  return { changes: all, checked: closeTicks(all, new Set([...ticked].filter((k) => valid.has(k)))) };
 }
 
-/**
- * v4.9: what is ticked until he changes anything — every suggestion that isn't a free agent / waiver add. A suggestion
- * that needs an add (it moves in a player the add replaces) can't stand alone, so it starts unticked too.
- */
-export function defaultChecked(changes) {
-  const set = new Set(changes.filter((c) => !c.blocked && c.type !== "add").map((c) => c.key));
+/** v4.11: the ticks that stand when a ticked set is missing a move's requirement (or a conflicting pair is both ticked). */
+function closeTicks(changes, set) {
+  const byKey = new Map(changes.map((c) => [c.key, c]));
   let again = true;
   while (again) {
     again = false;
-    for (const c of changes) if (set.has(c.key) && needs(changes, c).some((n) => !set.has(n.key))) { set.delete(c.key); again = true; }
+    for (const c of changes) if (set.has(c.key) && (c.requires || []).some((k) => byKey.has(k) && !set.has(k))) { set.delete(c.key); again = true; }
   }
   return set;
 }
 
-/** Accept all: everything usable, except a bench option when the add for the same slot is on offer (the two are alternatives). */
+/**
+ * v4.11: what is ticked until he changes anything — every move that needs no free agent / waiver add (the best lineup
+ * reachable with no drop), plus the sub moves it needs. Adds start unticked.
+ */
+export function defaultChecked(changes) {
+  return closeTicks(changes, new Set(changes.filter((c) => !c.blocked && c.type !== "add").map((c) => c.key)));
+}
+
+/** Accept all: everything usable; an add replaces the no-drop move it conflicts with. */
 export function acceptAllKeys(changes) {
-  return new Set(
-    changes
-      .filter((c) => !c.blocked && !(c.alt && changes.some((o) => o.type === "add" && !o.blocked && o.slotIndex === c.slotIndex)))
-      .map((c) => c.key)
-  );
+  const set = new Set(changes.filter((c) => !c.blocked).map((c) => c.key));
+  for (const c of changes) if (c.type === "add" && set.has(c.key)) for (const k of c.conflicts || []) set.delete(k);
+  return closeTicks(changes, set);
 }
 
 /** Slots an unticked lineup / add suggestion still uses (passed to the roster rules as "changing"). */

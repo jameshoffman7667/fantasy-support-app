@@ -341,3 +341,16 @@ export function effectiveLineup(league, orderKeysOverride) {
     weatherStarters,
   };
 }
+
+/**
+ * v4.11: the order bench players are shown in on the Roster pages — by position (QB, RB, WR, TE, DEF, K), then by projected
+ * points, highest first. Returns the indexes of `players` in display order; empty spots and unknown positions go last.
+ */
+const BENCH_POS_ORDER = ["QB", "RB", "WR", "TE", "DEF", "DST", "K"];
+export function benchOrder(players) {
+  const rank = (p) => { const i = BENCH_POS_ORDER.indexOf(p?.pos); return i < 0 ? 99 : i === 5 ? 4 : i === 6 ? 5 : i; }; // DST counts as DEF
+  return (players || [])
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => (a.p ? 0 : 1) - (b.p ? 0 : 1) || rank(a.p) - rank(b.p) || (Number(b.p?.proj) || -1e9) - (Number(a.p?.proj) || -1e9) || a.i - b.i)
+    .map((x) => x.i);
+}

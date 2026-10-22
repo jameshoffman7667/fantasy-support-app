@@ -1,5 +1,5 @@
 import * as api from "../api.js";
-import { FLEX_ELIGIBLE, GROUP_LABEL, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
+import { FLEX_ELIGIBLE, GROUP_LABEL, benchOrder, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
 import { acceptAllKeys, arrangement, buildPush, changeNotes, changeTouchesPlayers, customChange, defaultChecked, dropOptions, layerChanges, leagueAfter, openSpotsForAdd, proposeChanges, remainingSlots, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
 import { computeProposedRoster } from "../ui/compute.js"; // v4.9
 import { lineupGap, pushKeys } from "../variances.js";
@@ -215,7 +215,7 @@ function CurrentLineup({ league, changes = [], onOpenWaivers = null, onRefresh =
       </div>
       <SectionLabel>Bench</SectionLabel>
       <div className="space-y-1.5">
-        {benchRows.map((r, i) => (
+        {benchOrder(benchRows.map((_, i) => bench[i] || null)).map((i) => [benchRows[i], i]).map(([r, i]) => (
           <RosterPlayerRow key={i} slot="BN" player={bench[i] || null} profile={league.scoringProfile} severity={r.severity} notes={notesFor(r, bench[i]?.name, bench[i]?.id)} emptyLabel="Open bench slot" onTapEmpty={!bench[i] && onOpenWaivers ? onOpenWaivers : null} />
         ))}
       </div>
@@ -695,9 +695,10 @@ function LineupTab({ league, onSaveRanking, hideWeather = false }) {
 // v4.9: the ticks (and the drop / bid chosen for each ticked add) are kept per league while the app is open, so leaving the
 // Roster page and coming back finds them as they were. `keys: null` = never touched = the default ticks. A successful
 // push clears the entry, which puts everything back to the default.
-const tickStore = new Map(); // league id -> { keys: Set | null, plans: {} }
+const tickStore = new Map(); // league id -> { keys: Set | null, plans: {}, rejected: Set } — v4.11: rejected = pairs he unticked (the plan is re-run without them)
 export const resetTickStore = () => tickStore.clear();
 const EMPTY_PLANS = {};
+const EMPTY_SET = new Set();
 
 // v4.10: one instance per league, so the roster-validity ticks never carry over to another league.
 export function RosterPage(props) {
@@ -709,8 +710,9 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
   // v4.8: switching leagues from the top bar always returns to the Current lineup tab.
   useEffect(() => { setSub("current"); }, [league.id]);
   const [, bump] = useReducer((x) => x + 1, 0);
-  const entry = tickStore.get(league.id) || { keys: null, plans: EMPTY_PLANS };
-  const save = (patch) => { tickStore.set(league.id, { ...(tickStore.get(league.id) || { keys: null, plans: EMPTY_PLANS }), ...patch }); bump(); };
+  const entry = tickStore.get(league.id) || { keys: null, plans: EMPTY_PLANS, rejected: EMPTY_SET };
+  const rejected = entry.rejected || EMPTY_SET;
+  const save = (patch) => { tickStore.set(league.id, { ...(tickStore.get(league.id) || { keys: null, plans: EMPTY_PLANS, rejected: EMPTY_SET }), ...patch }); bump(); };
   // v4.10: roster validity (IR eligibility, roster limit) comes first. While the ticked fixes don't make the roster valid
   // every other move is hidden; once they do, the other moves return (minus any that involve a player being dropped or
   // moved to IR) and a push sends the fixes first, then the lineup.
@@ -720,9 +722,9 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
   const gone = useMemo(() => new Set([...comp.dropIds, ...comp.inIds].map(String)), [comp.dropIds.join(","), comp.inIds.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   const suggested = useMemo(() => {
     if (hideMoves) return [];
-    const all = proposeChanges(league);
+    const all = proposeChanges(league, { rejected });
     return usePre ? all.filter((c) => !changeTouchesPlayers(c, gone)) : all;
-  }, [league, hideMoves, usePre, gone]);
+  }, [league, hideMoves, usePre, gone, rejected]);
   const pre = useMemo(() => {
     if (!usePre || !comp.count) return null;
     const names = (ids, list) => list.filter((p) => ids.includes(String(p.id))).map((p) => p.name).join(", ");
@@ -752,8 +754,22 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
   const onToggle = (key, on) => {
     setCustoms((c) => (c.length ? [] : c));
     const next = toggleChange(layered.changes, new Set(layered.checked), key, on);
-    const pruned = layerChanges(league, suggestedP, next, { tickChildren: false }).checked; // a dependent whose parent was unticked goes with it
     const nextPlans = !on ? Object.fromEntries(Object.entries(plans).filter(([k]) => k !== key)) : plans;
+    const tgt = layered.changes.find((c) => c.key === key);
+    // v4.11: unticking a move he was suggested means "not this one" — the plan is re-run without that pairing and the next best
+    // move appears, ticked (anything that clashes with it is unticked). The unticked move stays in the list.
+    if (!on && tgt?.pair && !rejected.has(tgt.pair)) {
+      const nextRejected = new Set([...rejected, tgt.pair]);
+      const raw = proposeChanges(league, { rejected: nextRejected });
+      const list = (usePre ? raw.filter((c) => !changeTouchesPlayers(c, gone)) : raw).map((c) => (c.type === "add" ? { ...c, plan: nextPlans[c.key] } : c));
+      const old = new Set(layered.changes.map((c) => c.key));
+      const fresh = [...defaultChecked(list)].filter((k) => !old.has(k));
+      let ticks = new Set([...next].filter((k) => list.some((c) => c.key === k)));
+      for (const k of fresh) ticks = toggleChange(list, ticks, k, true);
+      save({ rejected: nextRejected, keys: layerChanges(league, list, ticks, { tickChildren: false }).checked, plans: nextPlans });
+      return;
+    }
+    const pruned = layerChanges(league, suggestedP, next, { tickChildren: false }).checked; // a dependent whose parent was unticked goes with it
     save({ keys: pruned, plans: nextPlans });
   };
   // A ticked add with no plan yet (ticked directly, by a cascade or by Accept all) opens its pop-up, one at a time.
@@ -766,7 +782,7 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
     setCustoms([]);
     save({ keys: layerChanges(league, suggestedP, acceptAllKeys(suggestedP), { tickChildren: true }).checked });
   };
-  const resetTicks = () => { setCustoms([]); save({ keys: null, plans: EMPTY_PLANS }); };
+  const resetTicks = () => { setCustoms([]); save({ keys: null, plans: EMPTY_PLANS, rejected: EMPTY_SET }); };
   const onPushed = () => { setCustoms([]); tickStore.delete(league.id); bump(); }; // v4.9: after a push the ticks go back to the default
   const addCustom = (c) => {
     setCustoms((prev) => [...prev.filter((x) => x.key !== c.key), c]);
@@ -842,8 +858,13 @@ function TotalsCard({ t }) {
 }
 
 function changeText(c) {
-  if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, c.altNote || null].filter(Boolean).join(" · ") || null };
-  if (c.type === "add") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span> <span style={{ color: C.minor, border: `1px solid ${C.minor}66` }} className="ml-2 rounded px-1.5 text-[10px]">add from FA / waivers</span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, "Ticking asks who to drop (and the bid on waivers); he is added, then started once he is on your roster."].filter(Boolean).join(" · ") };
+  if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span></>, sub: [c.delta > 0.04 ? `+${c.delta.toFixed(1)} projected points` : c.delta < -0.04 ? `${c.delta.toFixed(1)} projected points` : null, c.altNote || null].filter(Boolean).join(" · ") || null };
+  if (c.type === "add") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span> <span style={{ color: C.minor, border: `1px solid ${C.minor}66` }} className="ml-2 rounded px-1.5 text-[10px]">add from FA / waivers</span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, c.conflicts?.length ? "Instead of the move above it for this slot." : null, "Ticking asks who to drop (and the bid on waivers); he is added, then started once he is on your roster."].filter(Boolean).join(" · ") };
+  if (c.type === "swap" && c.why === "slots")
+    return {
+      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><b>{c.nameB}</b> to {c.slot}, {c.nameA} to {c.slotB_label}</span></>,
+      sub: "Both stay in your lineup — 0 points on its own; it makes room for the move below.",
+    };
   if (c.type === "swap")
     return {
       title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><b>{c.nameB}</b> to {c.slot}, {c.nameA} to {c.slotB_label}</span></>,
@@ -869,7 +890,8 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onR
         <div className="min-w-0 flex-1">
           <div style={{ color: C.text }} className="text-sm flex items-center flex-wrap gap-y-1">{t.title}</div>
           {t.sub && <div style={{ color: c.type === "lineup" || c.type === "add" ? C.ok : C.textMuted }} className="text-xs mt-0.5">{t.sub}</div>}
-          {c.parent && <div style={{ color: C.minor }} className="text-[11px] mt-0.5">Follows from the move above — {c.nameB}'s game locks after {c.nameA}'s, so keep the later game at {c.slot}.</div>}
+          {c.parent && c.type === "swap" && !c.why && <div style={{ color: C.minor }} className="text-[11px] mt-0.5">Follows from the move above — {c.nameB}'s game locks after {c.nameA}'s, so keep the later game at {c.slot}.</div>}
+          {c.parent && !(c.type === "swap" && !c.why) && <div style={{ color: C.textFaint }} className="text-[11px] mt-0.5">Sub move — builds on the move above.</div>}
           {c.blocked && <div style={{ color: C.minor }} className="text-xs mt-0.5">{c.blocked}</div>}
         </div>
       </label>
@@ -985,7 +1007,7 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
       </div>
       <SectionLabel>Bench</SectionLabel>
       <div className="space-y-1.5">
-        {arr.bench.map((b, i) => (
+        {benchOrder(arr.bench.map((b) => b.player)).map((i) => [arr.bench[i], i]).map(([b, i]) => (
           <RosterPlayerRow key={i} slot="BN" player={b.player} profile={league.scoringProfile} severity={view.rows[arr.starters.length + i]?.severity} notes={[...varNotes(view.rows[arr.starters.length + i], b.player), ...(b.change ? [] : noteFor(b.player))]} onSlotTap={b.player?.id != null ? () => setPicker({ kind: "bench", id: b.player.id }) : null} highlight={b.change === "benched" || b.change === "from taxi" ? "out" : null} sub={b.change === "benched" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved to the bench</div> : b.change === "from taxi" ? <div style={{ color: C.minor }} className="text-xs mt-0.5">Moved from the taxi squad to the bench</div> : null} />
         ))}
       </div>

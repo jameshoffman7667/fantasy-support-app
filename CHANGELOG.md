@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, v4.9, v4.10, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, v4.9, v4.10, v4.11, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,34 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.11 — Roster move planner rework, bench sort, Game Day TNF tab
+
+**Manual step required: none.** No `docker-compose.yml` change and no new environment variable.
+
+**Commit message (short):** v4.11: Move planner rework, TNF tab
+
+**Commit message (extended):** v4.11: Roster suggestions are now planned as a sequence. The best lineup from your own players is worked out first and reached with the biggest point gain first; a slot swap (0 pts, both stay in the lineup) comes before a replacement that needs it, so Love for Gibbs is a plain swap and the replacement for Love is a sub move. Every card's points are the change to the whole starting lineup, never a slot change. Sub moves are ticked automatically; a free agent or waiver add (with a drop) shows only when it beats the no-drop option, starts unticked, and ticking it unticks the move it replaces (and the reverse). Unticking a move re-plans without that pairing and shows the next best move, ticked, with clashing moves unticked. Bench players are sorted by position (QB, RB, WR, TE, DEF, K), then projected points high to low. Game Day gets a TNF tab: cards for your Thursday-night players in each league (slot box and projection) and, per league, the three lowest projected starters and three highest projected bench, IR and taxi players, Thursday players left out. No compose or environment changes.
+
+### What changed
+- **Roster suggestions are planned as a sequence** (new `client/src/movePlanner.js`). The best lineup from the players already on your roster (starters + bench) is solved first; the players coming in are paired with the players going out, **biggest point gain first** (preferring a pair where the incoming player fits the outgoing player's slot). When he doesn't fit, a **slot swap** between two starters comes first (both stay in the lineup, 0 pts) and the replacement follows as a sub move. Example: Vele plays, Diggs doesn't, Chase projects above Goedert → Diggs → Chase, then a WR/FLEX swap, then Vele → Goedert.
+- **Points on a card are the whole starting lineup's change** (in − out), never the slot change. Love ↔ Gibbs (both already starting) is +0; the points show on the sub move that replaces Love.
+- **Sub moves** hang under the move they build on (↳, ticking one ticks what it needs, unticking one unticks what needs it). The no-drop moves are ticked by default, level by level, until the best no-drop lineup is proposed.
+- **Free agent / waiver adds** (with a drop when the roster is full) are offered only when they score more than the no-drop move for that slot. They start unticked and **replace** that move: ticking the add unticks the no-drop move and the reverse. They no longer appear as the only option, and a plain lineup move never opens the drop pop-up by itself.
+- **Untick = next best option.** Unticking a suggested move re-runs the plan without that pairing; the new moves appear, ticked, and the clashing ones are unticked. The unticked move stays in the list. Reset clears it.
+- **Bench sort:** bench players on Current and Proposed lineup are sorted by position (QB, RB, WR, TE, DEF, K), then by projected points, highest first; empty spots last.
+- **Game Day → TNF tab:** for every league, cards for your players whose game is Thursday night (a Thursday kickoff at 7 pm Eastern or later), each with the colour-coded slot box (starting slot, FLEX, BN, IR, TAXI) and projected points; then, in plain text, the three lowest projected starters and the three highest projected bench / IR / taxi players, Thursday players left out. The league cards at the top limit it to the leagues you tap.
+- The push now applies the ticked lineup moves in list order (a swap before the move that builds on it).
+
+### Unverified / assumptions
+- Not run against live Sleeper data. The date-sensitive integration test (`integ`) was not re-run: the server code is byte-identical to v4.10 and all other suites pass (new `t56`, 37 checks). The browser harness confirmed the TNF tab and the bench order; the Love / Gibbs and Vele / Chase scenarios are covered by unit tests on fixtures, not by a live roster.
+- The plan is built on the client from your roster; free agents still come from the server's best-lineup rows, one add per slot. Two adds that depend on each other are not chained.
+- "Next best" after an unticked move is the plan re-run without that pairing; it is the best lineup reachable without it, not a ranking of every alternative.
+- Thursday night = Thursday kickoff at 7 pm Eastern or later (a holiday afternoon game does not count). Players with no projection are left out of the "lowest / highest" lists.
+- A better player sitting on IR or taxi is still listed as a blocked (untickable) card.
+- No lint run (eslint is not available offline).
 
 ---
 

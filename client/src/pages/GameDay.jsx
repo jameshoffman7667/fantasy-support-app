@@ -1,4 +1,6 @@
 import { scopeCheer } from "../gameDayCheer.js"; // v4.8
+import { fmtProj, listText, tnfView } from "../tnf.js"; // v4.11
+import { PosBox } from "../ui/posBox.jsx";
 import * as api from "../api.js";
 import { ChevronRight, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -313,11 +315,59 @@ function PrimetimeTab({ data }) {
   );
 }
 
-export function GameDayScreen() {
+/* v4.11: TNF — your Thursday-night players in every league (position box = starting slot / flex / bench), then in plain text the
+   three lowest projected starters and the three highest projected bench / IR / taxi players, Thursday players left out. */
+function TnfPlayerCard({ r, leagueId }) {
+  const p = r.player;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-2.5 py-2 flex items-center gap-2 min-w-0" data-tnf-player={p.id ?? p.name} data-tnf-slot={r.slot}>
+      <PosBox label={r.slot} />
+      <PlayerLink player={p} leagueId={leagueId} className="shrink-0 rounded-full"><Headshot player={p} size={28} /></PlayerLink>
+      <div className="min-w-0 flex-1">
+        <PlayerLink player={p} leagueId={leagueId} className="text-sm truncate block" style={{ color: C.text }}>{p.name}</PlayerLink>
+        <div style={{ color: C.textFaint }} className="text-[10px] truncate">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.kickoffLabel ? ` · ${p.kickoffLabel}` : ""}</div>
+      </div>
+      <div style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-sm font-medium shrink-0" data-tnf-proj>{p.projSource === "actual" ? `${fmtProj(p.proj)} pts` : fmtProj(p.proj)}<span style={{ color: C.textFaint }} className="text-[10px] ml-1">{p.projSource === "actual" ? "" : "proj"}</span></div>
+    </div>
+  );
+}
+
+function TnfTab({ leagues, sel }) {
+  const view = tnfView(leagues, sel);
+  if (!view.length) return <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-tnf-empty>No leagues loaded yet.</div>;
+  const total = view.reduce((n, l) => n + l.thursday.length, 0);
+  return (
+    <div className="space-y-3" data-tnf>
+      <div style={{ color: C.textMuted }} className="text-xs px-0.5">
+        {total ? `${total} of your players play Thursday night.` : "None of your players play Thursday night this week."}
+        <InfoNote label="About TNF">Thursday night = a Thursday kickoff at 7 pm Eastern or later. Each card's box shows where the player sits (his starting slot, FLEX, or BN / IR / TAXI) and his projected points. Below each league: the three lowest projected starters and the three highest projected bench / IR / taxi players, not counting the Thursday players.</InfoNote>
+      </div>
+      {view.map((l) => (
+        <section key={l.id} className="space-y-1.5" data-tnf-league={l.id}>
+          <div className="flex items-center gap-1.5 px-0.5">
+            <Avatar avatar={l.avatar} name={l.name} size={18} square />
+            <span style={{ color: C.text }} className="text-sm font-semibold truncate">{l.name}</span>
+          </div>
+          {l.thursday.length === 0 ? (
+            <div style={{ color: C.textFaint }} className="text-xs px-0.5" data-tnf-none>No Thursday-night players.</div>
+          ) : (
+            <div className="space-y-1.5">{l.thursday.map((r) => <TnfPlayerCard key={r.player.id ?? r.player.name} r={r} leagueId={l.id} />)}</div>
+          )}
+          <div style={{ color: C.textMuted }} className="text-xs px-0.5 space-y-0.5" data-tnf-text>
+            <div data-tnf-low><b>Lowest projected starters:</b> {l.lowStarters.length ? listText(l.lowStarters) : "none"}</div>
+            <div data-tnf-high><b>Highest projected bench / IR / taxi:</b> {l.highReserve.length ? listText(l.highReserve) : "none"}</div>
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export function GameDayScreen({ leagues = [] }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [view, setView] = useState("cheer"); // v4.7: "cheer" (Cheer meter) | "primetime"
+  const [view, setView] = useState("cheer"); // v4.7: "cheer" (Cheer meter) | "primetime" | v4.11: "tnf"
   const [slot, setSlot] = useState("all");
   const [cat, setCat] = useState("all");
   // v2.9: tap league cards to show only those leagues' starters (yours + your opponents'); none selected = all.
@@ -390,13 +440,13 @@ export function GameDayScreen() {
         Your score (expected final) – opponent's. Green: you lead by at least 5% of the points both teams still have to score; red: you trail by that much. A projection in red has dropped since the week's first kickoff.
       </div>
       <div className="flex" style={{ borderBottom: `1px solid ${C.border}` }} data-gd-tabs>
-        {[["cheer", "Cheer meter"], ["primetime", "Primetime"]].map(([k, label]) => (
+        {[["cheer", "Cheer meter"], ["primetime", "Primetime"], ["tnf", "TNF"]].map(([k, label]) => (
           <button key={k} type="button" onClick={() => setView(k)} aria-current={view === k ? "page" : undefined} data-gd-tab={k} style={{ color: view === k ? C.text : C.textMuted, borderBottom: `2px solid ${view === k ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium">
             {label}
           </button>
         ))}
       </div>
-      {view === "primetime" ? <PrimetimeTab data={data} /> : <>
+      {view === "tnf" ? <TnfTab leagues={leagues} sel={leagueSel} /> : view === "primetime" ? <PrimetimeTab data={data} /> : <>
       <div className="flex flex-wrap gap-2 items-center">
         <Select label="Game slot" value={slot} onChange={setSlot} options={[{ value: "all", label: "All games" }, ...slots.map((s) => ({ value: s, label: s }))]} />
         <div className="flex gap-1.5 pt-3.5">

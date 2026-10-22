@@ -474,6 +474,11 @@ look wrong after deploying this, check the server logs for that warning
 first** — it'll say plainly if ESPN is still returning the wrong week,
 which is the fastest way to tell "still broken" from "actually fixed."
 
+### v4.11 additions
+- **Roster:** suggested moves are planned as a sequence (biggest point gain first, slot swaps and sub moves, points = change to the whole lineup, no-drop moves ticked by default, waiver adds as unticked alternatives, unticking a move shows the next best). Bench players are sorted by position then projected points.
+- **Game Day:** new **TNF** tab with your Thursday-night players per league and the lowest starters / highest bench players in plain text.
+- No compose or environment changes in this release.
+
 ### v4.10 additions
 - **League page:** sub tabs **Auto mode** (the check boxes, pick-up list, preview) and **Change log**. Auto lineup has **Zeros only**; **Apply these settings to all leagues** copies the settings everywhere. Auto roster picks the add that helps the lineup most for the All, Trending and Spot Start lists.
 - **Roster:** the Current / Proposed score card is on Current lineup too; a roster-validity card (IR eligibility, roster limit) comes first, hides the other moves until fixed and is pushed first.
