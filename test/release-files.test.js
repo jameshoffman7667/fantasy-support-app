@@ -41,6 +41,7 @@ test("deploy/compose.yaml pins both images to this version, never latest, and he
   assert.ok(!/image:.*:latest/.test(c));
   assert.ok(!c.includes("localhost"));
   assert.ok(c.includes("127.0.0.1:$${PORT}/healthz"));
+  assert.match(c, /interval: 30s\n\s+timeout: 5s\n\s+start_period: 30s\n\s+retries: 3/);
 });
 
 test("release workflow runs only on version tags and never builds on a branch push", () => {
@@ -55,5 +56,6 @@ test("server image follows the spec: tini, no syntax line, health check on 127.0
   assert.ok(!/^# syntax=/m.test(d));
   assert.ok(d.includes('"/sbin/tini"'));
   assert.match(d, /HEALTHCHECK[\s\S]*127\.0\.0\.1:\$\{PORT\}\/healthz/);
+  assert.ok(d.includes("--interval=30s --timeout=5s --start-period=30s --retries=3"));
   assert.ok(!/HEALTHCHECK[\s\S]*localhost/.test(d));
 });

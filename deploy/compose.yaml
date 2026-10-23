@@ -1,10 +1,10 @@
-# Reference compose for v4.12.0. Images are pinned to this exact release; the file changes with every release.
+# Reference compose for v4.12.1. Images are pinned to this exact release; the file changes with every release.
 # Same service layout as the repo's docker-compose.yml. Differences: exact version tags instead of
 # IMAGE_TAG/latest, the server's port 4000 is not published (only the client's nginx talks to it),
 # /healthz on 127.0.0.1 in the health check, log limits and a stop grace period.
 services:
   server:
-    image: mybadreligon/fantasy-manager-server:4.12.0
+    image: mybadreligon/fantasy-manager-server:4.12.1
     container_name: fantasy-manager-server
     restart: unless-stopped
     environment:
@@ -66,7 +66,7 @@ services:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT}/healthz >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
-      start_period: 20s
+      start_period: 30s
       retries: 3
     stop_grace_period: 15s
     logging:
@@ -76,7 +76,7 @@ services:
         max-file: "3"
 
   client:
-    image: mybadreligon/fantasy-manager-client:4.12.0
+    image: mybadreligon/fantasy-manager-client:4.12.1
     container_name: fantasy-manager-client
     restart: unless-stopped
     depends_on:

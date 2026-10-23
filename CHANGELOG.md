@@ -34,6 +34,17 @@ delivered zip.
 
 ---
 
+## v4.12.1 - 2026-10-22
+**Short:** Health check: 30 s start period
+**Long:** /healthz stays public and returns only {status, version} (version = image tag), reading only the local database. The image and deploy/compose.yaml health checks now use a 30 s start period. No app behaviour change.
+
+**Manual step required:** none. v4.12.0 was never tagged; its changes ship in this version (do not tag v4.12.0 or v4.11.1).
+
+- `GET /healthz` on `$PORT`: public, no login, body is exactly `{"status":"ok","version":"4.12.1"}` (the version is `server/package.json`, which the release workflow forces to equal the tag, so it is the image tag). It reads only the local database; no outside service is called. 503 `{"status":"error",...}` if the database can't be read.
+- Image `HEALTHCHECK` and `deploy/compose.yaml`: `wget` on `127.0.0.1:${PORT}/healthz`, interval 30 s, timeout 5 s, **start period 30 s**, 3 retries. The older `docker-compose.yml` (which pulls `latest`) keeps its existing `/api/health` check on purpose, so redeploying it never depends on an image that doesn't have `/healthz`.
+
+---
+
 ## v4.12.0 - 2026-10-22
 **Short:** Spec audit: healthz, clean stop, PWA, tests
 **Long:** Adds /healthz and clean SIGTERM shutdown (tini), fail-fast owner config, offline page, update prompt, Install button, security headers, npm test, docs/ layout and a pending log. Desktop layout and security baseline are logged, not built.

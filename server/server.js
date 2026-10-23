@@ -134,7 +134,9 @@ function dropConnectSessionsFor(username) {
 // v4.12: the version comes from server/package.json, which must equal the repo's VERSION file (a test checks it).
 const APP_VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 
-// v4.12: /healthz = the spec's standard health check ({status, version}); 503 when the database can't be read.
+// v4.12: /healthz = the spec's standard health check. Public (no login), returns only {status, version} (version = the image
+// tag) and reads only the local database: no outside service is ever called and no private data is returned.
+// 503 when the database can't be read.
 app.get("/healthz", (req, res) => {
   if (!dbHealthy()) return res.status(503).json({ status: "error", error: "database unreachable", version: APP_VERSION });
   res.json({ status: "ok", version: APP_VERSION });

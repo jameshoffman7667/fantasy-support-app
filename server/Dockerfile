@@ -47,7 +47,7 @@ RUN addgroup -S app && adduser -S app -G app && mkdir -p /app/data \
 
 EXPOSE 4000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -qO- "http://127.0.0.1:${PORT}/healthz" > /dev/null || exit 1
 
 # v4.12: tini is PID 1 so SIGTERM reaches node (which now shuts down cleanly) instead of the container being killed.
