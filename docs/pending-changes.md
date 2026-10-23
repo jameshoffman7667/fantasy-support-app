@@ -59,6 +59,11 @@ Requested: 2026-10-08 (James, "coming later")
 Type: patch        Status: Blocked
 Notes / questions: James will send more parameters for the Medium preset (server/apiPresets.js `PRESETS.medium`).
 
+### P-12 - Run the server image as a non-root user (spec audit)
+Requested: 2026-10-23 (deploy review)
+Type: patch        Status: Pending
+Notes / questions: server/Dockerfile has no `USER`, so the server runs as root. The spec asks for a fixed `1000:100`. The data folder on the server (DATA_PATH, appdata-ssd/fantasymanager) is a bind mount, so its ownership must be changed on the server before the image switches user, and the update needs a data copy first. Plan the ownership change with the deploy step; do not ship the image change alone.
+
 ## Done
 
 ### P-0 - Version-tagged images and compose pinning
