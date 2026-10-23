@@ -1,14 +1,24 @@
-const CACHE_NAME = "fantasy-manager-shell-v1";
+// v4.12: the cache name carries the app version (a test checks it equals the VERSION file); old caches are
+// deleted on activate. Only the offline page and its icon are precached: nothing else is cached by this worker,
+// so API responses, sign-in pages and anything user-specific always come from the network.
+const CACHE_NAME = "fantasy-manager-v4.12.0";
+const PRECACHE = ["/offline.html", "/icons/icon-192.png"];
 
-self.addEventListener("install", () => {
-  self.skipWaiting();
+self.addEventListener("install", (event) => {
+  // No skipWaiting() here: a new worker waits until the person taps "Reload" in the update prompt (main.jsx),
+  // so an update never swaps the page in the middle of a form.
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE)));
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 // Pre-kickoff alerts (v2): the server sends a Web Push message (see
@@ -44,24 +54,16 @@ self.addEventListener("notificationclick", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Never cache API calls — the whole point of this app is fresh data,
-  // and a stale-served roster/injury/lineup response would be actively
-  // misleading, not just a minor inconvenience.
-  if (url.pathname.startsWith("/api/")) return;
+  // Never touch API calls, the Android link file, other origins or anything that isn't a GET: the whole point
+  // of this app is fresh data, and a stale roster/lineup response would be actively misleading.
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/.well-known/")) return;
 
-  event.respondWith(
-    caches.open(CACHE_NAME).then(async (cache) => {
-      const cached = await cache.match(event.request);
-      const networkFetch = fetch(event.request)
-        .then((response) => {
-          if (response.ok) cache.put(event.request, response.clone());
-          return response;
-        })
-        .catch(() => cached);
-      // Stale-while-revalidate: instant load from cache if we have it,
-      // silently refreshed in the background for next time.
-      return cached || networkFetch;
-    })
-  );
+  // Page loads: network first; when the network is down, show the offline page.
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request).catch(() => caches.open(CACHE_NAME).then((cache) => cache.match("/offline.html")))
+    );
+  }
+  // Everything else (scripts, styles, images) goes straight to the network and the browser's own HTTP cache.
 });

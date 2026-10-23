@@ -391,4 +391,14 @@ export function deletePushSubscriptionsForUser(username) {
   db.prepare("DELETE FROM push_subscriptions WHERE username = ?").run(username);
 }
 
+/** v4.12: cheap reachability check for /healthz. */
+export function dbHealthy() {
+  try { db.prepare("SELECT 1").get(); return true; } catch { return false; }
+}
+
+/** v4.12: close the database cleanly on shutdown (SIGTERM). Safe to call twice. */
+export function closeDb() {
+  try { db.close(); } catch { /* already closed */ }
+}
+
 export default db;

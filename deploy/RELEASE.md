@@ -1,21 +1,21 @@
-# Release v4.11.1
-Image: mybadreligon/fantasy-manager-server:4.11.1 and mybadreligon/fantasy-manager-client:4.11.1   (built by the v4.11.1 tag workflow; also 4.11, latest, sha-)
-Short: Switch to tag-based release flow
-Long: Images now build only when a vX.Y.Z tag is pushed: server and client get X.Y.Z, X.Y and latest tags, then a GitHub release is created. Dockhand deploy job removed. Adds VERSION, deploy/RELEASE.md (Update: now|later) and deploy/compose.yaml.
+# Release v4.12.0
+Image: mybadreligon/fantasy-manager-server:4.12.0 and mybadreligon/fantasy-manager-client:4.12.0   (built by the v4.12.0 tag workflow; also 4.11, latest, sha-)
+Short: Spec audit: healthz, clean stop, PWA, tests
+Long: Adds /healthz and clean SIGTERM shutdown (tini), fail-fast owner config, offline page, update prompt, Install button, security headers, npm test, docs/ layout and a pending log. Desktop layout and security baseline are logged, not built.
 Release commit: the main commit that contains this file (git log -1 -- deploy/RELEASE.md)        Tag pushed from authoring session: no (James or Claude Code pushes it)
-Type: patch (release process only; no app code change; the old decimal v4.11 is 4.11.0)
+Type: minor (new /healthz endpoint, Install button, PWA behaviour; v4.11.1 was never tagged, its release-flow changes ship here)
 Update: later
 Port: client container 5000 -> host CLIENT_PORT (default 5000; image fixed; register plan says 8042, not moved yet). Server 4000 internal only.   Exception: container 5000 -> host CLIENT_PORT, image fixed
 Public hostname: fantasymanager.hoffmanhouse.ca        Needs Caddy route: no (unchanged)
-New or changed env vars: none
+New or changed env vars: none. Start-up now exits if OWNER_USERNAME is missing, or OWNER_PASSWORD is missing before the owner account exists.
 Data: /app/data in the server container (named volume fantasy-manager-data, or DATA_PATH); migration: none
 Resources: unchanged
-Healthcheck: server GET /api/health on $PORT (not /healthz) -> 200; deploy/compose.yaml uses 127.0.0.1
-Verify after deploy: containers healthy; the site loads and a league page shows real data; the server log shows v4.11 behaviour unchanged (no app code changed)
-PWA: unchanged, not re-checked in this release (no UI change)
-Docker build: not run locally (CI only); the first build is the v4.11.1 tag workflow
+Healthcheck: GET /healthz on $PORT -> 200 {status, version}; the image and deploy/compose.yaml use wget on 127.0.0.1. The server stops cleanly on SIGTERM (tini + handler).
+Verify after deploy: both containers healthy; the site loads and a league page shows real data; `docker stop fantasy-manager-server` exits 0 within a few seconds (not 137); `docker exec fantasy-manager-server wget -qO- http://127.0.0.1:4000/healthz` shows version 4.12.0; Account shows Install app (or says it is installed)
+PWA: offline page, update bar, Install button and manifest screenshots added; checked in Chromium on the sign-in screen only (320, 390, 540, 768, 1280, 1440 px: no sideways scroll; service worker active; offline page shown with the server stopped). Lighthouse not run. Cloudflare Access bypass for manifest, sw.js, offline.html and icons: needed if Access protects the hostname
+Docker build: not run (no Docker daemon in the authoring session); server run with node, client built with vite; the first image build is the v4.12.0 tag workflow
 Rollback: previous image tag latest as of v4.11 (digest pinned by the server's update procedure); data restore needed: no
-Known issues: server stops with exit 137 (SIGTERM not handled); no /healthz or version endpoint; docs/ layout, in-repo pending-changes log and the full spec audit not done in this release
+Known issues: no designed desktop layout (single phone column), dark only, no security baseline for external access (TOTP, step-up, CSP, audit log), one 500 kB+ JS bundle, ad-hoc data migrations; all logged in docs/pending-changes.md (P-5 to P-10)
 Backup tier: small/critical (SQLite; stop the container during a copy)
 
 ## Update field
@@ -25,6 +25,6 @@ Backup tier: small/critical (SQLite; stop the container during a copy)
 
 ## Tag commands (James or Claude Code, once main has this commit)
 git fetch origin && git log --oneline -1 origin/main
-git tag -a v4.11.1 <release commit> -m "Switch to tag-based release flow" -m "<Long from CHANGELOG.md>"
-git push origin v4.11.1
+git tag -a v4.12.0 <release commit> -m "Spec audit: healthz, clean stop, PWA, tests" -m "Adds /healthz and clean SIGTERM shutdown (tini), fail-fast owner config, offline page, update prompt, Install button, security headers, npm test, docs/ layout and a pending log. Desktop layout and security baseline are logged, not built."
+git push origin v4.12.0
 Repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN must exist. Watch the `release` run in Actions; if a step fails, fix with the next patch version, never move the tag.

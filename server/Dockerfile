@@ -22,7 +22,7 @@ WORKDIR /app
 # su-exec: a minimal, Alpine-native equivalent of gosu/sudo, used only
 # to drop from root to the "app" user after fixing volume ownership at
 # container start (see entrypoint.sh) — not to run the app as root.
-RUN apk add --no-cache su-exec
+RUN apk add --no-cache su-exec tini
 COPY --from=build /app/node_modules ./node_modules
 COPY . .
 
@@ -47,8 +47,9 @@ RUN addgroup -S app && adduser -S app -G app && mkdir -p /app/data \
 
 EXPOSE 4000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD node -e "fetch('http://localhost:'+(process.env.PORT||4000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT}/healthz" > /dev/null || exit 1
 
-ENTRYPOINT ["./entrypoint.sh"]
+# v4.12: tini is PID 1 so SIGTERM reaches node (which now shuts down cleanly) instead of the container being killed.
+ENTRYPOINT ["/sbin/tini", "--", "./entrypoint.sh"]
 CMD ["node", "server.js"]

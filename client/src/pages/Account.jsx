@@ -1,5 +1,5 @@
 import * as api from "../api.js";
-import { ChevronRight, Copy, KeyRound, Loader2, Lock, LogOut, UserCog, UserPlus } from "lucide-react";
+import { ChevronRight, Copy, Download, KeyRound, Loader2, Lock, LogOut, UserCog, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Chip, InfoNote, PrimaryButton, SectionLabel, TextField } from "../ui/common.jsx";
 import { C, inputStyle } from "../ui/theme.js";
@@ -443,12 +443,51 @@ function ApiPresetsPanel({ isOwner }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  v4.12 — Install the app (PWA)                                       */
+/* ------------------------------------------------------------------ */
+function InstallAppPanel() {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const on = () => bump((n) => n + 1);
+    window.addEventListener("install-prompt-ready", on);
+    return () => window.removeEventListener("install-prompt-ready", on);
+  }, []);
+  const standalone = typeof window !== "undefined" && (window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
+  const prompt = typeof window !== "undefined" ? window.__installPrompt : null;
+  const ios = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+  async function install() {
+    if (!prompt) return;
+    prompt.prompt();
+    try { await prompt.userChoice; } catch { /* dismissed */ }
+    window.__installPrompt = null;
+    bump((n) => n + 1);
+  }
+  if (standalone) {
+    return <div style={{ color: C.textMuted }} className="text-xs px-1">This app is installed.</div>;
+  }
+  if (prompt) {
+    return <PrimaryButton onClick={install} Icon={Download}>Install app</PrimaryButton>;
+  }
+  return (
+    <div style={{ color: C.textMuted }} className="text-xs px-1">
+      {ios
+        ? "On iPhone or iPad: tap Share, then Add to Home Screen."
+        : "Use your browser's install option (the address bar icon or the menu). Installing needs the https address, not a local network address."}
+    </div>
+  );
+}
+
 export function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
   return (
     <div className="px-4 py-3 space-y-4">
       <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3">
         <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 500 }} className="text-sm">{authUser?.username}</div>
         <div style={{ color: C.textMuted }} className="text-xs mt-0.5">{authUser?.role === "owner" ? "Owner" : "Guest"}</div>
+      </div>
+      <div>
+        <SectionLabel>Install app</SectionLabel>
+        <div className="pt-1.5"><InstallAppPanel /></div>
       </div>
       <div>
         <SectionLabel>Sleeper access (optional)</SectionLabel>

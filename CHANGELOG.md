@@ -34,6 +34,21 @@ delivered zip.
 
 ---
 
+## v4.12.0 - 2026-10-22
+**Short:** Spec audit: healthz, clean stop, PWA, tests
+**Long:** Adds /healthz and clean SIGTERM shutdown (tini), fail-fast owner config, offline page, update prompt, Install button, security headers, npm test, docs/ layout and a pending log. Desktop layout and security baseline are logged, not built.
+
+**Manual step required:** none for the app. The server image now starts under `tini` and stops cleanly on SIGTERM; a start with `OWNER_USERNAME` missing (or `OWNER_PASSWORD` missing before the owner account exists) now exits with a clear message instead of running with nobody able to log in. `docker-compose.yml` is unchanged. v4.11.1 was never tagged; its release-flow changes ship in this version.
+
+- **Server:** `GET /healthz` returns `{status, version}` (503 if the database can't be read); `/api/health` also reports the version. The version comes from `server/package.json`, kept equal to the repo's `VERSION` file by a test and by the release workflow. SIGTERM / SIGINT stop accepting requests, close the database and exit 0 (forced after 8 s). The image uses `tini` as PID 1 and its health check uses `127.0.0.1` and `${PORT}`.
+- **PWA:** service worker rewritten: only `/offline.html` and one icon are precached (cache name carries the version), page loads are network first with the offline page as fallback, nothing else is cached, and a new worker waits until you tap "Reload" in the new "Update available" bar. The page reloads on a controller change only if it already had one. Account has an **Install app** button (iOS: Add to Home Screen text). The manifest gains `id` and wide / narrow screenshots (sign-in screen only).
+- **nginx:** `nosniff`, frame denial and no-referrer headers; `/assets/` cached for a year (fingerprinted); no-cache for the manifest, service worker and offline page.
+- **Tests:** `npm test` (after `npm install --prefix server`) runs the checks in `test/`: versions, CHANGELOG lengths, deploy files, workflow rules, Dockerfile, PWA files, a real `/healthz` + SIGTERM run and the two fail-fast cases.
+- **Docs:** `docs/functional-spec.md` (moved; gained Mobile layout, Desktop layout, PWA and Operations sections) and `docs/pending-changes.md` (new; holds the queue and the audit gaps).
+- **Not done (logged as P-5 to P-10):** a designed desktop layout, light mode, the external-access security baseline, code splitting, data-migration safeguards, a Lighthouse run.
+
+---
+
 ## v4.11.1 - 2026-10-22
 **Short:** Switch to tag-based release flow
 **Long:** Images now build only when a vX.Y.Z tag is pushed: server and client get X.Y.Z, X.Y and latest tags, then a GitHub release is created. Dockhand deploy job removed. Adds VERSION, deploy/RELEASE.md (Update: now|later) and deploy/compose.yaml.

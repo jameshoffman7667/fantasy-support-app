@@ -1,0 +1,8 @@
+{
+  "name": "fantasy-support-app-tests",
+  "private": true,
+  "description": "Repo-level tests. Run `npm install --prefix server` once, then `npm test`.",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

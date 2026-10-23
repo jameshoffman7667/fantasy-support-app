@@ -1,5 +1,6 @@
 import "dotenv/config";
 import crypto from "crypto";
+import { readFileSync } from "node:fs";
 import express from "express";
 import cors from "cors";
 import * as sleeper from "./sleeper.js";
@@ -24,6 +25,8 @@ import {
   deletePushSubscriptionsForUser,
   cacheGet,
   cacheSet,
+  dbHealthy,
+  closeDb,
 } from "./db.js";
 import { startScheduler, pendingDeps } from "./scheduler.js";
 import * as pendingMoves from "./pendingMoves.js";
@@ -128,8 +131,17 @@ function dropConnectSessionsFor(username) {
 
 // Deliberately left unprotected — this is what the Docker healthcheck
 // hits, and it carries nothing sensitive.
+// v4.12: the version comes from server/package.json, which must equal the repo's VERSION file (a test checks it).
+const APP_VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
+
+// v4.12: /healthz = the spec's standard health check ({status, version}); 503 when the database can't be read.
+app.get("/healthz", (req, res) => {
+  if (!dbHealthy()) return res.status(503).json({ status: "error", error: "database unreachable", version: APP_VERSION });
+  res.json({ status: "ok", version: APP_VERSION });
+});
+
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, fantasyProsKeySet: Boolean(process.env.FANTASYPROS_API_KEY && process.env.FANTASYPROS_API_KEY !== "your_key_here"), androidAppLinks: Boolean(assetLinks()) });
+  res.json({ ok: true, version: APP_VERSION, fantasyProsKeySet: Boolean(process.env.FANTASYPROS_API_KEY && process.env.FANTASYPROS_API_KEY !== "your_key_here"), androidAppLinks: Boolean(assetLinks()) });
 });
 
 // v4.0: Digital Asset Links for the Android app — Android checks this file to confirm the app and the
@@ -1384,10 +1396,25 @@ app.post("/api/rankings", (req, res) => {
 });
 
 const PORT = process.env.PORT || 4000;
+
+// v4.12: fail fast on missing required configuration, with a clear message, instead of starting a server
+// nobody can log in to. OWNER_USERNAME is always required; OWNER_PASSWORD only while the owner account doesn't exist yet.
+{
+  const owner = envOwnerUsername();
+  if (!owner || !isValidUsername(owner)) {
+    console.error(`[config] OWNER_USERNAME is ${owner ? `not a valid username ("${owner}"; letters, numbers, _ . - only)` : "not set"}. It names the owner's Sleeper username and is required. Set it in the stack's environment and restart. See README.`);
+    process.exit(1);
+  }
+  if (!getUser(owner) && !process.env.OWNER_PASSWORD) {
+    console.error(`[config] OWNER_PASSWORD is not set and the owner account "${owner}" doesn't exist yet. Set OWNER_PASSWORD (8+ characters) for the first start. See README.`);
+    process.exit(1);
+  }
+}
+
 // Make sure the owner account exists before accepting any requests.
 await ensureOwnerFromEnv();
-app.listen(PORT, () => {
-  console.log(`Fantasy manager server listening on http://localhost:${PORT}`);
+const server = app.listen(PORT, () => {
+  console.log(`Fantasy manager server v${APP_VERSION} listening on http://localhost:${PORT}`);
   if (!process.env.FANTASYPROS_API_KEY || process.env.FANTASYPROS_API_KEY === "your_key_here") {
     console.warn("⚠️  FANTASYPROS_API_KEY is not set — copy server/.env.example to server/.env and add your key.");
   }
@@ -1396,3 +1423,27 @@ app.listen(PORT, () => {
   }
   startScheduler();
 });
+
+// v4.12: clean shutdown. Docker sends SIGTERM on stop; before this the process ignored it and was killed (exit 137).
+// Stop accepting requests, let in-flight ones finish, close the database, exit 0. A timer forces the exit after 8 s
+// so a hung request can never run into Docker's own kill.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — closing the server`);
+  const force = setTimeout(() => {
+    console.warn("[shutdown] in-flight requests did not finish in 8 s — exiting anyway");
+    closeDb();
+    process.exit(0);
+  }, 8000);
+  force.unref();
+  server.close(() => {
+    closeDb();
+    console.log("[shutdown] done");
+    process.exit(0);
+  });
+  server.closeIdleConnections?.();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

@@ -42,6 +42,9 @@ jobs:
           [ -f VERSION ] || { echo "No VERSION file"; exit 1; }
           FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
           [ "$FILE_VERSION" = "$VERSION" ] || { echo "VERSION file ($FILE_VERSION) != tag ($VERSION)"; exit 1; }
+          for f in server/package.json client/package.json; do
+            [ "$(node -p "require('./$f').version")" = "$VERSION" ] || { echo "$f version != tag ($VERSION)"; exit 1; }
+          done
           # changelog must contain this version with Short <= 50 and Long <= 250 chars
           grep -q "^## v$VERSION " CHANGELOG.md || { echo "CHANGELOG.md has no entry for v$VERSION"; exit 1; }
           SHORT="$(awk -v v="## v$VERSION " 'index($0,v)==1{f=1;next} f&&/^\*\*Short:\*\*/{sub(/^\*\*Short:\*\* /,"");print;exit}' CHANGELOG.md)"
