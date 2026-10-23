@@ -1,13 +1,21 @@
 name: release
 
-# Standard release flow (home server app spec 1.7). Runs ONLY when a version tag
-# vMAJOR.MINOR.PATCH (for example v4.12.0) is pushed. Nothing builds on a push to main.
+# Release flow: a release is "commit and push main" with a new version in the VERSION file. No tag push is needed.
 #
-#   validate  -> tag, VERSION file, CHANGELOG entry (Short <= 50, Long <= 250 chars) and the
-#                deploy/ files (RELEASE.md with "Update: now|later", compose.yaml pinned to this version)
+#   trigger   -> a push to main that changes VERSION (the version file; server/ and client/ package.json must
+#                equal it, so a release edits all three, but only VERSION starts a run).
+#                Fallback: a manually pushed tag vMAJOR.MINOR.PATCH runs the same pipeline.
+#   validate  -> reads X.Y.Z; fails if tag vX.Y.Z or its GitHub release already exists, the version files
+#                disagree, the CHANGELOG entry is missing/invalid (Short <= 50, Long <= 250 chars) or the
+#                deploy/ files are wrong (RELEASE.md with "Update: now|later", compose.yaml pinned to X.Y.Z)
 #   images    -> fantasy-manager-server and fantasy-manager-client (linux/amd64), each pushed as
 #                X.Y.Z, X.Y, latest (+ a sha- tag, which is the same image and costs nothing)
-#   release   -> GitHub release, only after both images are pushed (the last step)
+#   release   -> last job: gh release create vX.Y.Z --target $GITHUB_SHA (this also creates the tag), only
+#                after both images are pushed
+#
+# The two triggers can't both release one version: all runs share one concurrency group (they queue, one at a
+# time), and validate fails when the tag or release already exists. A tag created by the workflow's own token
+# doesn't start another run (GitHub never triggers workflows from GITHUB_TOKEN events).
 #
 # Repo secrets (Settings -> Secrets and variables -> Actions): DOCKERHUB_USERNAME (mybadreligon)
 # and DOCKERHUB_TOKEN (access token, Read & Write). Deploying is not done here: Claude Code
@@ -15,10 +23,17 @@ name: release
 
 on:
   push:
+    branches: [main]
+    paths: ["VERSION"]
+    # manual fallback only (path filters are not applied to tag pushes)
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -33,15 +48,31 @@ jobs:
       - name: Validate release metadata
         id: check
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH"; exit 1; }
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "Tag version: $VERSION"
-          # the version file must match the tag
           [ -f VERSION ] || { echo "No VERSION file"; exit 1; }
           FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
-          [ "$FILE_VERSION" = "$VERSION" ] || { echo "VERSION file ($FILE_VERSION) != tag ($VERSION)"; exit 1; }
+          [[ "$FILE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION ($FILE_VERSION) is not MAJOR.MINOR.PATCH"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            # manual fallback: the pushed tag must be vMAJOR.MINOR.PATCH and equal the VERSION file
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH"; exit 1; }
+            VERSION="${GITHUB_REF_NAME#v}"
+            [ "$FILE_VERSION" = "$VERSION" ] || { echo "VERSION file ($FILE_VERSION) != tag ($VERSION)"; exit 1; }
+          else
+            VERSION="$FILE_VERSION"
+            # push to main: the tag must not exist yet (the release step creates it)
+            if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null 2>&1; then
+              echo "Tag v$VERSION already exists: bump VERSION to a new version"; exit 1
+            fi
+          fi
+          # never release a version twice, whichever trigger got here first
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "GitHub release v$VERSION already exists"; exit 1
+          fi
+          echo "Release version: $VERSION"
           for f in server/package.json client/package.json; do
             [ "$(node -p "require('./$f').version")" = "$VERSION" ] || { echo "$f version != tag ($VERSION)"; exit 1; }
           done
@@ -115,8 +146,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: GitHub release
+      - name: GitHub release (also creates the tag)
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
           SHORT: ${{ needs.validate.outputs.short }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME - $SHORT" --notes-file <(awk -v v="## $GITHUB_REF_NAME " 'index($0,v)==1{f=1;next} f&&/^## v/{exit} f' CHANGELOG.md)
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION - $SHORT" --notes-file <(awk -v v="## v$VERSION " 'index($0,v)==1{f=1;next} f&&/^## v/{exit} f' CHANGELOG.md)

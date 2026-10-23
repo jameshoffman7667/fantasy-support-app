@@ -34,6 +34,18 @@ delivered zip.
 
 ---
 
+## v4.12.2 - 2026-10-22
+**Short:** Release on push to main, no tag push needed
+**Long:** A push to main that changes VERSION now checks, builds and pushes both images (X.Y.Z, X.Y, latest), then gh release create --target creates the tag and release. The v*.*.* tag trigger stays only as a manual fallback.
+
+**Manual step required:** none for the app. v4.12.0 and v4.12.1 were never tagged and ship in this version. From now on a release is: bump `VERSION` (and `server/package.json`, `client/package.json`, the service worker cache name, the CHANGELOG entry, `deploy/RELEASE.md` and `deploy/compose.yaml`), then commit and push `main`. Never push a tag by hand.
+
+- `.github/workflows/release.yml` runs on a push to `main` that changes `VERSION` (the version file). It reads X.Y.Z, fails if the tag `vX.Y.Z` or its GitHub release already exists, the version files disagree, or the CHANGELOG entry or `deploy/` files are missing or invalid; builds and pushes `fantasy-manager-server` and `fantasy-manager-client` as `X.Y.Z`, `X.Y`, `latest` (+ `sha-`); then, as the last job, runs `gh release create vX.Y.Z --target $GITHUB_SHA`, which also creates the tag, with the workflow's own token (`permissions: contents: write`).
+- The `v*.*.*` tag trigger stays only as a manual fallback (same pipeline). The two triggers can't release the same version: every run shares one concurrency group (runs queue) and validation fails when the tag or release already exists. A tag made by the workflow's own token doesn't start another run.
+- Docs: README, `docs/functional-spec.md` (section 10d, decision 196) and `deploy/RELEASE.md` now describe the push-to-main release.
+
+---
+
 ## v4.12.1 - 2026-10-22
 **Short:** Health check: 30 s start period
 **Long:** /healthz stays public and returns only {status, version} (version = image tag), reading only the local database. The image and deploy/compose.yaml health checks now use a 30 s start period. No app behaviour change.

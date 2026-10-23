@@ -1,7 +1,7 @@
 // v4.12: the cache name carries the app version (a test checks it equals the VERSION file); old caches are
 // deleted on activate. Only the offline page and its icon are precached: nothing else is cached by this worker,
 // so API responses, sign-in pages and anything user-specific always come from the network.
-const CACHE_NAME = "fantasy-manager-v4.12.1";
+const CACHE_NAME = "fantasy-manager-v4.12.2";
 const PRECACHE = ["/offline.html", "/icons/icon-192.png"];
 
 self.addEventListener("install", (event) => {

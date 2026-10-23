@@ -44,11 +44,19 @@ test("deploy/compose.yaml pins both images to this version, never latest, and he
   assert.match(c, /interval: 30s\n\s+timeout: 5s\n\s+start_period: 30s\n\s+retries: 3/);
 });
 
-test("release workflow runs only on version tags and never builds on a branch push", () => {
+test("release workflow: starts on a VERSION change on main, tag only as fallback, one concurrency group, tag made by gh release", () => {
   const w = read(".github/workflows/release.yml");
+  assert.ok(w.includes("branches: [main]"));
+  assert.ok(w.includes('paths: ["VERSION"]'));
   assert.ok(w.includes('tags: ["v[0-9]+.[0-9]+.[0-9]+"]'));
-  assert.ok(!/branches:/.test(w));
+  assert.match(w, /concurrency:\n  group: release\n  cancel-in-progress: false/);
+  assert.match(w, /permissions:\n  contents: write/);
+  assert.ok(w.includes('gh release create "v$VERSION" --target "$GITHUB_SHA"'));
+  assert.ok(w.includes('git ls-remote --exit-code --tags origin "refs/tags/v$VERSION"'));
+  assert.ok(w.includes('gh release view "v$VERSION"'));
   assert.ok(!/DOCKHAND/.test(w.replace(/#.*$/gm, "")));
+  // the release job is last and needs both the checks and the images
+  assert.match(w, /release:\n    needs: \[validate, images\]/);
 });
 
 test("server image follows the spec: tini, no syntax line, health check on 127.0.0.1 with $PORT", () => {
