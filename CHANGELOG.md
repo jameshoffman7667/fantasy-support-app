@@ -34,6 +34,19 @@ delivered zip.
 
 ---
 
+## v4.12.3 - 2026-10-23
+**Short:** Fix image tags, add label and tag checks
+**Long:** Images now get X.Y.Z and X.Y tags on a push to main (the semver tag rule only works on tags, so 4.12.2 got only latest and sha-). Adds version and revision labels, a verify step before the release, and a rollback line naming an exact tag.
+
+**Manual step required:** none for the app. Deploy v4.12.3, not v4.12.2: the v4.12.2 images were only tagged `latest` and `sha-d8dd33f` (no `4.12.2` / `4.12`), and its tag and release stay as they are. v4.12.0 and v4.12.1 were never tagged. See `deploy/RELEASE.md` for the stack changes (tag in `.env`, health check, stop grace period).
+
+- **Bug fixed:** `release.yml` used `type=semver` tag rules, which only produce tags when the pushed ref is a git tag. A release started by a push to `main` therefore got only `latest` and `sha-`. Now `X.Y.Z` and `X.Y` are `type=raw` tags built from the validated version.
+- **Labels:** every image gets `org.opencontainers.image.version` (= X.Y.Z) and `org.opencontainers.image.revision` (= the commit) set explicitly.
+- **Verify step (new):** after pushing, each image is checked: `X.Y.Z`, `X.Y` and `latest` exist and are the same image, and the labels match. A failure stops the run before the release job, so no tag and no GitHub release are created for an incomplete build.
+- **Deploy files:** `deploy/RELEASE.md` rollback names an exact tag, and lists the stack's real shape (docker-compose.yml + `IMAGE_TAG` in the stack `.env`, `DATA_PATH` bind mount) and the compose edits beyond the tag; `deploy/compose.yaml` no longer adds the external `caddy_net` network.
+
+---
+
 ## v4.12.2 - 2026-10-22
 **Short:** Release on push to main, no tag push needed
 **Long:** A push to main that changes VERSION now checks, builds and pushes both images (X.Y.Z, X.Y, latest), then gh release create --target creates the tag and release. The v*.*.* tag trigger stays only as a manual fallback.

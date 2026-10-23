@@ -41,6 +41,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.check.outputs.version }}
+      minor: ${{ steps.check.outputs.minor }}
       short: ${{ steps.check.outputs.short }}
     steps:
       - uses: actions/checkout@v4
@@ -92,6 +93,7 @@ jobs:
           done
           ! grep -qE 'image:.*:latest' deploy/compose.yaml || { echo "deploy/compose.yaml must not use :latest"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "minor=${VERSION%.*}" >> "$GITHUB_OUTPUT"
           echo "short=$SHORT" >> "$GITHUB_OUTPUT"
 
   images:
@@ -120,13 +122,16 @@ jobs:
         id: meta
         with:
           images: mybadreligon/${{ matrix.image }}
+          # raw tags, not type=semver: the semver rules only work when the pushed ref is a git tag, and a
+          # release started by a push to main has none (that left 4.12.2 with only latest and sha-)
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.validate.outputs.version }}
+            type=raw,value=${{ needs.validate.outputs.minor }}
             type=raw,value=latest
             type=sha,format=short
           labels: |
             org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - uses: docker/build-push-action@v6
         with:
@@ -138,6 +143,29 @@ jobs:
           # one cache scope per image so the two builds don't overwrite each other's layers
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # Fail the run (so no tag and no release are created) unless X.Y.Z, X.Y and latest all exist, point at the
+      # same image, and the image carries the version and revision labels.
+      - name: Verify tags and labels
+        env:
+          IMAGE: mybadreligon/${{ matrix.image }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          MINOR: ${{ needs.validate.outputs.minor }}
+        run: |
+          set -euo pipefail
+          for t in "$VERSION" "$MINOR" latest; do
+            docker buildx imagetools inspect "$IMAGE:$t" > /dev/null || { echo "$IMAGE:$t is missing"; exit 1; }
+          done
+          d1="$(docker buildx imagetools inspect --raw "$IMAGE:$VERSION" | sha256sum)"
+          for t in "$MINOR" latest; do
+            [ "$d1" = "$(docker buildx imagetools inspect --raw "$IMAGE:$t" | sha256sum)" ] || { echo "$IMAGE:$t is not the same image as $IMAGE:$VERSION"; exit 1; }
+          done
+          docker pull -q "$IMAGE:$VERSION" > /dev/null
+          v="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$IMAGE:$VERSION")"
+          r="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE:$VERSION")"
+          [ "$v" = "$VERSION" ] || { echo "version label is '$v', expected $VERSION"; exit 1; }
+          [ "$r" = "$GITHUB_SHA" ] || { echo "revision label is '$r', expected $GITHUB_SHA"; exit 1; }
+          echo "$IMAGE: tags $VERSION, $MINOR, latest verified; labels version=$v revision=$r"
 
   release:
     needs: [validate, images]

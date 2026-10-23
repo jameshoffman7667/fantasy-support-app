@@ -1,10 +1,10 @@
-# Reference compose for v4.12.2. Images are pinned to this exact release; the file changes with every release.
+# Reference compose for v4.12.3. Images are pinned to this exact release; the file changes with every release.
 # Same service layout as the repo's docker-compose.yml. Differences: exact version tags instead of
-# IMAGE_TAG/latest, the server's port 4000 is not published (only the client's nginx talks to it),
+# IMAGE_TAG/latest, no external caddy_net (Caddy reaches the client on its published host port), the server's port 4000 is not published (only the client's nginx talks to it),
 # /healthz on 127.0.0.1 in the health check, log limits and a stop grace period.
 services:
   server:
-    image: mybadreligon/fantasy-manager-server:4.12.2
+    image: mybadreligon/fantasy-manager-server:4.12.3
     container_name: fantasy-manager-server
     restart: unless-stopped
     environment:
@@ -76,7 +76,7 @@ services:
         max-file: "3"
 
   client:
-    image: mybadreligon/fantasy-manager-client:4.12.2
+    image: mybadreligon/fantasy-manager-client:4.12.3
     container_name: fantasy-manager-client
     restart: unless-stopped
     depends_on:
@@ -85,9 +85,6 @@ services:
     ports:
       # container 5000 (nginx, fixed in the image) -> host CLIENT_PORT
       - "${CLIENT_PORT:-5000}:5000"
-    networks:
-      - default
-      - caddy_net
     logging:
       driver: json-file
       options:
@@ -96,8 +93,3 @@ services:
 
 volumes:
   fantasy-manager-data:
-
-networks:
-  # Must already exist on the host (Caddy's network).
-  caddy_net:
-    external: true

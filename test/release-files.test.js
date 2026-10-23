@@ -33,6 +33,12 @@ test("deploy/RELEASE.md is for this version and has exactly one Update: now|late
   assert.equal((r.match(/^Update: (now|later)$/gm) || []).length, 1);
 });
 
+test("RELEASE.md rollback names an exact tag, not latest", () => {
+  const line = read("deploy/RELEASE.md").split("\n").find((l) => l.startsWith("Rollback: "));
+  assert.ok(line && /sha-[0-9a-f]{7}|\d+\.\d+\.\d+/.test(line));
+  assert.ok(!/\blatest\b/.test(line));
+});
+
 test("deploy/compose.yaml pins both images to this version, never latest, and health checks use 127.0.0.1 and $PORT", () => {
   const c = read("deploy/compose.yaml");
   for (const img of ["fantasy-manager-server", "fantasy-manager-client"]) {
@@ -55,6 +61,14 @@ test("release workflow: starts on a VERSION change on main, tag only as fallback
   assert.ok(w.includes('git ls-remote --exit-code --tags origin "refs/tags/v$VERSION"'));
   assert.ok(w.includes('gh release view "v$VERSION"'));
   assert.ok(!/DOCKHAND/.test(w.replace(/#.*$/gm, "")));
+  // image tags must be raw tags (type=semver only works on git tag refs, not on a push to main)
+  assert.ok(!/type=semver/.test(w.replace(/#.*$/gm, "")));
+  assert.ok(w.includes("type=raw,value=${{ needs.validate.outputs.version }}"));
+  assert.ok(w.includes("type=raw,value=${{ needs.validate.outputs.minor }}"));
+  assert.ok(w.includes("type=raw,value=latest"));
+  assert.ok(w.includes("org.opencontainers.image.version=${{ needs.validate.outputs.version }}"));
+  assert.ok(w.includes("org.opencontainers.image.revision=${{ github.sha }}"));
+  assert.ok(w.includes("name: Verify tags and labels"));
   // the release job is last and needs both the checks and the images
   assert.match(w, /release:\n    needs: \[validate, images\]/);
 });
