@@ -34,6 +34,18 @@ delivered zip.
 
 ---
 
+## v4.11.1 - 2026-10-22
+**Short:** Switch to tag-based release flow
+**Long:** Images now build only when a vX.Y.Z tag is pushed: server and client get X.Y.Z, X.Y and latest tags, then a GitHub release is created. Dockhand deploy job removed. Adds VERSION, deploy/RELEASE.md (Update: now|later) and deploy/compose.yaml.
+
+**Manual step required:** pushes to `main` no longer build images or call Dockhand. Create the tag `v4.11.1` (commands in `deploy/RELEASE.md`) to publish the first tagged images; the secrets `DOCKHAND_WEBHOOK_URL` and `DOCKHAND_WEBHOOK_SECRET` are no longer read and can be deleted. No app code change, no new environment variable; `docker-compose.yml` has a comment change only.
+
+- `.github/workflows/release.yml` replaces `docker-publish.yml`: validates tag, `VERSION`, this entry and `deploy/`, builds `fantasy-manager-server` and `fantasy-manager-client` (linux/amd64), pushes `X.Y.Z`, `X.Y`, `latest` and a `sha-` tag, then creates the GitHub release as the last job.
+- `deploy/RELEASE.md` (with the fixed `Update: now|later` field) and `deploy/compose.yaml` (images pinned to the exact version) are left with every release.
+- Versions are `MAJOR.MINOR.PATCH` from here on; the old decimal `v4.11` is `4.11.0`. The next feature release is `v4.12.0`.
+
+---
+
 ## v4.11 — Roster move planner rework, bench sort, Game Day TNF tab
 
 **Manual step required: none.** No `docker-compose.yml` change and no new environment variable.

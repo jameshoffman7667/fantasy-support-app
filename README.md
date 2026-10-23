@@ -206,8 +206,11 @@ variables → Actions**, add two repository secrets:
   password (create one at hub.docker.com → Account Settings → Security
   → New Access Token, **Read & Write** scope, then paste it here)
 
-**3. Push to `main`.** `.github/workflows/docker-publish.yml` picks it
-up automatically and builds + pushes both images for `linux/amd64`
+**3. Push a version tag** (v4.11.1+: nothing builds on a push to `main`).
+`git tag -a vX.Y.Z -m "<short>" -m "<long>"` then `git push origin vX.Y.Z`;
+`.github/workflows/release.yml` picks the tag up and builds + pushes both
+images as `X.Y.Z`, `X.Y` and `latest` for `linux/amd64`, then creates the
+GitHub release. (Older text below: arm64 dropped in v3.5)
 (v3.5: arm64 dropped — the server is a Linux Intel PC, and the arm64
 images were built under slow emulation). Watch the **Actions** tab for
 progress — a few minutes later,
@@ -1088,7 +1091,7 @@ not just restarts.
 
 ```
 .github/workflows/
-  docker-publish.yml    Builds + pushes both images to Docker Hub (linux/amd64) on push to main (not for android/-only pushes)
+  release.yml           On a vX.Y.Z tag: builds + pushes both images to Docker Hub (X.Y.Z, X.Y, latest; linux/amd64), then creates the GitHub release
   android-apk.yml       Builds the signed Android APK, publishes it on the "Android app" release (v4.0)
 docker-compose.yml      PRIMARY: pulls prebuilt Docker Hub images, no build context — Portainer just pulls. Requires an external `caddy_net` Docker network to already exist (see Caddy section).
 docker-compose.local-build.yml  Builds from source instead — local dev, or build-on-host if preferred

@@ -1,0 +1,119 @@
+name: release
+
+# Standard release flow (home server app spec 1.7). Runs ONLY when a version tag
+# vMAJOR.MINOR.PATCH (for example v4.12.0) is pushed. Nothing builds on a push to main.
+#
+#   validate  -> tag, VERSION file, CHANGELOG entry (Short <= 50, Long <= 250 chars) and the
+#                deploy/ files (RELEASE.md with "Update: now|later", compose.yaml pinned to this version)
+#   images    -> fantasy-manager-server and fantasy-manager-client (linux/amd64), each pushed as
+#                X.Y.Z, X.Y, latest (+ a sha- tag, which is the same image and costs nothing)
+#   release   -> GitHub release, only after both images are pushed (the last step)
+#
+# Repo secrets (Settings -> Secrets and variables -> Actions): DOCKERHUB_USERNAME (mybadreligon)
+# and DOCKERHUB_TOKEN (access token, Read & Write). Deploying is not done here: Claude Code
+# deploys a release when deploy/RELEASE.md says "Update: now".
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      short: ${{ steps.check.outputs.short }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release metadata
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH"; exit 1; }
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Tag version: $VERSION"
+          # the version file must match the tag
+          [ -f VERSION ] || { echo "No VERSION file"; exit 1; }
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          [ "$FILE_VERSION" = "$VERSION" ] || { echo "VERSION file ($FILE_VERSION) != tag ($VERSION)"; exit 1; }
+          # changelog must contain this version with Short <= 50 and Long <= 250 chars
+          grep -q "^## v$VERSION " CHANGELOG.md || { echo "CHANGELOG.md has no entry for v$VERSION"; exit 1; }
+          SHORT="$(awk -v v="## v$VERSION " 'index($0,v)==1{f=1;next} f&&/^\*\*Short:\*\*/{sub(/^\*\*Short:\*\* /,"");print;exit}' CHANGELOG.md)"
+          LONG="$(awk -v v="## v$VERSION " 'index($0,v)==1{f=1;next} f&&/^\*\*Long:\*\*/{sub(/^\*\*Long:\*\* /,"");print;exit}' CHANGELOG.md)"
+          [ "${#SHORT}" -gt 0 ] && [ "${#SHORT}" -le 50 ] || { echo "Short is ${#SHORT} chars (max 50)"; exit 1; }
+          [ "${#LONG}" -gt 0 ] && [ "${#LONG}" -le 250 ] || { echo "Long is ${#LONG} chars (max 250)"; exit 1; }
+          # every release leaves deploy/RELEASE.md (with the fixed Update field) and deploy/compose.yaml
+          [ -f deploy/RELEASE.md ] || { echo "deploy/RELEASE.md is missing"; exit 1; }
+          [ -f deploy/compose.yaml ] || { echo "deploy/compose.yaml is missing"; exit 1; }
+          [ "$(grep -cE '^Update: (now|later)$' deploy/RELEASE.md)" = "1" ] || { echo "deploy/RELEASE.md needs exactly one line 'Update: now' or 'Update: later'"; exit 1; }
+          grep -q "^# Release v$VERSION\$" deploy/RELEASE.md || { echo "deploy/RELEASE.md is not for v$VERSION"; exit 1; }
+          for img in fantasy-manager-server fantasy-manager-client; do
+            grep -q "image: mybadreligon/$img:$VERSION\$" deploy/compose.yaml || { echo "deploy/compose.yaml does not pin $img:$VERSION"; exit 1; }
+          done
+          ! grep -qE 'image:.*:latest' deploy/compose.yaml || { echo "deploy/compose.yaml must not use :latest"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+
+  images:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - image: fantasy-manager-server
+            context: ./server
+          - image: fantasy-manager-client
+            context: ./client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: mybadreligon/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # one cache scope per image so the two builds don't overwrite each other's layers
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  release:
+    needs: [validate, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHORT: ${{ needs.validate.outputs.short }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME - $SHORT" --notes-file <(awk -v v="## $GITHUB_REF_NAME " 'index($0,v)==1{f=1;next} f&&/^## v/{exit} f' CHANGELOG.md)

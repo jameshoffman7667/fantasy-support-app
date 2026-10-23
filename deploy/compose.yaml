@@ -1,0 +1,103 @@
+# Reference compose for v4.11.1. Images are pinned to this exact release; the file changes with every release.
+# Same service layout as the repo's docker-compose.yml. Differences: exact version tags instead of
+# IMAGE_TAG/latest, the server's port 4000 is not published (only the client's nginx talks to it),
+# 127.0.0.1 in the health check, log limits and a stop grace period.
+services:
+  server:
+    image: mybadreligon/fantasy-manager-server:4.11.1
+    container_name: fantasy-manager-server
+    restart: unless-stopped
+    environment:
+      # ${FANTASYPROS_API_KEY} is resolved at deploy time from either:
+      #  - Portainer's "Environment variables" field when deploying this
+      #    stack (nothing to upload or commit), or
+      #  - a .env file next to this compose file, if you're running
+      #    `docker compose up` locally.
+      # Either way, the real key is never written into this file or
+      # baked into the image.
+      - FANTASYPROS_API_KEY=${FANTASYPROS_API_KEY}
+      # v2.1: per-user login. People log in with their Sleeper username + a
+      # password. OWNER_USERNAME is the owner's Sleeper username; the owner
+      # account is created at first start with OWNER_PASSWORD (you're made to
+      # change it at first login) and then adds/manages everyone else in the
+      # app. Replaces the old shared APP_PASSWORD, which is no longer read.
+      - OWNER_USERNAME=${OWNER_USERNAME}
+      - OWNER_PASSWORD=${OWNER_PASSWORD}
+      # v3.0 (optional): key used to encrypt your stored Sleeper token. Set a long random
+      # string. If unset, a random key is generated and kept in the same database file as
+      # the token, which protects much less.
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      # Recovery only: set to "true" for one restart to reset the owner's
+      # password back to OWNER_PASSWORD, then remove it again.
+      - OWNER_FORCE_RESET=${OWNER_FORCE_RESET:-}
+      # Optional: force a SQLite journal mode (WAL | WAL_EXCLUSIVE | DELETE)
+      # if your data volume's filesystem doesn't support WAL. Normally leave
+      # unset — the server detects this and falls back automatically.
+      - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
+      # v2.4: Tank01 NFL API key (RapidAPI) for Vegas prop-based projections
+      # and Tank01 projections. Optional — without it the app uses Sleeper,
+      # then ESPN. TANK01_MONTHLY_LIMIT defaults to 1000 (free tier); calls
+      # stop TANK01_RESERVE (default 50) short of it.
+      - TANK01_API_KEY=${TANK01_API_KEY:-}
+      - TANK01_MONTHLY_LIMIT=${TANK01_MONTHLY_LIMIT:-}
+      - TANK01_RESERVE=${TANK01_RESERVE:-}
+      # v2.7 Pick'em article scan (optional): Google AI Studio key + model id.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # v4.7 (optional): parse.bot API key — KeepTradeCut dynasty values for Trade → Value opportunities.
+      # Third-party wrapper (KeepTradeCut has no API). Free key: 200 credits a month. Leave empty and the page
+      # compares the other value sources only. Never paste the key anywhere but your .env / Portainer variables.
+      - PARSE_API_KEY=${PARSE_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-}
+      - PORT=4000
+      # Web Push (v2, pre-kickoff alerts) — optional; leave unset in your
+      # .env/Portainer vars and the server just runs with push disabled
+      # (logged as a startup warning, not an error).
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-}
+      # v4.0 (optional): the Android app's signing-key fingerprint, from the "Build Android app"
+      # workflow's summary — lets the app open full screen (see ANDROID_APK.md).
+      - ANDROID_APP_SHA256=${ANDROID_APP_SHA256:-}
+      - ANDROID_APP_PACKAGE=${ANDROID_APP_PACKAGE:-}
+    volumes:
+      # Named volume by default; set DATA_PATH to an absolute host folder to keep the data there instead.
+      - ${DATA_PATH:-fantasy-manager-data}:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.PORT+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  client:
+    image: mybadreligon/fantasy-manager-client:4.11.1
+    container_name: fantasy-manager-client
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      # container 5000 (nginx, fixed in the image) -> host CLIENT_PORT
+      - "${CLIENT_PORT:-5000}:5000"
+    networks:
+      - default
+      - caddy_net
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  fantasy-manager-data:
+
+networks:
+  # Must already exist on the host (Caddy's network).
+  caddy_net:
+    external: true

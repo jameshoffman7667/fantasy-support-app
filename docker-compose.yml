@@ -3,7 +3,7 @@
 # pulls and runs, never builds. That sidesteps needing a compiler
 # toolchain on the deployment host entirely (better-sqlite3's native
 # build happens once, in CI, not on every deploy — see
-# .github/workflows/docker-publish.yml) and makes redeploys fast.
+# .github/workflows/release.yml) and makes redeploys fast.
 #
 # DOCKERHUB_USER defaults to mybadreligon's own published images below,
 # so this works as-is with no env var needed. Only override it (export
