@@ -59,10 +59,13 @@ Requested: 2026-10-08 (James, "coming later")
 Type: patch        Status: Blocked
 Notes / questions: James will send more parameters for the Medium preset (server/apiPresets.js `PRESETS.medium`).
 
-### P-12 - Run the server image as a non-root user (spec audit)
-Requested: 2026-10-23 (deploy review)
-Type: patch        Status: Pending
-Notes / questions: server/Dockerfile has no `USER`, so the server runs as root. The spec asks for a fixed `1000:100`. The data folder on the server (DATA_PATH, appdata-ssd/fantasymanager) is a bind mount, so its ownership must be changed on the server before the image switches user, and the update needs a data copy first. Plan the ownership change with the deploy step; do not ship the image change alone.
+### P-12 - Fixed non-root user for the server image (spec audit)
+Requested: 2026-10-23 (James, from the deploy review)
+Type: patch        Status: Pending (nothing to build yet; option A chosen for now)
+Notes / questions: Today `server/entrypoint.sh` starts as root (under `tini`), runs `chown -R app:app /app/data`, then `su-exec app` runs `node server.js` as uid 100 (confirmed on the server; data on the server is owned 100:101). The spec asks for a fixed non-root `USER 1000:100` with no root step in the entrypoint.
+- Option A (chosen for now): keep the pattern and document it in `deploy/RELEASE.md` and the functional spec.
+- Option B (only when other changes need it): switch to `USER 1000:100`. Needs the server's data folder re-owned to 1000:100 once, a root step for James, before the first start of that release, plus a data copy first.
+(An earlier note here said the image has no `USER` and runs as root; that was wrong: only the entrypoint's first step runs as root.)
 
 ## Done
 

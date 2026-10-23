@@ -30,6 +30,7 @@ Backup tier: small/critical (SQLite; stop the container during a copy)
   2. server `stop_grace_period: 15s`.
   3. Optional: json-file log limits (`max-size: 10m`, `max-file: "3"`) as in `deploy/compose.yaml`.
   The external `caddy_net` network in the repo's `docker-compose.yml` is not in `deploy/compose.yaml`; leave the stack's networks as they are.
+- User and data ownership (decision: option A, see P-12): the container's entrypoint chowns as root, then drops to uid 100 (`su-exec app`) to run `node server.js`; only `tini` and `entrypoint.sh` run as root. The data folder on the server (`DATA_PATH`) is owned 100:101. The spec's fixed `USER 1000:100` is not used yet; switching to it needs a one-time root re-own of that folder to 1000:100 before the first start of that release.
 - Restart check: `docker stop fantasy-manager-server` briefly takes the app down, so do it as part of the restart (the container should exit 0 in a few seconds, not 137), not as a separate step.
 
 ## How this release goes out
