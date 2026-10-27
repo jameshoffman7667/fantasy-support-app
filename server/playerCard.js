@@ -391,7 +391,8 @@ export async function getPlayerCard(username, sleeperId, { leagueId = null } = {
     lastGame = { week: last.week, opp: last.opp, home: last.home, fpts: last.fpts, stats: last.stats, teamScore: g?.score ?? null, oppScore: g?.opponentScore ?? null, result: g?.score != null && g?.opponentScore != null ? (g.score > g.opponentScore ? "W" : g.score < g.opponentScore ? "L" : "T") : null };
   }
   const profile = store.profileOf(settings).key;
-  const projWeeks = [currentWeek - 2, currentWeek - 1, currentWeek, currentWeek + 1].filter((w) => w >= 1 && w <= 18);
+  // v4.13: earlier and later weeks too — the card scrolls sideways through them
+  const projWeeks = [-4, -3, -2, -1, 0, 1, 2, 3].map((d) => currentWeek + d).filter((w) => w >= 1 && w <= 18);
   const projRows = store.playerProjHistory({ profile, season, playerId: id, weeks: projWeeks });
   const RANK = { V: 0, T: 1, S: 2, E: 3 };
   const projections = [];

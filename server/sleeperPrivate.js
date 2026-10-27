@@ -130,12 +130,13 @@ export async function gql(token, query, variables, { timeoutMs = 15000 } = {}) {
   } catch {
     throw new PrivateApiError(`Sleeper's private API returned something unexpected (HTTP ${res.status}).`, { status: res.status, kind: "bad_response" });
   }
-  if (!res.ok) throw new PrivateApiError(`Sleeper's private API said HTTP ${res.status}.`, { status: res.status, kind: res.status === 401 ? "unauthorized" : "http" });
+  // v4.13: Sleeper often answers a refused request with HTTP 4xx AND the reason in body.errors; the reason comes first.
   if (body.errors?.length) {
     const e = body.errors[0];
-    const unauthorized = /unauthor/i.test(`${e.code} ${e.message}`);
-    throw new PrivateApiError(`${e.code ? `${e.code}: ` : ""}${e.message || "unknown error"}`, { code: e.code, kind: unauthorized ? "unauthorized" : "graphql" });
+    const unauthorized = res.status === 401 || /unauthor/i.test(`${e.code} ${e.message}`);
+    throw new PrivateApiError(`${e.code ? `${e.code}: ` : ""}${e.message || "unknown error"}`, { status: res.status, code: e.code, kind: unauthorized ? "unauthorized" : res.ok ? "graphql" : "http" });
   }
+  if (!res.ok) throw new PrivateApiError(`Sleeper's private API said HTTP ${res.status}.`, { status: res.status, kind: res.status === 401 ? "unauthorized" : "http" });
   return body.data || {};
 }
 const call = (username, query, variables, opts) => gql(tokenOf(username), query, variables, opts);

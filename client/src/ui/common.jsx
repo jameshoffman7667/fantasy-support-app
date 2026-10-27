@@ -133,11 +133,30 @@ function weatherIcon(w) {
   return Cloud;
 }
 
+// v4.13: a small domed-stadium picture for games played indoors (no weather is shown for them, just "roof").
+export function DomeIcon({ size = 11 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" data-dome-icon>
+      <path d="M2 11a6 6 0 0 1 12 0" />
+      <path d="M1 11h14" />
+      <path d="M3 11v2.5M6 11v2.5M10 11v2.5M13 11v2.5" />
+    </svg>
+  );
+}
+
 export function WeatherChip({ player }) {
   const ctx = React.useContext(CardCtx);
   const w = player?.weather;
-  // Domes get nothing; games with no forecast yet get nothing.
-  if (!w || w.indoor || w.temp == null) return null;
+  if (w && w.indoor) {
+    return (
+      <span style={{ color: C.textMuted, border: `1px solid ${C.textMuted}66` }} className="text-[10px] rounded px-1.5 py-0.5 inline-flex items-center gap-1" title="Indoor stadium — weather doesn't apply" data-weather-dome>
+        <DomeIcon />
+        roof
+      </span>
+    );
+  }
+  // Games with no forecast yet get nothing.
+  if (!w || w.temp == null) return null;
   const Icon = weatherIcon(w);
   const color = w.flag ? C.minor : C.textMuted;
   return (

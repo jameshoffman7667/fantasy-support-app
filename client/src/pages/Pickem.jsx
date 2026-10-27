@@ -96,7 +96,7 @@ function PickCard({ g, onSeen, onChoose }) {
       </div>
     );
   };
-  const w = g.weather && !g.weather.indoor && g.weather.temp != null ? g.weather : null;
+  const w = g.weather && (g.weather.indoor || g.weather.temp != null) ? g.weather : null; // v4.13: indoor games show the dome icon + "roof"
   return (
     <div>
       <div
@@ -164,7 +164,7 @@ function PickCard({ g, onSeen, onChoose }) {
           </div>
         )}
       </div>
-      <div style={{ color: live ? C.brand : final ? C.textMuted : C.textFaint }} className="text-[11px] text-center mt-1" data-pick-status>
+      <div style={{ color: live ? C.major : final ? C.textMuted : C.textFaint }} className="text-[11px] text-center mt-1" data-pick-status>
         {live || final ? `${g.away} ${g.awayScore ?? 0} – ${g.homeScore ?? 0} ${g.home} · ${final ? "Final" : g.statusDetail || "Live"}` : g.kickoffLabel}
       </div>
     </div>

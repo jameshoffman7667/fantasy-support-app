@@ -285,6 +285,8 @@ export async function getGameDay(username, { week: weekParam } = {}) {
             state: g?.state ?? null,
             statusDetail: g?.statusDetail ?? null,
             opponent: g?.opponent ?? null,
+            teamScore: g?.score ?? null, // v4.13: game score for the Cheer meter row
+            oppScore: g?.opponentScore ?? null,
             points: entry.pts,
             proj: entry.proj,
             F: 0,

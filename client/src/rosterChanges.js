@@ -150,7 +150,19 @@ export function buildPush(league, changes, checked) {
   if (lineup.length || swaps.length || customs.length) {
     starters = (league.starterIds || []).map(String);
     // v4.11: in the order of the list — a later move builds on the roster the earlier ones leave
-    for (const c of picked.filter((x) => x.type === "lineup" || x.type === "swap")) {
+    for (const c of picked.filter((x) => x.type === "lineup" || x.type === "swap" || x.type === "custom")) {
+      if (c.type === "custom") {
+        // v4.13: hand-made (locked-in) changes sit in the list where they were made, so later moves build on them
+        const at = (i) => String(starters[i] ?? "0");
+        if (c.slotIndex >= starters.length || at(c.slotIndex) !== c.fromId || (c.otherSlot != null && (c.otherSlot >= starters.length || at(c.otherSlot) !== c.toId))) {
+          errors.push(`The custom change at ${c.slot} no longer matches your roster — undo the custom changes or rebuild and try again.`);
+          continue;
+        }
+        starters[c.slotIndex] = c.toId;
+        if (c.otherSlot != null) starters[c.otherSlot] = c.fromId;
+        summary.push(c.otherSlot != null ? `${c.slot} ↔ ${c.otherSlotLabel}: ${c.toName} to ${c.slot}, ${c.fromName ?? "(empty)"} to ${c.otherSlotLabel} (custom)` : `${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName} (custom${c.delta ? `, ${c.delta > 0 ? "+" : ""}${c.delta.toFixed(1)} pts` : ""})`);
+        continue;
+      }
       if (c.type === "lineup") {
         if (c.slotIndex >= starters.length) {
           errors.push(`Slot ${c.slot} isn't in the roster Sleeper returned — rebuild and try again.`);
@@ -167,17 +179,6 @@ export function buildPush(league, changes, checked) {
       starters[c.slotA] = c.idB;
       starters[c.slotB] = c.idA;
       summary.push(c.why === "slots" ? `${c.slot} ↔ ${c.slotB_label}: ${c.nameB} to ${c.slot}, ${c.nameA} to ${c.slotB_label} (both stay in the lineup)` : `${c.slot} ↔ ${c.slotB_label}: ${c.nameB} to ${c.slot} (${c.kickB || "later game"}), ${c.nameA} to ${c.slotB_label} (${c.kickA || "earlier game"})`);
-    }
-    // v4.4: hand-made swaps, applied on top of the ticked suggestions in the order they were made
-    for (const c of customs) {
-      const at = (i) => String(starters[i] ?? "0");
-      if (c.slotIndex >= starters.length || at(c.slotIndex) !== c.fromId || (c.otherSlot != null && (c.otherSlot >= starters.length || at(c.otherSlot) !== c.toId))) {
-        errors.push(`The custom change at ${c.slot} no longer matches your roster — undo the custom changes or rebuild and try again.`);
-        continue;
-      }
-      starters[c.slotIndex] = c.toId;
-      if (c.otherSlot != null) starters[c.otherSlot] = c.fromId;
-      summary.push(c.otherSlot != null ? `${c.slot} ↔ ${c.otherSlotLabel}: ${c.toName} to ${c.slot}, ${c.fromName ?? "(empty)"} to ${c.otherSlotLabel} (custom)` : `${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName} (custom${c.delta ? `, ${c.delta > 0 ? "+" : ""}${c.delta.toFixed(1)} pts` : ""})`);
     }
     const real = starters.filter((x) => x && x !== "0");
     if (new Set(real).size !== real.length) errors.push("These changes would start the same player twice — tick the matching swap too.");

@@ -53,7 +53,7 @@ function PointsCol({ p }) {
     return (
       <div className="text-right shrink-0 min-w-[3.25rem]" data-points="actual">
         <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontVariantNumeric: "tabular-nums" }} className="text-lg font-semibold leading-tight">{p.proj != null ? p.proj.toFixed(1) : "—"}</div>
-        <div style={{ color: live ? C.brand : C.textMuted }} className="text-[10px] font-semibold">{live ? "LIVE" : "FINAL"}</div>
+        <div style={{ color: live ? C.major : C.textMuted }} className="text-[10px] font-semibold">{live ? "LIVE" : "FINAL"}</div>
         {p.preProj != null && <div style={{ color: C.textFaint }} className="text-[10px]">proj {p.preProj.toFixed(1)}</div>}
         <StartSitButton player={p} />
       </div>
@@ -720,11 +720,16 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
   const hideMoves = comp.blocking && !comp.valid;
   const usePre = comp.blocking && comp.valid;
   const gone = useMemo(() => new Set([...comp.dropIds, ...comp.inIds].map(String)), [comp.dropIds.join(","), comp.inIds.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v4.13: a hand-made change (tap a position box) is LOCKED IN together with what was ticked at that moment; the
+  // suggestions are then planned from the roster as it stands after those changes.
+  const [locked, setLocked] = useState(null); // { changes, keys } | null
+  useEffect(() => setLocked(null), [league]);
+  const baseLg = useMemo(() => (locked ? leagueAfter(league, arrangement(league, locked.changes, locked.keys)) : league), [league, locked]);
   const suggested = useMemo(() => {
     if (hideMoves) return [];
-    const all = proposeChanges(league, { rejected });
+    const all = proposeChanges(baseLg, { rejected });
     return usePre ? all.filter((c) => !changeTouchesPlayers(c, gone)) : all;
-  }, [league, hideMoves, usePre, gone, rejected]);
+  }, [baseLg, hideMoves, usePre, gone, rejected]);
   const pre = useMemo(() => {
     if (!usePre || !comp.count) return null;
     const names = (ids, list) => list.filter((p) => ids.includes(String(p.id))).map((p) => p.name).join(", ");
@@ -735,24 +740,20 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
     ].filter(Boolean);
     return { count: comp.count, lines, run: () => runComplianceSteps(league, comp, { onRefresh }) };
   }, [usePre, comp, league, onRefresh]);
-  // v4.4: hand-made changes from the Proposed lineup (tap a position box), applied after the ticked suggestions
-  const [customs, setCustoms] = useState([]);
-  useEffect(() => setCustoms([]), [league]);
   // v4.4.1: the drop / bid chosen in the pop-up for each ticked free agent / waiver add
   const plans = entry.plans;
   const [planFor, setPlanFor] = useState(null);
   const suggestedP = useMemo(() => suggested.map((c) => (c.type === "add" ? { ...c, plan: plans[c.key] } : c)), [suggested, plans]);
   // v4.9: the suggestion list is worked out layer by layer from what is ticked (a dependent move hangs under its parent).
   const layered = useMemo(
-    () => layerChanges(league, suggestedP, entry.keys ?? defaultChecked(suggestedP), { tickChildren: entry.keys == null }),
-    [league, suggestedP, entry.keys]
+    () => layerChanges(baseLg, suggestedP, entry.keys ?? defaultChecked(suggestedP), { tickChildren: entry.keys == null }),
+    [baseLg, suggestedP, entry.keys]
   );
-  const changes = useMemo(() => [...layered.changes, ...customs], [layered, customs]);
-  const checked = useMemo(() => new Set([...layered.checked, ...customs.map((c) => c.key)]), [layered, customs]);
+  const lockedKeys = useMemo(() => new Set((locked?.changes || []).map((c) => c.key)), [locked]);
+  const changes = useMemo(() => [...(locked?.changes || []), ...layered.changes], [layered, locked]);
+  const checked = useMemo(() => new Set([...(locked?.keys || []), ...layered.checked]), [layered, locked]);
   const arrNow = useMemo(() => arrangement(league, changes, checked), [league, changes, checked]); // v4.10: the score card on Current lineup
-  // Changing the ticked suggestions would change what the custom changes were made against, so they are undone.
   const onToggle = (key, on) => {
-    setCustoms((c) => (c.length ? [] : c));
     const next = toggleChange(layered.changes, new Set(layered.checked), key, on);
     const nextPlans = !on ? Object.fromEntries(Object.entries(plans).filter(([k]) => k !== key)) : plans;
     const tgt = layered.changes.find((c) => c.key === key);
@@ -760,16 +761,16 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
     // move appears, ticked (anything that clashes with it is unticked). The unticked move stays in the list.
     if (!on && tgt?.pair && !rejected.has(tgt.pair)) {
       const nextRejected = new Set([...rejected, tgt.pair]);
-      const raw = proposeChanges(league, { rejected: nextRejected });
+      const raw = proposeChanges(baseLg, { rejected: nextRejected });
       const list = (usePre ? raw.filter((c) => !changeTouchesPlayers(c, gone)) : raw).map((c) => (c.type === "add" ? { ...c, plan: nextPlans[c.key] } : c));
       const old = new Set(layered.changes.map((c) => c.key));
       const fresh = [...defaultChecked(list)].filter((k) => !old.has(k));
       let ticks = new Set([...next].filter((k) => list.some((c) => c.key === k)));
       for (const k of fresh) ticks = toggleChange(list, ticks, k, true);
-      save({ rejected: nextRejected, keys: layerChanges(league, list, ticks, { tickChildren: false }).checked, plans: nextPlans });
+      save({ rejected: nextRejected, keys: layerChanges(baseLg, list, ticks, { tickChildren: false }).checked, plans: nextPlans });
       return;
     }
-    const pruned = layerChanges(league, suggestedP, next, { tickChildren: false }).checked; // a dependent whose parent was unticked goes with it
+    const pruned = layerChanges(baseLg, suggestedP, next, { tickChildren: false }).checked; // a dependent whose parent was unticked goes with it
     save({ keys: pruned, plans: nextPlans });
   };
   // A ticked add with no plan yet (ticked directly, by a cascade or by Accept all) opens its pop-up, one at a time.
@@ -779,13 +780,16 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
     if (m) setPlanFor(m);
   }, [layered, plans, planFor, suggested]);
   const acceptAll = () => {
-    setCustoms([]);
-    save({ keys: layerChanges(league, suggestedP, acceptAllKeys(suggestedP), { tickChildren: true }).checked });
+    save({ keys: layerChanges(baseLg, suggestedP, acceptAllKeys(suggestedP), { tickChildren: true }).checked });
   };
-  const resetTicks = () => { setCustoms([]); save({ keys: null, plans: EMPTY_PLANS, rejected: EMPTY_SET }); };
-  const onPushed = () => { setCustoms([]); tickStore.delete(league.id); bump(); }; // v4.9: after a push the ticks go back to the default
+  const resetTicks = () => { setLocked(null); save({ keys: null, plans: EMPTY_PLANS, rejected: EMPTY_SET }); };
+  const onPushed = () => { setLocked(null); tickStore.delete(league.id); bump(); }; // v4.9: after a push the ticks go back to the default
+  // v4.13: lock in the hand-made change (and whatever was ticked when it was made); the suggestions start over from there.
   const addCustom = (c) => {
-    setCustoms((prev) => [...prev.filter((x) => x.key !== c.key), c]);
+    const tickedNow = layered.changes.filter((x) => layered.checked.has(x.key) && !x.blocked);
+    const nextChanges = [...(locked?.changes || []).filter((x) => x.key !== c.key), ...tickedNow, c];
+    setLocked({ changes: nextChanges, keys: new Set(nextChanges.map((x) => x.key)) });
+    save({ keys: null, plans: EMPTY_PLANS, rejected: EMPTY_SET });
   };
   const tab = (key, label) => (
     <button key={key} onClick={() => setSub(key)} aria-current={sub === key ? "page" : undefined} data-roster-tab={key} style={{ color: sub === key ? C.text : C.textMuted, borderBottom: `2px solid ${sub === key ? C.brand : "transparent"}` }} className="flex-1 py-2.5 text-sm font-medium">
@@ -821,11 +825,11 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
         <>
           {!hideMoves && <TotalsCard t={arrNow.totals} />}
           <PendingMoves league={league} onRefresh={onRefresh} />
-          <CurrentLineup league={league} changes={suggested} onRefresh={onRefresh} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
+          <CurrentLineup league={league} changes={locked ? [] : suggested} onRefresh={onRefresh} onOpenWaivers={onOpenTab ? () => onOpenTab(league.id, "waiver") : null} />
           {hideMoves ? <HiddenMovesNote /> : <SuggestedChanges league={league} changes={layered.changes} checked={checked} onToggle={onToggle} onAcceptAll={acceptAll} onReset={resetTicks} isDefault={entry.keys == null} onSaveRanking={onSaveRanking} onGoProposed={() => setSub("proposed")} />}
         </>
       ) : (
-        <ProposedLineup league={league} changes={changes} checked={checked} customs={customs} onAddCustom={addCustom} onUndoCustoms={() => setCustoms([])} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onPushed} onGoCurrent={() => setSub("current")} pre={pre} hideMoves={hideMoves} listProps={hideMoves ? null : { onToggle, onAcceptAll: acceptAll, onReset: resetTicks, isDefault: entry.keys == null }} />
+        <ProposedLineup league={league} changes={changes} checked={checked} lockedKeys={lockedKeys} onAddCustom={addCustom} onUndoCustoms={() => setLocked(null)} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onPushed} onGoCurrent={() => setSub("current")} pre={pre} hideMoves={hideMoves} listProps={hideMoves ? null : { onToggle, onAcceptAll: acceptAll, onReset: resetTicks, isDefault: entry.keys == null }} />
       )}
     </div>
   );
@@ -857,20 +861,27 @@ function TotalsCard({ t }) {
   );
 }
 
-function changeText(c) {
-  if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span></>, sub: [c.delta > 0.04 ? `+${c.delta.toFixed(1)} projected points` : c.delta < -0.04 ? `${c.delta.toFixed(1)} projected points` : null, c.altNote || null].filter(Boolean).join(" · ") || null };
-  if (c.type === "add") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName ?? "(empty)"} → <b>{c.toName}</b></span> <span style={{ color: C.minor, border: `1px solid ${C.minor}66` }} className="ml-2 rounded px-1.5 text-[10px]">add from FA / waivers</span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, c.conflicts?.length ? "Instead of the move above it for this slot." : null, "Ticking asks who to drop (and the bid on waivers); he is added, then started once he is on your roster."].filter(Boolean).join(" · ") };
+// v4.13: a player's name on a suggestion card opens that player's card.
+function Nm({ id, name, leagueId, bold = false }) {
+  const t = bold ? <b>{name}</b> : name;
+  if (id == null || id === "") return t;
+  return <PlayerLink player={{ id: String(id), name }} leagueId={leagueId} className="inline underline decoration-dotted underline-offset-2">{t}</PlayerLink>;
+}
+
+function changeText(c, leagueId) {
+  if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName != null ? <Nm id={c.fromId} name={c.fromName} leagueId={leagueId} /> : "(empty)"} → <Nm id={c.toId} name={c.toName} leagueId={leagueId} bold /></span></>, sub: [c.delta > 0.04 ? `+${c.delta.toFixed(1)} projected points` : c.delta < -0.04 ? `${c.delta.toFixed(1)} projected points` : null, c.altNote || null].filter(Boolean).join(" · ") || null };
+  if (c.type === "add") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName != null ? <Nm id={c.fromId} name={c.fromName} leagueId={leagueId} /> : "(empty)"} → <Nm id={c.toId} name={c.toName} leagueId={leagueId} bold /></span> <span style={{ color: C.minor, border: `1px solid ${C.minor}66` }} className="ml-2 rounded px-1.5 text-[10px]">add from FA / waivers</span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, c.conflicts?.length ? "Instead of the move above it for this slot." : null, "Ticking asks who to drop (and the bid on waivers); he is added, then started once he is on your roster."].filter(Boolean).join(" · ") };
   if (c.type === "swap" && c.why === "slots")
     return {
-      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><b>{c.nameB}</b> to {c.slot}, {c.nameA} to {c.slotB_label}</span></>,
+      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><Nm id={c.idB} name={c.nameB} leagueId={leagueId} bold /> to {c.slot}, <Nm id={c.idA} name={c.nameA} leagueId={leagueId} /> to {c.slotB_label}</span></>,
       sub: "Both stay in your lineup — 0 points on its own; it makes room for the move below.",
     };
   if (c.type === "swap")
     return {
-      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><b>{c.nameB}</b> to {c.slot}, {c.nameA} to {c.slotB_label}</span></>,
+      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><Nm id={c.idB} name={c.nameB} leagueId={leagueId} bold /> to {c.slot}, <Nm id={c.idA} name={c.nameA} leagueId={leagueId} /> to {c.slotB_label}</span></>,
       sub: `Timing: ${c.nameA} plays ${c.kickA || "earlier"}, ${c.nameB} ${c.kickB || "later"} — the flex keeps the later game, so you can still change it if someone is ruled out.`,
     };
-  return { title: <span>Move <b>{c.name}</b> to injured reserve</span>, sub: null };
+  return { title: <span>Move <Nm id={c.id} name={c.name} leagueId={leagueId} bold /> to injured reserve</span>, sub: null };
 }
 
 function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onReset = null, isDefault = true, onSaveRanking = null, onGoProposed = null, proposedTab = false }) {
@@ -881,7 +892,7 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onR
   // v4.9: a dependent suggestion (one that only exists because the move above it is ticked) sits inside its parent's card,
   // indented under a ↳, and goes away when the parent is unticked.
   const row = (c, depth) => {
-    const t = changeText(c);
+    const t = changeText(c, league?.id);
     const on = checked.has(c.key);
     return (
       <label key={c.key} className="flex items-start gap-3" style={{ marginLeft: depth ? 14 : 0, paddingTop: depth ? 8 : 0 }} data-change={c.key} data-change-type={c.type} data-change-depth={depth}>
@@ -946,13 +957,13 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onR
   );
 }
 
-function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, onUndoCustoms, onRefresh, onOpenAccount, onDone, onGoCurrent, listProps = null, pre = null, hideMoves = false }) {
+function ProposedLineup({ league, changes, checked, lockedKeys = new Set(), onAddCustom, onUndoCustoms, onRefresh, onOpenAccount, onDone, onGoCurrent, listProps = null, pre = null, hideMoves = false }) {
   const arr = useMemo(() => arrangement(league, changes, checked), [league, changes, checked]);
   // v4.9: the roster rules re-run on the lineup after the ticked moves — the notes on these cards are the variances of the RESULT.
   const view = useMemo(() => computeProposedRoster(league, leagueAfter(league, arr, remainingSlots(changes, checked))), [league, arr, changes, checked]);
   const baseNotes = useMemo(() => rowNotes(view.lg), [view]);
   const varNotes = (row, p) => baseNotes(row, p?.name);
-  const listChanges = useMemo(() => changes.filter((c) => c.type !== "custom" && c.type !== "taxi"), [changes]);
+  const listChanges = useMemo(() => changes.filter((c) => c.type !== "custom" && c.type !== "taxi" && !lockedKeys.has(c.key)), [changes, lockedKeys]);
   // v4.5: players in a suggested change that isn't ticked yet carry its note (ticked ones show "In for …" / "Moved to the bench")
   const moveNotes = useMemo(() => changeNotes(league, changes.filter((c) => !checked.has(c.key) && c.type !== "custom")), [league, changes, checked]);
   const noteFor = (p) => ((p?.id != null && moveNotes.get(String(p.id))) || []).map((t) => ({ text: t, color: C.minor, attr: { "data-change-note": true } }));
@@ -978,8 +989,8 @@ function ProposedLineup({ league, changes, checked, customs = [], onAddCustom, o
         </div>
       )}
       <div style={{ color: C.textFaint }} className="text-[11px] px-1 pt-2 flex items-center justify-between gap-2" data-swap-hint>
-        <span>Tap a position box to swap that player with anyone who fits.</span>
-        {customs.length > 0 && <button type="button" onClick={onUndoCustoms} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2 py-0.5 shrink-0" data-undo-customs>Undo custom ({customs.length})</button>}
+        <span>Tap a position box to swap that player with anyone who fits.{lockedKeys.size > 0 ? " Your swap is locked in; the suggestions below start from it." : ""}</span>
+        {lockedKeys.size > 0 && <button type="button" onClick={onUndoCustoms} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2 py-0.5 shrink-0" data-undo-customs>Undo locked-in changes ({lockedKeys.size})</button>}
       </div>
       <SectionLabel>Starters</SectionLabel>
       <div className="space-y-1.5">

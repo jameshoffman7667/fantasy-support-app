@@ -4,21 +4,6 @@ Requests are logged here and built only when James sends a build message ("build
 
 ## Pending
 
-### P-1 - Keep a manual roster swap locked in
-Requested: 2026-10-22 (James)
-Type: minor        Status: Pending
-Notes / questions: Roster → Proposed lineup: when James makes a manual (custom) swap, treat it as locked in and re-adjust the suggestions to what is still possible from there. Today custom changes clear when the ticks change.
-
-### P-2 - Open the player card from a suggestion card
-Requested: 2026-10-22 (James)
-Type: patch        Status: Pending
-Notes / questions: Tapping a player name on a Roster suggested-change card should open that player's card.
-
-### P-3 - Player card: scroll weekly cards sideways
-Requested: 2026-10-22 (James)
-Type: minor        Status: Pending
-Notes / questions: The weekly cards on the player card should scroll sideways to see earlier and later weeks.
-
 ### P-4 - BUG: player card dynasty value trend is wrong
 Requested: 2026-10-22 (James, screenshot)
 Type: patch (bug)        Status: Pending
@@ -68,6 +53,52 @@ Notes / questions: Today `server/entrypoint.sh` starts as root (under `tini`), r
 (An earlier note here said the image has no `USER` and runs as root; that was wrong: only the entrypoint's first step runs as root.)
 
 ## Done
+
+### P-1 - Keep a manual roster swap locked in
+Requested: 2026-10-22 (James)
+Type: minor        Status: Built 4.13.0
+Notes / questions: Roster → Proposed lineup: when James makes a manual (custom) swap, treat it as locked in and re-adjust the suggestions to what is still possible from there. Today custom changes clear when the ticks change.
+
+### P-2 - Open the player card from a suggestion card
+Requested: 2026-10-22 (James)
+Type: patch        Status: Built 4.13.0
+Notes / questions: Tapping a player name on a Roster suggested-change card should open that player's card.
+
+### P-3 - Player card: scroll weekly cards sideways
+Requested: 2026-10-22 (James)
+Type: minor        Status: Built 4.13.0
+Notes / questions: The weekly cards on the player card should scroll sideways to see earlier and later weeks.
+
+
+### P-13 - Claim failure reason on the claims generator
+Requested: 2026-10-26 (James)
+Type: patch        Status: Built 4.13.0
+Notes / questions: show why a claim failed instead of the refused request (Sleeper's body.errors reason is read before the HTTP status). Cause inferred, not reproduced.
+
+### P-14 - Primetime wording
+Requested: 2026-10-26, rules confirmed 2026-10-26 13:34 (James)
+Type: minor        Status: Built 4.13.0
+Notes / questions: four formats from the user's side; tie uses case 4; negative points kept; "Already lost" when trailing by more than 4 with only the opponent's players left; no text before the Sunday afternoon games end.
+
+### P-15 - Cheer meter row layout
+Requested: 2026-10-26 (James)
+Type: minor        Status: Built 4.13.0
+Notes / questions: big score left of the picture, two stat lines, bundle slides with the name bubble.
+
+### P-16 - Weather: international games and dome icon
+Requested: 2026-10-26 (James)
+Type: patch        Status: Built 4.13.0
+Notes / questions: dome games show an icon and "roof" only; neutral-site games look up their stadium. LAR/LV and DET/GB were most likely domes shown with nothing; not confirmed against live data.
+
+### P-17 - Live colours
+Requested: 2026-10-26 (James)
+Type: patch        Status: Built 4.13.0
+Notes / questions: live text red; live points coloured by pace against the projection (thresholds in decision 198).
+
+### P-18 - CBS pick'em: manual vs auto push
+Requested: 2026-10-26 (James)
+Type: minor        Status: Built 4.13.0
+Notes / questions: auto skips only a pool changed by hand on CBS; manual push overwrites and reports the count. Reading of the request not confirmed. The per-league difference James saw this week was not reproduced (needs the CBS push log).
 
 ### P-0 - Version-tagged images and compose pinning
 Requested: 2026-10-22 (offered, then requested as the release flow)

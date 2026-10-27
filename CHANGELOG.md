@@ -19,7 +19,7 @@ iterations built before the app had a real login system — every
 delivery up through the old "v9" was renumbered to this decimal scheme
 in retrospect. **v1 is the first official release**, starting with the
 delivery that added real authentication. Versions continue from v1
-onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, v4.9, v4.10, v4.11, ...) for future official releases.
+onward (v1, v2, v2.1, v2.2, v2.3, v2.4, v2.5, v2.6, v2.7, v2.8, v2.8.1, v2.9, v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7, v3.8, v3.9, v4.0, v4.1, v4.2, v4.3, v4.4, v4.4.1, v4.4.2, v4.5, v4.5.1, v4.6, v4.7, v4.8, v4.9, v4.10, v4.11, v4.12.x, v4.13, ...) for future official releases.
 
 **A note on v0.1–v0.5 specifically:** these are reconstructed from the
 actual conversation/build history rather than from real commit
@@ -31,6 +31,24 @@ commit split and the version-number-in-commit-message convention**
 (both introduced at v1) and use a single free-form commit-message line
 instead. From v0.6 onward, each entry corresponds to exactly one
 delivered zip.
+
+---
+
+## v4.13.0 - 2026-10-27
+**Short:** v4.13.0 Primetime wording, Cheer layout, weather
+**Long:** v4.13.0: Primetime wording from your side, Cheer meter layout, live colours, dome icon and international weather, claim failure reasons, per-pool CBS auto push, roster swap lock-in, sideways weekly cards.
+
+**Manual step required:** none (no compose change beyond the image tag, no new env var). Set `IMAGE_TAG=4.13.0` in the stack `.env`.
+
+- **Primetime (Game Day):** the "what you need" sentence is always from your side. Only your players left: "X (+ Y) to score / combine for more than N points" (green, bold; N can be negative). Only the opponent's left: "A (+ B) to score / combine for less than N points" (red, bold; if you already trail and by more than 4 points it just says "Already lost"). Both sides: opponent leads "X outscore A by N points"; you lead or tied "X to score within N points of A" (tie = 0.0). No text until the Sunday afternoon games have finished.
+- **Cheer meter:** each row shows the game score (bigger, live text under it in red) left of the player picture and two stat lines on the right, all the picture's height; the whole bundle slides side to side with the name bubble. While a game is live the points are coloured by pace against the projection (green on or above pace, yellow behind, red well behind; judged from the game clock, nothing before 10% of the game).
+- **Live text:** the "live" status under a score is red on Game Day, Pick'em and Roster.
+- **Weather:** a domed stadium shows a dome icon and "roof" instead of a forecast. International (neutral-site) games look up their stadium (a table for known venues, then a city lookup on Open-Meteo) so they get a forecast. Not verified against the live services from the build sandbox.
+- **Claims:** a failed claim shows Sleeper's reason (Sleeper often answers HTTP 4xx with the reason in the body; the reason is now read first). Cause inferred from the code, not reproduced.
+- **CBS pick'em push:** auto mode no longer stops the whole run when one pool was changed by hand on CBS: that pool is left alone, every other pool still gets its picks, then auto mode switches off once. A manual push overwrites picks changed by hand on CBS and says how many.
+- **Roster:** a manual swap on Proposed lineup is locked in (with what was ticked) and the suggestions are planned again from there; "Undo locked-in changes" goes back. Free agent / waiver adds are not offered after a lock-in. Player names on suggestion cards open the player card.
+- **Player card:** the weekly cards scroll sideways (4 earlier weeks, the current week and 3 later ones).
+- **Not done:** P-4, the dynasty value trend. Needs a raw Roster Audit sample for Chris Godwin to see what unit the trend is in.
 
 ---
 

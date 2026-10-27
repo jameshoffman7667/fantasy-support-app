@@ -352,21 +352,7 @@ function CardSummary({ card, preview }) {
 
       {s.projections?.length > 0 && (
         <CardSection title="Projections">
-          <div className="grid grid-cols-4 gap-1.5" data-card-projections>
-            {s.projections.map((pr) => (
-              <div key={pr.week} className="rounded-md px-1.5 py-1.5 text-center" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-                <div style={{ color: C.textFaint }} className="text-[10px]">WK {pr.week}{pr.opp ? ` ${pr.home === false ? "@" : "vs"} ${pr.opp}` : ""}</div>
-                {pr.bye ? (
-                  <div style={{ color: C.textMuted }} className="text-xs font-semibold py-1">BYE</div>
-                ) : (
-                  <>
-                    <div className="text-[11px]" style={{ color: C.textMuted }}>PROJ <b style={{ color: C.text }}>{pr.proj != null ? pr.proj.toFixed(1) : "—"}</b></div>
-                    <div className="text-[11px]" style={{ color: C.textMuted }}>FINAL <b style={{ color: pr.final != null ? C.text : C.textFaint }}>{pr.final != null ? pr.final.toFixed(1) : "—"}</b></div>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
+          <WeekScroller weeks={s.projections} current={card.asOf?.week} />
         </CardSection>
       )}
 
@@ -407,6 +393,33 @@ function CardSummary({ card, preview }) {
         )}
       </CardSection>
     </>
+  );
+}
+
+// v4.13: the weekly cards scroll sideways (earlier and later weeks); the current week starts in view.
+function WeekScroller({ weeks, current }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const el = ref.current;
+    const at = el?.querySelector?.("[data-week-current]");
+    if (el && at && el.scrollTo) el.scrollTo({ left: Math.max(0, at.offsetLeft - 8), behavior: "auto" });
+  }, [current, weeks.length]);
+  return (
+    <div ref={ref} className="flex gap-1.5 overflow-x-auto pb-1" style={{ scrollSnapType: "x proximity", WebkitOverflowScrolling: "touch" }} data-card-projections>
+      {weeks.map((pr) => (
+        <div key={pr.week} className="rounded-md px-1.5 py-1.5 text-center shrink-0" style={{ background: C.surface, border: `1px solid ${pr.week === current ? C.brand : C.border}`, minWidth: 92, scrollSnapAlign: "start" }} data-week-card={pr.week} {...(pr.week === current ? { "data-week-current": "1" } : {})}>
+          <div style={{ color: C.textFaint }} className="text-[10px]">WK {pr.week}{pr.opp ? ` ${pr.home === false ? "@" : "vs"} ${pr.opp}` : ""}</div>
+          {pr.bye ? (
+            <div style={{ color: C.textMuted }} className="text-xs font-semibold py-1">BYE</div>
+          ) : (
+            <>
+              <div className="text-[11px]" style={{ color: C.textMuted }}>PROJ <b style={{ color: C.text }}>{pr.proj != null ? pr.proj.toFixed(1) : "—"}</b></div>
+              <div className="text-[11px]" style={{ color: C.textMuted }}>FINAL <b style={{ color: pr.final != null ? C.text : C.textFaint }}>{pr.final != null ? pr.final.toFixed(1) : "—"}</b></div>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 

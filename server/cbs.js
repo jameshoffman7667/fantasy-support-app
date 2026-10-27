@@ -455,7 +455,7 @@ export async function pushForUser(username, { mode = "manual", slot = null, pool
     }
   }
   const okN = results.filter((r) => r.ok).length;
-  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped };
+  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped, ...(changedPools.length ? { autoOff: true } : {}) };
   if (settings.notify && isPushConfigured()) {
     const first = results.find((r) => !r.ok);
     await sendPushToUser(username, {
@@ -601,6 +601,7 @@ async function nativePush(username, settings, { mode, slot, poolIds, dryRun, boa
   if (!games.length && !(tbOpen && mode !== "auto")) return { ok: true, nothing: true, detail: "No unstarted games with a pick to send.", results: [], skippedPools: skipped };
   const results = [];
   const planned = [];
+  const changedPools = [];
   for (const pool of pools) {
     const row = { season: board.season, week: board.week, slot: slot ?? null, poolId: pool.id, mode, games: games.length };
     try {
@@ -611,12 +612,16 @@ async function nativePush(username, settings, { mode, slot, poolIds, dryRun, boa
       if (mode === "auto") {
         const changed = nat.externalChanges(prev, page);
         if (changed.length) {
-          const detail = `Auto mode switched off: ${changed.includes("tiebreaker") && changed.length === 1 ? "the tiebreaker" : gamesWord(changed.filter((c) => c !== "tiebreaker").length)} in "${pool.name}" ${changed.length === 1 ? "was" : "were"} changed on CBS since the app last looked, so nothing was sent.`;
-          await autoOff(username, detail);
+          // v4.13: only THIS pool is left alone (picks made by hand on CBS are never overwritten by auto mode); every other
+          // pool still gets its push, so the pools no longer end up different because one of them stopped the run.
+          const detail = `${changed.includes("tiebreaker") && changed.length === 1 ? "the tiebreaker" : gamesWord(changed.filter((c) => c !== "tiebreaker").length)} in "${pool.name}" ${changed.length === 1 ? "was" : "were"} changed on CBS since the app last looked, so nothing was sent to this pool.`;
+          changedPools.push(detail);
           results.push({ pool: pool.id, ok: false, autoOff: true, detail });
-          return { ok: false, autoOff: true, results, games: games.length, skippedPools: skipped };
+          continue;
         }
       }
+      // v4.13: a MANUAL push overwrites picks changed by hand on CBS (it says so in the result); only auto mode never does.
+      const overwritten = mode !== "auto" ? nat.externalChanges(prev, page).filter((c) => c !== "tiebreaker").length : 0;
       const plan = nat.planPush({ page, games, picks, tiebreaker, tbOpen, now });
       const summary = `${plan.toSave.length} to change, ${plan.unchanged.length} already match${plan.unmatched.length ? `, ${plan.unmatched.length} not found on CBS (${plan.unmatched.join(", ")})` : ""}${plan.skippedLocked.length ? `, ${plan.skippedLocked.length} locked on CBS` : ""}${plan.tiebreaker != null ? `, tiebreaker ${plan.tiebreaker}` : ""}`;
       if (dryRun) {
@@ -633,7 +638,7 @@ async function nativePush(username, settings, { mode, slot, poolIds, dryRun, boa
       const r = await nat.savePicks({ ...natArgs(settings, (await nativeSession(username, settings)), pool), page, plan });
       const verified = !r.echoed ? "no-readback" : r.matched === r.checked && r.tiebreakerOk !== false ? "yes" : r.matched > 0 ? "partial" : r.checked === 0 && r.tiebreakerOk ? "yes" : "no";
       const ok = verified !== "no" && verified !== "partial";
-      const detail = `${r.checked ? `${r.matched}/${r.checked} changed pick(s) confirmed by CBS's echo` : "tiebreaker only"}${r.tiebreakerOk === false ? "; tiebreaker not echoed back correctly" : r.tiebreakerOk ? "; tiebreaker confirmed" : ""}${r.notMatching.length ? ` (not matching: ${r.notMatching.join(", ")})` : ""}. ${summary}.`;
+      const detail = `${overwritten ? `${overwritten} pick(s) changed by hand on CBS were overwritten. ` : ""}${r.checked ? `${r.matched}/${r.checked} changed pick(s) confirmed by CBS's echo` : "tiebreaker only"}${r.tiebreakerOk === false ? "; tiebreaker not echoed back correctly" : r.tiebreakerOk ? "; tiebreaker confirmed" : ""}${r.notMatching.length ? ` (not matching: ${r.notMatching.join(", ")})` : ""}. ${summary}.`;
       if (r.savedPicks) store.setState(sk, { picks: r.savedPicks, tb: r.tiebreakerValue ?? page.tiebreakerValue ?? null, at: Date.now() });
       results.push({ pool: pool.id, ok, sent: plan.toSave.length, verified, detail });
       log(username, { ...row, ok, sent: plan.toSave.length, verified, detail });
@@ -643,9 +648,10 @@ async function nativePush(username, settings, { mode, slot, poolIds, dryRun, boa
       log(username, { ...row, ok: false, sent: 0, detail: e.message });
     }
   }
+  if (changedPools.length) await autoOff(username, `Auto mode switched off: ${changedPools.join(" ")} The other pools were sent as normal. Turn auto mode back on to re-sync.`);
   if (dryRun) return { ok: true, dryRun: true, native: true, pools: planned, games: games.map((g) => ({ key: g.key, pick: picks.get(g.key).pick })), requests: planned, skippedPools: skipped };
   const okN = results.filter((r) => r.ok).length;
-  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped };
+  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped, ...(changedPools.length ? { autoOff: true } : {}) };
   const first = results.find((r) => !r.ok);
   const sentN = results.reduce((a, r) => a + (r.sent || 0), 0);
   await notifyUser(

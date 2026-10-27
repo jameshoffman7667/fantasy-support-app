@@ -1,4 +1,6 @@
 import { scopeCheer } from "../gameDayCheer.js"; // v4.8
+import { primetimeNeed } from "../primetimeNeed.js"; // v4.13
+import { gameProgress, livePaceTone, paceColor } from "../livePace.js"; // v4.13
 import { fmtProj, listText, tnfView } from "../tnf.js"; // v4.11
 import { PosBox } from "../ui/posBox.jsx";
 import * as api from "../api.js";
@@ -88,11 +90,13 @@ function GameDaySettings({ data, onSaved }) {
   );
 }
 
+const PIC = 38; // v4.13: player picture size; the score block and the two stat lines are sized to this height
 function CheerRow({ p, ratio }) {
   const color = CAT_COLOR[p.category];
   const x = Math.min(94, Math.max(6, (1 - p.lean) * 100));
   const forEdge = (1 / (Number(ratio) + 1)) * 100; // lean ≥ ratio/(ratio+1) => x ≤ 1/(ratio+1)
   const live = p.state === "in";
+  const paceTone = live ? livePaceTone(p.points, p.proj, gameProgress(p.statusDetail)) : null;
   return (
     <div className="py-2" style={{ borderTop: `1px solid ${C.border}` }}>
       <div className="relative h-7 rounded" style={{ background: C.surface }}>
@@ -109,15 +113,28 @@ function CheerRow({ p, ratio }) {
           {p.name}
         </PlayerLink>
       </div>
-      <div className="flex items-center gap-2 flex-wrap mt-1 px-0.5">
-        <PlayerLink player={p} leagueId={(p.leagues.find((l) => l.side === "for") || p.leagues[0])?.leagueId} className="shrink-0 rounded-full">
-          <Headshot player={p} size={20} />
-        </PlayerLink>
-        <span style={{ color: C.textFaint }} className="text-[10px]">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.opponent ? ` vs ${p.opponent}` : ""}</span>
-        <span style={{ color: live ? C.brand : C.textFaint }} className="text-[10px]">{p.statusDetail || p.kickoffLabel || ""}</span>
-        <span style={{ color: C.text, fontVariantNumeric: "tabular-nums" }} className="text-[11px] font-medium">
-          {p.points != null ? `${p.points.toFixed(1)} pts` : p.proj != null ? `proj ${p.proj.toFixed(1)}` : ""}
-        </span>
+      {/* v4.13: score (big, status under it) | picture | two lines of stats; the whole bundle slides with the name bubble. */}
+      <div className="relative mt-1" style={{ height: PIC + 4 }} data-cheer-bundle>
+        <div className="absolute top-0 flex items-center gap-2 whitespace-nowrap" style={{ left: `${x}%`, transform: `translateX(-${x}%)`, height: PIC }} data-cheer-x={Math.round(x)}>
+          {(p.teamScore != null && p.oppScore != null) || live ? (
+            <div className="text-center leading-none whitespace-nowrap shrink-0" style={{ fontVariantNumeric: "tabular-nums" }} data-cheer-score>
+              {p.teamScore != null && p.oppScore != null && (
+                <div style={{ color: paceTone ? paceColor(paceTone, C) : C.text, fontSize: 20, fontWeight: 700 }} data-cheer-score-text>{p.teamScore}–{p.oppScore}</div>
+              )}
+              <div style={{ color: live ? C.major : C.textFaint, fontSize: 10, marginTop: 3 }} data-cheer-status data-live={live ? "1" : "0"}>{p.statusDetail || p.kickoffLabel || ""}</div>
+            </div>
+          ) : null}
+          <PlayerLink player={p} leagueId={(p.leagues.find((l) => l.side === "for") || p.leagues[0])?.leagueId} className="shrink-0 rounded-full">
+            <Headshot player={p} size={PIC} />
+          </PlayerLink>
+          <div className="leading-tight whitespace-nowrap" style={{ height: PIC, display: "flex", flexDirection: "column", justifyContent: "center" }} data-cheer-stats>
+            <span style={{ color: C.textFaint }} className="text-[11px]">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.opponent ? ` vs ${p.opponent}` : ""}</span>
+            <span style={{ color: paceTone ? paceColor(paceTone, C) : C.text, fontVariantNumeric: "tabular-nums" }} className="text-[13px] font-medium" data-cheer-pts>
+              {p.points != null ? `${p.points.toFixed(1)} pts` : p.proj != null ? `proj ${p.proj.toFixed(1)}` : ""}
+              {p.points != null && p.proj != null && <span style={{ color: C.textFaint }} className="text-[10px] font-normal"> / proj {p.proj.toFixed(1)}</span>}
+            </span>
+          </div>
+        </div>
       </div>
       {/* v2.9: leagues you cheer FOR sit on the left, leagues you cheer AGAINST on the right. */}
       {p.leagues.length > 0 && (
@@ -217,7 +234,7 @@ function GameDayGroups({ slots, ratio, collapsed, toggle, prefix = "" }) {
             <div key={gm.key} className="pl-1" data-game-group={gm.key}>
               <div className="flex items-center justify-between pt-2" style={{ color: C.textMuted }}>
                 <span className="text-[11px] font-semibold">{gm.label}</span>
-                {gm.statusDetail && <span style={{ color: gm.state === "in" ? C.brand : C.textFaint }} className="text-[10px]">{gm.statusDetail}</span>}
+                {gm.statusDetail && <span style={{ color: gm.state === "in" ? C.major : C.textFaint }} className="text-[10px]">{gm.statusDetail}</span>}
               </div>
               {gm.teams.map((t) => (
                 <div key={t.team || "?"} className="pl-1" data-team-group={t.team}>
@@ -292,7 +309,16 @@ function PrimetimeCard({ l }) {
         <PrimetimeSide side={pt.my} name={l.myTeam || "You"} lead={pt.leader === "me"} gap={pt.gap} mine leagueId={l.id} />
         <PrimetimeSide side={pt.opp} name={l.oppTeam || "Opponent"} lead={pt.leader === "opp"} gap={pt.gap} mine={false} leagueId={l.id} />
       </div>
-      {pt.need && <div style={{ color: C.text }} className="text-xs mt-2" data-pt-need>{pt.need}</div>}
+      {(pt.stage === "sunday" || pt.stage === "monday") && (() => {
+        const n = primetimeNeed({ my: pt.my.remaining, opp: pt.opp.remaining, myPts: pt.my.points, oppPts: pt.opp.points });
+        if (!n) return null;
+        const col = { ok: C.ok, major: C.major };
+        return (
+          <div style={{ color: C.text }} className="text-xs mt-2" data-pt-need data-pt-kind={n.kind}>
+            {n.segments.map((seg, i) => (seg.tone ? <span key={i} style={{ color: col[seg.tone], fontWeight: 700 }}>{seg.t}</span> : <span key={i}>{seg.t}</span>))}
+          </div>
+        );
+      })()}
       {pt.stage === "waiting" && pt.earlierPending > 0 && <div style={{ color: C.minor }} className="text-[11px] mt-1">{pt.earlierPending} starter{pt.earlierPending === 1 ? "" : "s"} still playing in earlier games.</div>}
       {pt.stage === "final" && <div style={{ color: C.textMuted }} className="text-xs mt-2">{pt.leader === "tie" ? "Tied" : pt.leader === "me" ? "You won" : "You lost"} {f1(pt.my.points)} – {f1(pt.opp.points)}, nothing left to cheer for.</div>}
     </div>

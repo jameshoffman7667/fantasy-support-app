@@ -95,6 +95,8 @@ export async function getWeekSchedule(season, week, { live = false } = {}) {
           neutralSite: Boolean(competition?.neutralSite),
           venue: competition?.venue?.fullName || null,
           venueIndoor: competition?.venue?.indoor ?? null,
+          venueCity: competition?.venue?.address?.city || null, // v4.13: for neutral-site (international) weather
+          venueCountry: competition?.venue?.address?.country || null,
           espnOdds: o
             ? {
                 details: o.details || null,

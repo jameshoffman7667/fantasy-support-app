@@ -81,6 +81,48 @@ export function saveSettings(input = {}) {
   return next;
 }
 
+// v4.13: neutral-site (international) venues, matched on ESPN's venue name or city. Used before the city lookup below.
+// Coordinates are approximate city/stadium positions; roof "open" unless the stadium is a dome.
+export const NEUTRAL_VENUES = [
+  { match: /stade de france|saint-denis|paris/i, name: "Stade de France", lat: 48.9245, lon: 2.3602, roof: "open" },
+  { match: /wembley/i, name: "Wembley Stadium", lat: 51.556, lon: -0.2796, roof: "open" },
+  { match: /tottenham/i, name: "Tottenham Hotspur Stadium", lat: 51.6043, lon: -0.0663, roof: "open" },
+  { match: /twickenham/i, name: "Twickenham Stadium", lat: 51.4559, lon: -0.3416, roof: "open" },
+  { match: /deutsche bank park|frankfurt/i, name: "Deutsche Bank Park", lat: 50.0686, lon: 8.6455, roof: "open" },
+  { match: /allianz arena|munich|münchen/i, name: "Allianz Arena", lat: 48.2188, lon: 11.6247, roof: "open" },
+  { match: /bernab|madrid/i, name: "Santiago Bernabéu", lat: 40.453, lon: -3.6883, roof: "retractable" },
+  { match: /azteca|banorte|mexico city/i, name: "Estadio Azteca", lat: 19.3029, lon: -99.1505, roof: "open" },
+  { match: /neo qu|corinthians|s[aã]o paulo/i, name: "Neo Química Arena", lat: -23.5453, lon: -46.4742, roof: "open" },
+  { match: /croke park|dublin/i, name: "Croke Park", lat: 53.3609, lon: -6.2514, roof: "open" },
+  { match: /melbourne|mcg/i, name: "Melbourne Cricket Ground", lat: -37.82, lon: 144.9834, roof: "open" },
+];
+async function geocodeCity(city) {
+  const key = `geocode:${String(city).toLowerCase()}`;
+  const hit = cacheGet(key);
+  if (hit !== null) return hit;
+  const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?${new URLSearchParams({ name: city, count: "1", language: "en", format: "json" })}`);
+  if (!res.ok) throw new Error(`geocoding HTTP ${res.status}`);
+  const r = (await res.json())?.results?.[0];
+  const out = r && Number.isFinite(r.latitude) && Number.isFinite(r.longitude) ? { lat: r.latitude, lon: r.longitude } : false;
+  cacheSet(key, out, 30 * 24 * 3600e3);
+  return out;
+}
+/** Where a neutral-site game is played: the table first (venue name or city), then a city lookup. null = unknown. */
+export async function neutralStadium(g) {
+  const hay = `${g.venue || ""} ${g.venueCity || ""}`;
+  const t = NEUTRAL_VENUES.find((v) => v.match.test(hay));
+  if (t) return { name: g.venue || t.name, lat: t.lat, lon: t.lon, roof: t.roof };
+  if (g.venueCity) {
+    try {
+      const c = await geocodeCity(g.venueCity);
+      if (c) return { name: g.venue || g.venueCity, lat: c.lat, lon: c.lon, roof: "open" };
+    } catch {
+      /* fall through: no forecast */
+    }
+  }
+  return null;
+}
+
 const HOURLY = ["temperature_2m", "apparent_temperature", "precipitation_probability", "precipitation", "rain", "snowfall", "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m", "weather_code"];
 const FORECAST_TTL_MS = 60 * 60 * 1000;
 
@@ -172,7 +214,8 @@ export function evaluate(hours, kickoff, roof, settings = DEFAULT_SETTINGS) {
 
 async function gameDetail(g, settings) {
     const key = `${g.away}@${g.home}`;
-    const st = g.neutralSite ? null : STADIUMS[g.home];
+    let st = g.neutralSite ? null : STADIUMS[g.home];
+    if (g.neutralSite && g.venueIndoor !== true) st = await neutralStadium(g); // v4.13: international games get a forecast too
     let roof = st?.roof || null;
     if (g.neutralSite && g.venueIndoor === true) roof = "dome";
     const base = { key, home: g.home, away: g.away, kickoff: g.kickoffMillis, kickoffLabel: g.kickoffLabel, stadium: g.neutralSite ? g.venue || "Neutral site" : st?.name || g.venue || null, roof, neutralSite: Boolean(g.neutralSite) };
