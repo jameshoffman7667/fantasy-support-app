@@ -46,7 +46,7 @@ Notes / questions: James will send more parameters for the Medium preset (server
 
 ### P-12 - Fixed non-root user for the server image (spec audit)
 Requested: 2026-10-23 (James, from the deploy review)
-Type: patch        Status: Pending (nothing to build yet; option A chosen for now)
+Type: patch        Status: Built 4.14.0 (option A: documented only; option B still deferred)
 Notes / questions: Today `server/entrypoint.sh` starts as root (under `tini`), runs `chown -R app:app /app/data`, then `su-exec app` runs `node server.js` as uid 100 (confirmed on the server; data on the server is owned 100:101). The spec asks for a fixed non-root `USER 1000:100` with no root step in the entrypoint.
 - Option A (chosen for now): keep the pattern and document it in `deploy/RELEASE.md` and the functional spec.
 - Option B (only when other changes need it): switch to `USER 1000:100`. Needs the server's data folder re-owned to 1000:100 once, a root step for James, before the first start of that release, plus a data copy first.
@@ -99,6 +99,11 @@ Notes / questions: live text red; live points coloured by pace against the proje
 Requested: 2026-10-26 (James)
 Type: minor        Status: Built 4.13.0
 Notes / questions: auto skips only a pool changed by hand on CBS; manual push overwrites and reports the count. Reading of the request not confirmed. The per-league difference James saw this week was not reproduced (needs the CBS push log).
+
+### P-19 - CBS pick'em: always check an hour before, Tuesday push, remove auto mode
+Requested: 2026-10-28 (James)
+Type: minor        Status: Built 4.14.0
+Notes / questions: checks about 60 min before each kickoff slot and Tuesday 10:00 Toronto, app picks overwrite CBS, unpicked games use the app's pick, auto mode removed, Pause kept (decision 203). Tuesday time was my proposal, not confirmed. Server code syntax-checked only.
 
 ### P-0 - Version-tagged images and compose pinning
 Requested: 2026-10-22 (offered, then requested as the release flow)

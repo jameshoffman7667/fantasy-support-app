@@ -188,33 +188,16 @@ function CbsPushBar({ week, st, reload }) {
       reload?.();
     }
   };
-  const setAuto = async (on) => {
-    setBusy(true);
-    try {
-      await api.saveCbsSettings({ enabled: on });
-    } catch (e) {
-      setOut({ ok: false, error: e.message });
-    } finally {
-      setBusy(false);
-      reload?.();
-    }
-  };
   const pools = (st.pools || []).filter((p) => p.enabled);
-  const autoOn = st.enabled && !st.paused;
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-2 space-y-1.5 text-xs" data-cbs-bar>
       <div className="flex items-center justify-between gap-2">
-        <div style={{ color: C.text }} className="font-medium">CBS pick'em · {autoOn ? "auto mode ON" : st.paused ? "paused" : "auto mode off — you pick"}</div>
-        <label className="flex items-center gap-1.5" style={{ color: C.textMuted }}>
-          Auto
-          <input type="checkbox" checked={st.enabled} disabled={busy} onChange={(e) => setAuto(e.target.checked)} data-cbs-auto-toggle />
-        </label>
+        <div style={{ color: C.text }} className="font-medium">CBS pick'em · {st.paused ? "paused" : "checked about 60 minutes before each kickoff slot and Tuesday 10:00"}</div>
       </div>
       {st.alert && <div style={{ color: C.minor }} data-cbs-alert>{st.alert.detail}</div>}
       <div style={{ color: C.textMuted }}>
-        {autoOn
-          ? `Your picks (the recommendation where you haven't chosen) go to CBS about 60 minutes before each kickoff slot. Choosing a pick yourself turns auto mode off; so does changing a pick on CBS.`
-          : `Auto mode is off: choose your own picks below. "Push now" sends them (and the recommendation where you haven't chosen) for games that haven't started to ${st.verifiedOnce ? `${pools.length} pool${pools.length === 1 ? "" : "s"}` : "the test pool"}.`}
+        {st.paused ? "Paused: nothing is sent until you untick Pause in Account → CBS pick'em push. " : "Your picks (the recommendation where you haven't chosen) replace whatever CBS holds for games that haven't started. "}
+        "Push now" sends them straight away to {st.verifiedOnce ? `${pools.length} pool${pools.length === 1 ? "" : "s"}` : "the test pool"}.
       </div>
       {!confirming ? (
         <div className="flex gap-2">
@@ -336,7 +319,6 @@ export function PickemScreen({ onChangedCount }) {
   const [showSettings, setShowSettings] = useState(false);
   const [cbsSt, setCbsSt] = useState(null);
   const [view, setView] = useState("games"); // v3.4: "games" | "performance"
-  const [pendingChoice, setPendingChoice] = useState(null); // v3.3: a manual pick made while CBS auto mode is on
   const loadCbs = useCallback(() => api.getCbsStatus().then(setCbsSt).catch(() => {}), []);
   useEffect(() => {
     loadCbs();
@@ -365,18 +347,8 @@ export function PickemScreen({ onChangedCount }) {
     await api.savePickemChoice({ season: data.season, week: data.week, gameKey, pick });
     load();
   };
-  const choose = async (gameKey, pick) => {
-    // Making a manual pick while auto mode is on needs confirmation, and turns auto mode off.
-    if (cbsSt?.configured && cbsSt.enabled && !cbsSt.paused) return setPendingChoice({ gameKey, pick });
-    return applyChoice(gameKey, pick);
-  };
-  const confirmChoice = async () => {
-    const pc = pendingChoice;
-    setPendingChoice(null);
-    await api.saveCbsSettings({ enabled: false }).catch(() => {});
-    await applyChoice(pc.gameKey, pc.pick);
-    loadCbs();
-  };
+  // v4.14: no auto mode to switch off: the app's picks (yours where you chose) go to CBS at the next scheduled check or "Push now".
+  const choose = (gameKey, pick) => applyChoice(gameKey, pick);
   const setTiebreaker = async (v) => {
     await api.savePickemChoice({ season: data.season, week: data.week, tiebreaker: v });
     load();
@@ -451,15 +423,6 @@ export function PickemScreen({ onChangedCount }) {
           <input type="number" min="0" max="200" defaultValue={data.choices?.tiebreaker ?? ""} placeholder={data.tiebreaker ? String(data.tiebreaker.total) : ""} onBlur={(e) => setTiebreaker(e.target.value)} style={{ background: C.bg, border: `1px solid ${C.border}`, color: C.text }} className="rounded px-2 py-0.5 w-16" data-pick-tiebreaker />
         </label>
       </div>
-      {pendingChoice && (
-        <ConfirmPush
-          title="Turn off CBS auto mode?"
-          lines={["Choosing a pick yourself switches auto mode off.", "Nothing will be sent to CBS automatically until you turn it back on (or press Push now)."]}
-          buttonLabel="Turn off and use my pick"
-          onConfirm={confirmChoice}
-          onCancel={() => setPendingChoice(null)}
-        />
-      )}
       <CbsPushBar week={data.week} st={cbsSt} reload={loadCbs} />
       <div style={{ color: C.textFaint }} className="text-[10px] px-1">
         {data.gemini.configured ? (data.gemini.at ? `Article scan (Gemini) ${new Date(data.gemini.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "Article scan pending") : "Article scan off — set GEMINI_API_KEY to add upset mentions and game notes"}

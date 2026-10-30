@@ -34,6 +34,16 @@ delivered zip.
 
 ---
 
+## v4.14.0 - 2026-10-30
+**Short:** v4.14.0 CBS picks always pushed, Tuesday push
+**Long:** v4.14.0: Pick'em picks are checked on CBS an hour before each kickoff slot and Tuesday 10:00 and pushed, replacing hand picks. Auto mode is gone (Pause remains). Docs now state the container runs as root then uid 100.
+
+- **CBS pick'em push:** there is no Auto mode switch any more. For every user with a CBS login, a pool and Pause off, the app checks about 60 minutes before each kickoff slot that CBS holds the app's picks, and pushes if not; it also pushes on Tuesday morning (10:00 Toronto) for the coming week. The app's picks are the truth: picks changed by hand on CBS are replaced (the result says how many), and games you have not picked use the app's own pick. Started games are never touched. Pause (Account) stops all of it.
+- **Removed:** the Auto switch, the "switched off" alert, the changed-on-CBS watcher and the "Turn off CBS auto mode?" question when you change a pick on Pick'em (a tap now just saves it).
+- **Behaviour change on deploy:** everyone with a CBS login and an enabled pool who was not using auto mode will now be pushed automatically. Tick Pause on Account to opt out.
+- **Docs only:** `deploy/RELEASE.md` and the functional spec now say how the server container runs (root entrypoint, chown, uid 100; data folder 100:101). No Dockerfile change (P-12 option A).
+- **Not tested here:** the server code was syntax-checked only (no package install in the build sandbox); the scheduler, Tuesday time and CBS calls have not run against CBS. Not done: P-4.
+
 ## v4.13.0 - 2026-10-27
 **Short:** v4.13.0 Primetime wording, Cheer layout, weather
 **Long:** v4.13.0: Primetime wording from your side, Cheer meter layout, live colours, dome icon and international weather, claim failure reasons, per-pool CBS auto push, roster swap lock-in, sideways weekly cards.

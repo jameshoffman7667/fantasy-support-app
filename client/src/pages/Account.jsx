@@ -255,10 +255,9 @@ function CbsPanel() {
                 )}
                 <button type="button" disabled={busy || !st.recipeReady} onClick={() => act(() => api.testCbsLogin(), (r) => `${r.ok ? "" : "Login test failed: "}${r.detail}${r.cookieNames?.length ? ` Cookies received (names only): ${r.cookieNames.join(", ")}.` : ""}${r.warnings?.length ? ` Note: ${r.warnings.join(" ")}` : ""}`)} style={{ color: C.text, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-xs" data-cbs-login-test>Test login</button>
               </div>
-              <label className="flex items-start gap-2 text-sm" style={{ color: C.text }}>
-                <input type="checkbox" checked={st.enabled} disabled={busy || !st.recipeReady || !(st.pools || []).length} onChange={(e) => act(() => api.saveCbsSettings({ enabled: e.target.checked }))} className="mt-1" data-cbs-enabled />
-                <span>Auto mode<span style={{ color: C.textMuted }} className="block text-xs">Sends your picks about 60 minutes before each kickoff slot; never for a game that has started. Switches itself off if you change a pick on CBS (the app looks at CBS about every 30 minutes while auto mode is on). Needs at least one pool.</span></span>
-              </label>
+              <div style={{ color: C.textMuted }} className="text-xs" data-cbs-schedule>
+                With a login and at least one pool saved, the app checks CBS about 60 minutes before every kickoff slot and on Tuesday at 10:00 (Toronto) and sends your picks (the recommendation where you haven't chosen). Whatever CBS holds for a game that hasn't started is replaced, including picks you changed there by hand: the app's picks are the truth. Never for a game that has started.
+              </div>
               <label className="flex items-center gap-2 text-sm" style={{ color: C.text }}>
                 <input type="checkbox" checked={st.paused} disabled={busy} onChange={(e) => act(() => api.saveCbsSettings({ paused: e.target.checked }))} data-cbs-paused />
                 Pause (keeps your settings, sends nothing)
@@ -291,7 +290,7 @@ function CbsPanel() {
                   <button type="button" disabled={busy} onClick={() => act(() => api.saveCbsSettings({ verifiedOnce: true }), "All pools will be used from now on.")} style={{ color: C.brand }} className="underline" data-cbs-trust>I checked it — use all pools</button>
                 </div>
               )}
-              <button type="button" disabled={busy} onClick={() => act(() => api.clearCbsAccount(), "CBS login removed and auto-push switched off.")} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2.5 py-1 text-xs" data-cbs-remove>Remove CBS login</button>
+              <button type="button" disabled={busy} onClick={() => act(() => api.clearCbsAccount(), "CBS login removed; nothing will be sent to CBS.")} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded-md px-2.5 py-1 text-xs" data-cbs-remove>Remove CBS login</button>
               {(st.log || []).length > 0 && (
                 <div data-cbs-log>
                   <div style={{ color: C.textFaint }} className="text-[10px] uppercase tracking-wide mb-1">Recent pushes</div>

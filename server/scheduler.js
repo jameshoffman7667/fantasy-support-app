@@ -401,11 +401,8 @@ export function startScheduler() {
   setTimeout(() => actuals.updateActuals().catch(() => {}), 60 * 1000);
   // v2.7: Pick'em recommendations hourly (red-dot flags + push on changes before kickoff).
   setInterval(() => pickem.updateAllUsers().catch((err) => console.warn(`[scheduler] Pick'em update failed: ${err.message}`)), REFRESH_INTERVAL_MS);
-  // v3.2: CBS pick'em auto-push (opt-in per user): each kickoff slot's games ~60 minutes before it starts.
+  // v3.2/v4.14: CBS pick'em push for every user with a CBS login and a pool (Pause off): each kickoff slot's games ~60 minutes before it starts, and Tuesday 10:00 Toronto.
   setInterval(() => cbs.autoTick().catch((err) => console.warn(`[scheduler] CBS auto-push failed: ${err.message}`)), PREKICK_CHECK_MS);
-  // v3.3: while auto mode is on, look at CBS about every 30 min (the call itself is throttled per user) and switch auto mode
-  // off if a pick was changed on CBS.
-  setInterval(() => cbs.watchTick().catch((err) => console.warn(`[scheduler] CBS watch failed: ${err.message}`)), PREKICK_CHECK_MS);
   // v2.8: matchup-difficulty stats — finished games hourly; last season once.
   setTimeout(() => dvp.ensureLoaded().catch((err) => console.warn(`[scheduler] Matchup stats load failed: ${err.message}`)), 20 * 1000);
   // R22: finished games are loaded after Tuesday's finals and again Thursday (corrections), not hourly; the check itself is free.

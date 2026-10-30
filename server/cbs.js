@@ -22,8 +22,9 @@ import * as nat from "./cbsNative.js";
  *
  * v3.3: James captured the real requests, so the default engine is now "native" (cbsNative.js: server-action sign-in,
  * GraphQL read + batch save with CBS's own echo as the read-back). The v3.2 recipe engine is kept as engine "recipe".
- * Auto mode = the 60-minute push; it switches itself OFF when a pick is changed on CBS (detected by comparing CBS's
- * picks with the snapshot taken after the app's last push / when auto mode last looked).
+ * v4.14: there is no auto-mode switch any more. While a CBS login and a pool are set up (and Pause is off) the app checks
+ * CBS about 60 minutes before every kickoff slot and on Tuesday morning, and sends its picks (the user's own choice, else the
+ * app's recommendation) over whatever CBS holds: the app's picks are the truth, hand picks on CBS are overwritten.
  */
 db.exec(`
   CREATE TABLE IF NOT EXISTS cbs_push_log (
@@ -47,10 +48,8 @@ const accKey = (u) => `cbs_account:${u}`;
 const setKey = (u) => `cbs_settings:${u}`;
 const autoKey = (u, season, week, slot) => `cbs_auto:${u}:${season}:${week}:${slot}`;
 
-export const DEFAULT_SETTINGS = { enabled: false, paused: false, notify: true, pools: [], testPoolId: null, verifiedOnce: false, recipe: {}, engine: "native", native: {} };
-export const WATCH_EVERY_MS = 30 * 60 * 1000;
+export const DEFAULT_SETTINGS = { paused: false, notify: true, pools: [], testPoolId: null, verifiedOnce: false, recipe: {}, engine: "native", native: {} };
 const snapKey = (u, season, week, poolId) => `cbs_snap:${u}:${season}:${week}:${poolId}`;
-const watchKey = (u) => `cbs_watch:${u}`;
 const alertKey = (u) => `cbs_alert:${u}`;
 const infoKey = (u) => `cbs_login_info:${u}`;
 let testFetch; // tests inject a mock fetch
@@ -69,8 +68,6 @@ export function setAccount(username, { email, password }) {
 export function clearAccount(username) {
   store.setState(accKey(username), null);
   sessions.delete(username);
-  const s = getSettings(username);
-  saveSettings(username, { enabled: false });
   return status(username);
 }
 const account = (u) => store.getState(accKey(u), null);
@@ -133,7 +130,7 @@ function cleanNative(n) {
 export function saveSettings(username, patch = {}) {
   const cur = getSettings(username);
   const next = { ...cur };
-  for (const k of ["enabled", "paused", "notify", "verifiedOnce"]) if (typeof patch[k] === "boolean") next[k] = patch[k];
+  for (const k of ["paused", "notify", "verifiedOnce"]) if (typeof patch[k] === "boolean") next[k] = patch[k];
   if (patch.engine === "native" || patch.engine === "recipe") next.engine = patch.engine;
   if (patch.native !== undefined) next.native = patch.native === null ? {} : { ...cur.native, ...cleanNative(patch.native) };
   if (Array.isArray(patch.pools)) {
@@ -155,12 +152,6 @@ export function saveSettings(username, patch = {}) {
   }
   if ("testPoolId" in patch) next.testPoolId = patch.testPoolId ? str(patch.testPoolId, 80) : null;
   if (patch.recipe !== undefined) next.recipe = cleanRecipe(patch.recipe);
-  if (next.enabled && !account(username)) next.enabled = false;
-  if (next.enabled && !cur.enabled) {
-    // Turning auto mode on: forget the old alert and take a fresh "what CBS holds right now" baseline at the next check.
-    store.setState(alertKey(username), null);
-    store.setState(watchKey(username), { at: 0, rebaseline: true });
-  }
   store.setState(setKey(username), next);
   return status(username);
 }
@@ -455,7 +446,7 @@ export async function pushForUser(username, { mode = "manual", slot = null, pool
     }
   }
   const okN = results.filter((r) => r.ok).length;
-  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped, ...(changedPools.length ? { autoOff: true } : {}) };
+  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped };
   if (settings.notify && isPushConfigured()) {
     const first = results.find((r) => !r.ok);
     await sendPushToUser(username, {
@@ -580,13 +571,6 @@ async function nativeTestLogin(username, settings) {
 async function notifyUser(username, title, body) {
   if (getSettings(username).notify && isPushConfigured()) await sendPushToUser(username, { title, body }).catch(() => {});
 }
-/** Auto mode switches itself off (and says why) when something was changed on CBS behind the app's back. */
-async function autoOff(username, detail) {
-  saveSettings(username, { enabled: false });
-  store.setState(alertKey(username), { at: Date.now(), detail });
-  log(username, { mode: "auto-off", ok: true, detail });
-  await notifyUser(username, "CBS pick'em: auto mode switched OFF", detail);
-}
 const gamesWord = (n) => `${n} pick${n === 1 ? "" : "s"}`;
 
 async function nativePush(username, settings, { mode, slot, poolIds, dryRun, board }) {
@@ -601,7 +585,6 @@ async function nativePush(username, settings, { mode, slot, poolIds, dryRun, boa
   if (!games.length && !(tbOpen && mode !== "auto")) return { ok: true, nothing: true, detail: "No unstarted games with a pick to send.", results: [], skippedPools: skipped };
   const results = [];
   const planned = [];
-  const changedPools = [];
   for (const pool of pools) {
     const row = { season: board.season, week: board.week, slot: slot ?? null, poolId: pool.id, mode, games: games.length };
     try {
@@ -609,20 +592,10 @@ async function nativePush(username, settings, { mode, slot, poolIds, dryRun, boa
       if (!pool.entryId && page.entryId) pool.entryId = page.entryId;
       const sk = snapKey(username, board.season, board.week, pool.id);
       const prev = store.getState(sk, null);
-      if (mode === "auto") {
-        const changed = nat.externalChanges(prev, page);
-        if (changed.length) {
-          // v4.13: only THIS pool is left alone (picks made by hand on CBS are never overwritten by auto mode); every other
-          // pool still gets its push, so the pools no longer end up different because one of them stopped the run.
-          const detail = `${changed.includes("tiebreaker") && changed.length === 1 ? "the tiebreaker" : gamesWord(changed.filter((c) => c !== "tiebreaker").length)} in "${pool.name}" ${changed.length === 1 ? "was" : "were"} changed on CBS since the app last looked, so nothing was sent to this pool.`;
-          changedPools.push(detail);
-          results.push({ pool: pool.id, ok: false, autoOff: true, detail });
-          continue;
-        }
-      }
-      // v4.13: a MANUAL push overwrites picks changed by hand on CBS (it says so in the result); only auto mode never does.
-      const overwritten = mode !== "auto" ? nat.externalChanges(prev, page).filter((c) => c !== "tiebreaker").length : 0;
       const plan = nat.planPush({ page, games, picks, tiebreaker, tbOpen, now });
+      // v4.14: the app's picks are the truth in every mode. Picks CBS already holds that differ from the app's are replaced
+      // (hand picks included) and the result says how many.
+      const overwritten = plan.toSave.filter((p) => page.picks[String(p.eventId)] != null).length;
       const summary = `${plan.toSave.length} to change, ${plan.unchanged.length} already match${plan.unmatched.length ? `, ${plan.unmatched.length} not found on CBS (${plan.unmatched.join(", ")})` : ""}${plan.skippedLocked.length ? `, ${plan.skippedLocked.length} locked on CBS` : ""}${plan.tiebreaker != null ? `, tiebreaker ${plan.tiebreaker}` : ""}`;
       if (dryRun) {
         planned.push({ pool: pool.id, name: pool.name, week: page.week, toSave: plan.toSave.map((p) => ({ key: p.gameKey, pick: p.pick })), unchanged: plan.unchanged.length, unmatched: plan.unmatched, skippedLocked: plan.skippedLocked, tiebreaker: plan.tiebreaker });
@@ -638,9 +611,9 @@ async function nativePush(username, settings, { mode, slot, poolIds, dryRun, boa
       const r = await nat.savePicks({ ...natArgs(settings, (await nativeSession(username, settings)), pool), page, plan });
       const verified = !r.echoed ? "no-readback" : r.matched === r.checked && r.tiebreakerOk !== false ? "yes" : r.matched > 0 ? "partial" : r.checked === 0 && r.tiebreakerOk ? "yes" : "no";
       const ok = verified !== "no" && verified !== "partial";
-      const detail = `${overwritten ? `${overwritten} pick(s) changed by hand on CBS were overwritten. ` : ""}${r.checked ? `${r.matched}/${r.checked} changed pick(s) confirmed by CBS's echo` : "tiebreaker only"}${r.tiebreakerOk === false ? "; tiebreaker not echoed back correctly" : r.tiebreakerOk ? "; tiebreaker confirmed" : ""}${r.notMatching.length ? ` (not matching: ${r.notMatching.join(", ")})` : ""}. ${summary}.`;
+      const detail = `${overwritten ? `${overwritten} existing CBS pick(s) were replaced with the app's. ` : ""}${r.checked ? `${r.matched}/${r.checked} changed pick(s) confirmed by CBS's echo` : "tiebreaker only"}${r.tiebreakerOk === false ? "; tiebreaker not echoed back correctly" : r.tiebreakerOk ? "; tiebreaker confirmed" : ""}${r.notMatching.length ? ` (not matching: ${r.notMatching.join(", ")})` : ""}. ${summary}.`;
       if (r.savedPicks) store.setState(sk, { picks: r.savedPicks, tb: r.tiebreakerValue ?? page.tiebreakerValue ?? null, at: Date.now() });
-      results.push({ pool: pool.id, ok, sent: plan.toSave.length, verified, detail });
+      results.push({ pool: pool.id, ok, sent: plan.toSave.length, verified, overwritten, detail });
       log(username, { ...row, ok, sent: plan.toSave.length, verified, detail });
       if (!settings.verifiedOnce && ok && verified === "yes" && pool.id === pools[0]?.id) saveSettings(username, { verifiedOnce: true });
     } catch (e) {
@@ -648,94 +621,68 @@ async function nativePush(username, settings, { mode, slot, poolIds, dryRun, boa
       log(username, { ...row, ok: false, sent: 0, detail: e.message });
     }
   }
-  if (changedPools.length) await autoOff(username, `Auto mode switched off: ${changedPools.join(" ")} The other pools were sent as normal. Turn auto mode back on to re-sync.`);
   if (dryRun) return { ok: true, dryRun: true, native: true, pools: planned, games: games.map((g) => ({ key: g.key, pick: picks.get(g.key).pick })), requests: planned, skippedPools: skipped };
   const okN = results.filter((r) => r.ok).length;
-  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped, ...(changedPools.length ? { autoOff: true } : {}) };
+  const out = { ok: okN === results.length && results.length > 0, results, games: games.length, skippedPools: skipped };
   const first = results.find((r) => !r.ok);
   const sentN = results.reduce((a, r) => a + (r.sent || 0), 0);
+  const overN = results.reduce((a, r) => a + (r.overwritten || 0), 0);
   await notifyUser(
     username,
-    out.ok ? `CBS pick'em: ${sentN ? gamesWord(sentN) + " sent" : "already up to date"} (${okN} pool${okN > 1 ? "s" : ""})` : `CBS pick'em: ${results.length - okN} of ${results.length} pools FAILED`,
+    out.ok ? `CBS pick'em: ${sentN ? gamesWord(sentN) + " sent" : "already up to date"} (${okN} pool${okN > 1 ? "s" : ""})${overN ? `, ${overN} pick${overN === 1 ? "" : "s"} on CBS replaced` : ""}` : `CBS pick'em: ${results.length - okN} of ${results.length} pools FAILED`,
     out.ok ? results.map((r) => `${r.pool}: ${r.verified === "yes" ? "verified" : r.verified}`).join("; ") : `${first?.pool}: ${first?.detail}`
   );
   return out;
 }
 
-/**
- * Scheduler hook: every ~30 min (only while this week still has unstarted games) re-reads CBS for each auto-mode user's
- * pools and compares with the snapshot. A difference on an unlocked game = the user changed it on CBS -> auto mode off.
- */
-export async function watchTick({ now = Date.now(), board = null } = {}) {
-  const users = getAllUserStates().map((s) => s.username).filter((u) => {
-    const st = getSettings(u);
-    return st.engine === "native" && st.enabled && !st.paused && account(u) && st.pools.some((p) => p.enabled) && getUser(u)?.active;
-  });
-  if (!users.length) return [];
-  board = board || (await pickem.getBoard());
-  if (!board.games.some((g) => g.kickoff != null && g.kickoff > now)) return [];
-  const ran = [];
-  for (const u of users) {
-    const w = store.getState(watchKey(u), null) || { at: 0 };
-    if (now - (w.at || 0) < WATCH_EVERY_MS) continue;
-    store.setState(watchKey(u), { at: now, rebaseline: false });
-    const settings = getSettings(u);
-    const { pools } = poolsToUse(settings, null);
-    for (const pool of pools) {
-      try {
-        const page = await nativeRead(u, settings, pool);
-        const sk = snapKey(u, board.season, board.week, pool.id);
-        const prev = store.getState(sk, null);
-        const changed = w.rebaseline ? [] : nat.externalChanges(prev, page);
-        if (changed.length) {
-          const n = changed.filter((c) => c !== "tiebreaker").length;
-          await autoOff(u, `Auto mode switched off: ${n ? gamesWord(n) : "the tiebreaker"} in "${pool.name}" ${changed.length === 1 ? "was" : "were"} changed on CBS, so the app will no longer overwrite them. Turn auto mode back on to re-sync.`);
-          ran.push({ user: u, pool: pool.id, changed: changed.length });
-          break;
-        }
-        if (!prev || w.rebaseline) store.setState(sk, nat.snapshotOf(page));
-        ran.push({ user: u, pool: pool.id, changed: 0 });
-      } catch (e) {
-        log(u, { season: board.season, week: board.week, mode: "watch", poolId: pool.id, ok: false, detail: e.message });
-      }
-    }
-  }
-  return ran;
+/* ---------------- scheduled pushes ---------------- */
+const tuesKey = (u, season, week) => `cbs_tue:${u}:${season}:${week}`;
+export const TUESDAY_PUSH_HOUR = 10; // Toronto time
+/** Weekday (Mon..Sun) and hour in Toronto for a timestamp. */
+export function torontoClock(now) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", weekday: "short", hour: "numeric", hour12: false }).formatToParts(new Date(now));
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return { weekday: get("weekday"), hour: Number(get("hour")) % 24 };
 }
-
-/* ---------------- auto-push ---------------- */
-/** Scheduler hook (every ~5 min): for each opted-in user, push each kickoff slot's games ~60 min before it starts. */
+const eligible = (u) => {
+  const st = getSettings(u);
+  return !st.paused && account(u) && (st.engine === "native" ? st.pools.some((p) => p.enabled) : st.recipe.submit && st.recipe.login) && getUser(u)?.active;
+};
+/**
+ * Scheduler hook (every ~5 min). For every user with a CBS login and a pool (Pause off): about 60 minutes before each
+ * kickoff slot, and once on Tuesday morning (10:00 Toronto, for the new week), push the app's picks over what CBS holds.
+ */
 export async function autoTick({ now = Date.now(), board = null } = {}) {
-  const users = getAllUserStates().map((s) => s.username).filter((u) => {
-    const st = getSettings(u);
-    return st.enabled && !st.paused && account(u) && (st.engine === "native" ? st.pools.some((p) => p.enabled) : st.recipe.submit && st.recipe.login) && getUser(u)?.active;
-  });
+  const users = getAllUserStates().map((s) => s.username).filter(eligible);
   if (!users.length) return [];
   board = board || (await pickem.getBoard());
   const slots = [...new Set(board.games.filter((g) => g.kickoff != null && g.kickoff > now).map((g) => g.kickoff))].sort((a, b) => a - b);
+  const tue = (() => { const c = torontoClock(now); return c.weekday === "Tue" && c.hour >= TUESDAY_PUSH_HOUR; })();
   const ran = [];
+  const attempt = async (u, k, slot) => {
+    const st = store.getState(k, null) || { attempts: 0, done: false, lastAt: 0 };
+    if (st.done || st.attempts >= MAX_ATTEMPTS || now - st.lastAt < RETRY_GAP_MS) return;
+    st.attempts++;
+    st.lastAt = now;
+    store.setState(k, st);
+    try {
+      const out = await pushForUser(u, { mode: "auto", slot, board });
+      if (out.ok || out.nothing) st.done = true;
+      ran.push({ user: u, slot, ok: out.ok });
+    } catch (e) {
+      log(u, { season: board.season, week: board.week, slot, mode: "auto", ok: false, detail: e.message });
+      if (getSettings(u).notify && isPushConfigured()) await sendPushToUser(u, { title: "CBS pick'em: push FAILED", body: e.message }).catch(() => {});
+      ran.push({ user: u, slot, ok: false });
+    }
+    store.setState(k, st);
+  };
   for (const u of users) {
+    if (tue && slots.length) await attempt(u, tuesKey(u, board.season, board.week), null);
     for (const slot of slots) {
+      if (getSettings(u).paused) break; // paused while this tick was running
       const lead = slot - now;
-      if (!getSettings(u).enabled) break; // switched off (e.g. a pick was changed on CBS) while this tick was running
       if (lead > AUTO_LEAD_MS || lead < MIN_LEAD_MS) continue;
-      const k = autoKey(u, board.season, board.week, slot);
-      const st = store.getState(k, null) || { attempts: 0, done: false, lastAt: 0 };
-      if (st.done || st.attempts >= MAX_ATTEMPTS || now - st.lastAt < RETRY_GAP_MS) continue;
-      st.attempts++;
-      st.lastAt = now;
-      store.setState(k, st);
-      try {
-        const out = await pushForUser(u, { mode: "auto", slot, board });
-        if (out.ok || out.nothing) st.done = true;
-        if (out.autoOff) st.done = true;
-        ran.push({ user: u, slot, ok: out.ok });
-      } catch (e) {
-        log(u, { season: board.season, week: board.week, slot, mode: "auto", ok: false, detail: e.message });
-        if (getSettings(u).notify && isPushConfigured()) await sendPushToUser(u, { title: "CBS pick'em: push FAILED", body: e.message }).catch(() => {});
-        ran.push({ user: u, slot, ok: false });
-      }
-      store.setState(k, st);
+      await attempt(u, autoKey(u, board.season, board.week, slot), slot);
     }
   }
   return ran;
@@ -750,7 +697,6 @@ export function status(username) {
     configured: Boolean(a),
     email: a?.email || null,
     savedAt: a?.savedAt || null,
-    enabled: s.enabled,
     paused: s.paused,
     notify: s.notify,
     pools: s.pools,
