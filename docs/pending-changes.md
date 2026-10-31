@@ -57,6 +57,11 @@ Requested: 2026-10-31 (James)
 Type: patch (bug)        Status: Pending (not built; waiting for a build message)
 Notes / questions: Cause (read from the code, not reproduced live): `getPlayers()` in server/sleeper.js caches Sleeper's whole /players/nfl list, where `injury_status` lives, for 24 h in season (`TTL.playersInSeason`), and every status in the app (buildLeague.js mapPlayerStatus, playerCard, drops, injuryOpps, alerts) reads that copy. Proposed fix: in season reuse it 30 min on Thu / Sat / Sun / Mon and 2 h other days, and have the refresh button force a re-read (at most once per 10 min, the list is about 10 MB). Open: Sleeper may itself be slow to move a status, and Tank01's injury list could be a second source; not checked.
 
+### P-21 - Drop options on roster updates: whole team, sorted by value
+Requested: 2026-10-31 (James)
+Type: minor        Status: Pending (not built; waiting for a build message)
+Notes / questions: When a roster update (free agent / waiver add) needs a drop, the drop choices should list the whole team, not only part of it, in reverse order (lowest first) of weekly projected points for redraft leagues and of dynasty value for dynasty leagues. Today the drop dropdown lists the lowest-rostered bench players first (v4.10). My reading, not confirmed: "whole team" includes starters, bench, IR and taxi; "reverse order" = lowest first; keeper leagues count as redraft (decision: keeper and redraft are one type); players with no projection or value go last. Open: should the default pick stay the lowest-rostered bench player, or become the first row of the new order?
+
 ## Done
 
 ### P-1 - Keep a manual roster swap locked in
