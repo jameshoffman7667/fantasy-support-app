@@ -66,12 +66,17 @@ Notes / questions: When a roster update (free agent / waiver add) needs a drop, 
 Requested: 2026-11-04 (James)
 Type: patch (bug)        Status: Pending (not built; waiting for a build message)
 Notes / questions: After a roster fix is "confirmed and read back", the Current roster screen should update about 3 seconds later, with the suggested roster moves recalculated from the new roster. Worst on the roster eligibility card at the top of the page. Seen: after pushing the IR move from the bottom of the page a starting RB slot was left empty; a variance for the empty spot appeared but no moves to fill it were recalculated, and eligibility still showed the roster one spot over the limit with a drop suggested. Two guesses, not confirmed: (1) the card was a stale result from before the IR move because the rebuild ran before Sleeper's public roster caught up (sleeper.js reads rosters with a 5 min cache; v4.5.1 has a 5 min "lineup written" overlay for starters only); (2) the over-limit count may include the empty-slot's bench effect. Needs a look at how the roster-limit count treats IR players and empty starter slots. Code to read: RosterPage.jsx PushPanel (onRefresh after push), runComplianceSteps, server buildLeague.js compliance.
-Open: should the 3 s refresh also force Sleeper's rosters read fresh (markFreshOnce) so it cannot return the old roster?
+Decided (James, 2026-11-04): the 3 s refresh should use the same pull that confirmed the push worked (the read-back) to update the roster, not a separate fetch; so the read-back result feeds the rebuild and the recalculated suggestions.
 
 ### P-23 - Two taps to push roster changes
 Requested: 2026-11-04 (James)
 Type: minor        Status: Pending (not built; waiting for a build message)
 Notes / questions: Today the floating "Review and push to Sleeper" button scrolls to the bottom (RosterPage.jsx pushRef), then Push to Sleeper, then the confirmation: three taps. Wanted, two taps only: if the user is NOT at the bottom, the floating button scrolls to the bottom with the "Send these changes to Sleeper?" dialog already open (tap 2 = the confirm button). If already at the bottom, the user taps Push to Sleeper to open the dialog, then confirms. My reading: "at the bottom" = the push panel is on screen; the floating button hides or stays as it does now there.
+
+### P-24 - Non-IR-eligible player sitting in IR is not flagged
+Requested: 2026-11-04 (James)
+Type: patch (bug)        Status: Pending (not built; waiting for a build message)
+Notes / questions: One league currently has a player in an IR slot who is not IR eligible, and nothing flags it (Sleeper does not flag it either). My reading: the app's roster eligibility card should flag it and offer the IR-out fix. Checked in code only: eligibility is `irStatusOk(meta.injury_status)` in server/buildLeague.js (IR and PUP always; Out/Doubtful/Sus/NA/DNR/COV only when the league's reserve_allow_* flag is on, default Out + IR + PUP), and it reads the same Sleeper player list that is cached 24 h (see P-20), so a stale status could make an ineligible player look eligible. Needs from James: which league and player, and the status Sleeper shows for him.
 
 ## Done
 
