@@ -275,6 +275,45 @@ export function rosterPlayersOf(builtList, now = Date.now()) {
   }
   return [...out.values()];
 }
+/**
+ * v4.15.0 (P-25): the weekly trade-article search (Trade page → Trending/Ending): Thursday 08:00 Toronto, once per
+ * Thursday (checked every 10 minutes, so a restart later that day still runs it).
+ */
+export function tradeIdeasSlot(t) {
+  return t.weekday === "Thu" && t.hour >= 8 ? `trade-ideas:${t.date}` : null;
+}
+async function tradeIdeasTick() {
+  if (!gemini.isConfigured()) return;
+  const k = tradeIdeasSlot(sleeper.torontoNow());
+  if (!k || cacheGet(k) !== null) return;
+  const anyone = getAllUserStates().some((st) => getUser(st.username)?.active && st.leagueIds?.length);
+  if (!anyone) return;
+  cacheSet(k, true, 2 * 24 * 60 * 60 * 1000);
+  const state = await sleeper.getState();
+  const out = await gemini.tradeIdeas(Number(state.season), Number(state.week), { force: true });
+  console.log(`[scheduler] Trade ideas search: ${out?.players?.length ?? 0} players.`);
+}
+
+/**
+ * v4.15.0 (P-20): many injury statuses change on Tuesday morning, so at 08:00 Toronto (once per Tuesday, checked every
+ * 10 minutes, so a restart later that morning still runs it) the player list is re-read ignoring its cache and every
+ * user's tracked leagues are rebuilt from it. Not in the offseason.
+ */
+export function tuesdayRefreshSlot(t) {
+  return t.weekday === "Tue" && t.hour >= 8 ? `tue-players:${t.date}` : null;
+}
+async function tuesdayPlayersTick() {
+  const k = tuesdayRefreshSlot(sleeper.torontoNow());
+  if (!k || cacheGet(k) !== null) return;
+  const st = await sleeper.getState().catch(() => null);
+  if (st?.season_type === "off") return;
+  cacheSet(k, true, 2 * 24 * 60 * 60 * 1000);
+  sleeper.markPlayersFreshOnce(true);
+  await sleeper.getPlayers();
+  console.log("[scheduler] Tuesday 08:00 player list re-read; rebuilding tracked leagues.");
+  await refreshAllUsers();
+}
+
 async function startSitTick() {
   if (!gemini.isConfigured()) return;
   const slot = startSitSlot(sleeper.torontoNow());
@@ -430,6 +469,10 @@ export function startScheduler() {
   setInterval(() => autoClaimTick().catch((err) => console.warn(`[scheduler] Auto mode check failed: ${err.message}`)), 10 * 60 * 1000);
   // v4.4.1: waiting "add a player, then move him into the lineup" moves, checked every 5 minutes.
   setInterval(() => pendingMovesTick().catch((err) => console.warn(`[scheduler] Pending moves check failed: ${err.message}`)), pendingMoves.CHECK_EVERY_MS);
+  // v4.15.0: weekly trade-article search, Thursday 08:00 Toronto.
+  setInterval(() => tradeIdeasTick().catch((err) => console.warn(`[scheduler] Trade ideas search failed: ${err.message}`)), 10 * 60 * 1000);
+  // v4.15.0: Tuesday 08:00 Toronto, player list (injury statuses) re-read and leagues rebuilt.
+  setInterval(() => tuesdayPlayersTick().catch((err) => console.warn(`[scheduler] Tuesday player refresh failed: ${err.message}`)), 10 * 60 * 1000);
   // v4.3: scheduled start/sit research, Thu 8:00 / Sat 10:00 / Sun 9:00 Toronto.
   setInterval(() => startSitTick().catch((err) => console.warn(`[scheduler] Start/sit research failed: ${err.message}`)), 10 * 60 * 1000);
   // v4.1: scheduled waiver research, Tue + Wed ~8:00 and ~16:00 Toronto.

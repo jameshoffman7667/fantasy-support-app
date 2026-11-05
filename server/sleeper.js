@@ -4,7 +4,7 @@ import { cacheGet, cacheSet } from "./db.js";
 // v3.3: ONE place decides how long each Sleeper answer is reused (API-call reductions R1–R21).
 // Everything is cached through db.js, so it survives a restart. `fresh: true` on a call skips the cache.
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR;
-export const TTL = { rosters: 5 * MIN, matchups: 5 * MIN, trending: HOUR, transactionsLive: 6 * HOUR, week: 7 * DAY, season: 30 * DAY, user: 30 * DAY, playersInSeason: DAY, playersOff: 7 * DAY };
+export const TTL = { rosters: 5 * MIN, matchups: 5 * MIN, trending: HOUR, transactionsLive: 6 * HOUR, week: 7 * DAY, season: 30 * DAY, user: 30 * DAY, playersInSeason: 2 * HOUR, playersGameDay: 30 * MIN, playersOff: 7 * DAY };
 const FOREVER = 3650 * DAY;
 
 let bootFresh = true; // /state/nfl is pulled once per server start, then only at its scheduled times
@@ -30,6 +30,44 @@ export function effectiveStarters(leagueId, rosterId, publicStarters) {
   const same = w.starters.length === pub.length && w.starters.every((x, i) => x === pub[i]);
   if (same || nowFn() - w.at > 5 * MIN) { lineupWrites.delete(k); return pub; }
   return w.starters;
+}
+// v4.15.0 (P-22): the same idea for the other roster edits. When the private API's read-back confirms an IR, taxi or
+// drop change, the confirmed lists are remembered for 5 minutes and used while Sleeper's public roster still shows the
+// old ones, so the rebuild after a push shows what the read-back confirmed (not a stale roster). As soon as the public
+// read agrees (or the 5 minutes pass) the overlay is forgotten, so a change made in Sleeper itself is never hidden.
+const rosterEdits = new Map();
+export function noteRosterWritten(leagueId, rosterId, patch) {
+  const k = `${leagueId}:${rosterId}`;
+  const prev = rosterEdits.get(k);
+  const fresh = prev && nowFn() - prev.at <= 5 * MIN ? prev : { dropped: new Set() };
+  const next = { ...fresh, at: nowFn() };
+  if (Array.isArray(patch.reserve)) next.reserve = patch.reserve.map(String);
+  if (Array.isArray(patch.taxi)) next.taxi = patch.taxi.map(String);
+  if (patch.dropped != null) next.dropped = new Set([...(fresh.dropped || []), String(patch.dropped)]);
+  rosterEdits.set(k, next);
+}
+const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+export function effectiveRoster(leagueId, roster) {
+  if (!roster) return roster;
+  const k = `${leagueId}:${roster.roster_id}`;
+  const w = rosterEdits.get(k);
+  if (!w) return roster;
+  if (nowFn() - w.at > 5 * MIN) { rosterEdits.delete(k); return roster; }
+  const pubPlayers = (roster.players || []).map(String);
+  const pubReserve = (roster.reserve || []).map(String);
+  const pubTaxi = (roster.taxi || []).map(String);
+  const reserveAgrees = !w.reserve || sameSet(w.reserve, pubReserve);
+  const taxiAgrees = !w.taxi || sameSet(w.taxi, pubTaxi);
+  const dropsAgree = [...w.dropped].every((id) => !pubPlayers.includes(id));
+  if (reserveAgrees && taxiAgrees && dropsAgree) { rosterEdits.delete(k); return roster; }
+  const gone = (id) => w.dropped.has(String(id));
+  return {
+    ...roster,
+    players: (roster.players || []).filter((id) => !gone(id)),
+    starters: (roster.starters || []).map((id) => (gone(id) ? "0" : id)),
+    reserve: (w.reserve || roster.reserve || []).filter((id) => !gone(id)),
+    taxi: (w.taxi || roster.taxi || []).filter((id) => !gone(id)),
+  };
 }
 // v4.4.1 (Medium preset): ask for the next rosters / matchups / trending read to skip the cache once.
 const freshOnce = new Set();
@@ -199,16 +237,32 @@ export function getDraftPicks(draftId, opts = {}) {
 
 // ~5MB dictionary of every NFL player. Sleeper's own docs ask integrators
 // not to poll this more than once a day. R21: daily in season, weekly in the offseason.
+// v4.15.0 (P-20): injury_status lives in this big list, so it must not be a day old in season. In season it is reused
+// for 30 minutes Thu / Sat / Sun / Mon and 2 hours on other days; off season 7 days. The refresh button asks for a
+// re-read (markPlayersFreshOnce), at most once every 10 minutes (the list is about 10 MB); the Tuesday 08:00 job
+// forces it (markPlayersFreshOnce(true)).
+const PLAYERS_MIN_GAP = 10 * MIN;
+let playersFetchedAt = 0;
+let playersFresh = false;
+let playersForce = false;
+export function markPlayersFreshOnce(force = false) { playersFresh = true; if (force) playersForce = true; }
 export async function getPlayers() {
-  const cachedPlayers = cacheGet("sleeper:players");
-  if (cachedPlayers !== null) return cachedPlayers;
+  const wantFresh = playersFresh && (playersForce || nowFn() - playersFetchedAt >= PLAYERS_MIN_GAP);
+  if (!wantFresh) {
+    const cachedPlayers = cacheGet("sleeper:players");
+    if (cachedPlayers !== null) return cachedPlayers;
+  }
+  playersFresh = false;
+  playersForce = false;
   let inSeason = true;
   try {
     const st = cacheGet("sl:state");
     if (st && st.season_type) inSeason = st.season_type === "regular" || st.season_type === "post";
-  } catch { /* default to the daily lifetime */ }
+  } catch { /* default to the in-season lifetime */ }
   const data = await sleeperFetch(`/players/nfl`);
-  cacheSet("sleeper:players", data, inSeason ? TTL.playersInSeason : TTL.playersOff);
+  playersFetchedAt = nowFn();
+  const gameDay = ["Thu", "Sat", "Sun", "Mon"].includes(torontoNow().weekday);
+  cacheSet("sleeper:players", data, inSeason ? (gameDay ? TTL.playersGameDay : TTL.playersInSeason) : TTL.playersOff);
   return data;
 }
 

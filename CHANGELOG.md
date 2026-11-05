@@ -34,6 +34,18 @@ delivered zip.
 
 ---
 
+## v4.15.0 - 2026-11-05
+**Short:** v4.15.0 Trending/Ending, fresher injury statuses
+**Long:** v4.15.0: Trade page Trending/Ending with weekly trade articles and trades from ticked players, fresher injury statuses (Tuesday 8:00), 3 s post-push refresh, whole-team drop lists, two-tap push, over-limit fix with an empty slot.
+
+- **Injury statuses (P-20):** Sleeper's player list (where injury status lives) was reused for 24 h in season. Now it is reused 30 minutes Thu / Sat / Sun / Mon and 2 hours other days; the refresh button re-reads it (at most every 10 minutes); and every Tuesday at 8:00 Toronto time it is re-read and all tracked leagues are rebuilt. Cause of "Questionable in the app, Out in Sleeper" read from the code, not reproduced live; Sleeper itself can lag.
+- **Roster page:** (P-22) after a confirmed push the league is rebuilt at once and again 3 seconds later from what the read-back confirmed (IR, taxi and drops are remembered for 5 minutes until Sleeper's public roster agrees), so the eligibility card and suggested moves are recalculated. The "over the limit" count wrongly shrank by one when a starting slot was empty (for example after a starter went to IR), which also hid the other suggested moves; empty slots now count. (P-23) Pushing takes two taps: the floating "Review & push" button scrolls down with the "Send these changes to Sleeper?" box already open; at the bottom, "Push to Sleeper" opens it. (P-21) Drop lists show the whole team (starters, bench, IR and taxi for an add; starters, bench and players leaving IR for a limit fix), lowest weekly projection (redraft) or dynasty value (dynasty) first, with each player's value; the default drop is the lowest-ranked bench player. (P-24) David Montgomery in IR: expected to be flagged once statuses are fresh; not confirmed.
+- **Trade page:** the "Trade" tab is now "League analysis". New **Trending/Ending** tab: every Thursday at 8:00 Toronto time the app searches articles, Reddit and X for players to trade for and to trade away (starting from the start/sit sources, then a general search; sources found are kept in Account → AI sources). The tab lists trade-for players owned by other teams and trade-away players on your team, each with a checkbox, dynasty value and mentions. "Build trades" makes trades with every opponent from the ticked players: values are dynasty value (dynasty) or rest-of-season points (redraft), players are chosen by weak starting slots, and what you get is about 10% more than what you give. Each trade can be levelled by removing players or adding from either roster, and shows the net value (and net dynasty value).
+**Manual step required:** none (no compose change beyond the image tag, no new env var). Set `IMAGE_TAG=4.15.0` in the stack `.env`.
+
+- **Not tested here:** the Gemini calls, Sleeper reads and the Trending/Ending page against live data (unit tests and a build only). No compose change and no new env var; the Gemini key is already used by the other research.
+- **Still open:** P-4 (dynasty value trend), P-5 to P-11.
+
 ## v4.14.0 - 2026-10-30
 **Short:** v4.14.0 CBS picks always pushed, Tuesday push
 **Long:** v4.14.0: Pick'em picks are checked on CBS an hour before each kickoff slot and Tuesday 10:00 and pushed, replacing hand picks. Auto mode is gone (Pause remains). Docs now state the container runs as root then uid 100.
@@ -41,6 +53,8 @@ delivered zip.
 - **CBS pick'em push:** there is no Auto mode switch any more. For every user with a CBS login, a pool and Pause off, the app checks about 60 minutes before each kickoff slot that CBS holds the app's picks, and pushes if not; it also pushes on Tuesday morning (10:00 Toronto) for the coming week. The app's picks are the truth: picks changed by hand on CBS are replaced (the result says how many), and games you have not picked use the app's own pick. Started games are never touched. Pause (Account) stops all of it.
 - **Removed:** the Auto switch, the "switched off" alert, the changed-on-CBS watcher and the "Turn off CBS auto mode?" question when you change a pick on Pick'em (a tap now just saves it).
 - **Behaviour change on deploy:** everyone with a CBS login and an enabled pool who was not using auto mode will now be pushed automatically. Tick Pause on Account to opt out.
+**Manual step required:** none (no compose change beyond the image tag, no new env var).
+
 - **Docs only:** `deploy/RELEASE.md` and the functional spec now say how the server container runs (root entrypoint, chown, uid 100; data folder 100:101). No Dockerfile change (P-12 option A).
 - **Not tested here:** the server code was syntax-checked only (no package install in the build sandbox); the scheduler, Tuesday time and CBS calls have not run against CBS. Not done: P-4.
 

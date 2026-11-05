@@ -545,3 +545,95 @@ Reply with ONLY a JSON array, no prose: [{"name":"Full Name","pos":"WR","team":"
     for (const p of todo) ssPending.delete(p.id);
   }
 }
+
+/* ---------------- v4.15.0 (P-25): trade-for / trade-away articles (Trade page → Trending/Ending) ---------------- */
+/**
+ * Once a week (Thursday 8:00 Toronto) one grounded search for this week's trade articles: players to trade FOR
+ * (trending up, "buy low", "trade targets", risers) and players to trade AWAY (ending: "sell high", "trade away",
+ * fallers). It starts from the sources the start/sit review has used most, then from the sources this feature has
+ * found (kept in Account → AI sources like the others), then does a general search for more.
+ * Returns { at, model, players: [{ name, pos, team, direction: "for"|"away", mentions, sources, dynasty, note }], sources }.
+ */
+const TI_TTL = 16 * 24 * 60 * 60 * 1000;
+export const tradeIdeasKey = (season, week) => `gemini:tradeideas:v1:${season}:${week}`;
+export const TRADE_IDEAS_LATEST = "gemini:tradeideas:latest:v1";
+const tiInFlight = new Map();
+
+export function parseTradeIdeas(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const r of Array.isArray(arr) ? arr : []) {
+    if (!r?.name) continue;
+    const direction = ["for", "away"].includes(r.direction) ? r.direction : null;
+    if (!direction) continue;
+    const pos = String(r.pos || r.position || "").toUpperCase().replace("DST", "DEF").replace("D/ST", "DEF");
+    const key = `${direction}|${normName(r.name)}|${pos}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      name: String(r.name).slice(0, 60),
+      pos: ["QB", "RB", "WR", "TE", "K", "DEF"].includes(pos) ? pos : null,
+      team: r.team ? String(r.team).toUpperCase().slice(0, 4) : null,
+      direction,
+      mentions: Math.max(1, Math.min(50, Math.round(Number(r.mentions) || 1))),
+      sources: Array.isArray(r.sources) ? r.sources.slice(0, 5).map((x) => String(x).slice(0, 60)) : [],
+      dynasty: Boolean(r.dynasty),
+      note: r.note ? String(r.note).slice(0, 240) : null,
+    });
+  }
+  return out.sort((a, b) => b.mentions - a.mentions);
+}
+
+/** The latest weekly result (any week), with removed sources taken out. */
+export function tradeIdeasCached() {
+  const c = cacheGet(TRADE_IDEAS_LATEST);
+  return c ? ai.applyRemovals("tradeideas", c) : null;
+}
+
+export async function tradeIdeas(season, week, { force = false } = {}) {
+  if (!isConfigured()) return null;
+  const cacheKey = tradeIdeasKey(season, week);
+  const cached = cacheGet(cacheKey);
+  if (cached && !force) return ai.applyRemovals("tradeideas", cached);
+  if (tiInFlight.has(cacheKey)) return tiInFlight.get(cacheKey);
+  const run = (async () => {
+    const removed = ai.getConfig("tradeideas").removed;
+    const fromStartSit = ai.getSeen("startsit").counts.map((x) => x.name).filter((n) => !removed.some((r) => ai.matches(r, n))).slice(0, 8);
+    const prompt = `You are researching fantasy football TRADE advice for the ${season} NFL season, week ${week}. Use pieces published in the last 7 days.${fromStartSit.length ? `\nAlso start with the sources used for start/sit advice: ${fromStartSit.join(", ")}.` : ""}${ai.promptHints("tradeideas")}
+Do a general search (not only those sources) for:
+1. Trade-value / "trade for", "buy low", "trade targets", "risers" articles and charts, redraft and dynasty (e.g. FantasyPros, KeepTradeCut, Dynasty League Football, Dynasty Nerds, PFF, ESPN, Yahoo, CBS Sports, 4for4, Rotoballer, The Athletic).
+2. "Sell high", "trade away", "fallers", "regression candidates" articles.
+3. Reddit POSTS in r/fantasyfootball and r/DynastyFF about trades (posts only), and X/Twitter POSTS by fantasy football analysts about trade targets or sells (posts only).
+List every player recommended to trade FOR ("direction":"for") and every player recommended to trade AWAY ("direction":"away"), up to 60 in all. "mentions" = how many distinct articles/posts say it; "sources" = up to 4 outlet or account names; "dynasty" = true when the advice is about dynasty value; "note" = one short sentence on why.
+Do not invent players or sources. Reply with ONLY a JSON array, no prose:
+[{"name":"Full Name","pos":"WR","team":"NYJ","direction":"for","mentions":3,"sources":["FantasyPros","r/DynastyFF"],"dynasty":false,"note":"..."}]`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }),
+    });
+    if (!res.ok) throw new Error(`Gemini HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const json = await res.json();
+    const cand = json?.candidates?.[0];
+    const text = (cand?.content?.parts || []).map((p) => p.text || "").join("\n");
+    const arr = extractJson(text);
+    if (!Array.isArray(arr)) {
+      console.warn("[gemini] Trade ideas: couldn't read a JSON array:", text.slice(0, 400));
+      return null;
+    }
+    const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 20);
+    const out = { at: Date.now(), model: MODEL(), season, week, players: parseTradeIdeas(arr), sources };
+    console.log(`[gemini] Trade ideas ${season} wk${week}: ${out.players.length} players, ${sources.length} sources.`);
+    cacheSet(cacheKey, out, TI_TTL);
+    cacheSet(TRADE_IDEAS_LATEST, out, TI_TTL);
+    ai.recordRun("tradeideas", out);
+    return out;
+  })();
+  tiInFlight.set(cacheKey, run);
+  try {
+    return ai.applyRemovals("tradeideas", await run);
+  } finally {
+    tiInFlight.delete(cacheKey);
+  }
+}

@@ -230,7 +230,7 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
   }
   const ecrTeamIndex = buildDstTeamIndex(fpConsensusPlayers, "player_team_id");
 
-  const myRoster = rosters.find((r) => r.owner_id === userId);
+  const myRoster = sleeper.effectiveRoster(leagueId, rosters.find((r) => r.owner_id === userId)); // v4.15.0: a just-confirmed IR / taxi / drop edit is used while Sleeper's public read lags
   if (!myRoster) throw new Error(`Couldn't find your roster in ${league.name}.`);
 
   // "Lock in the actual score once a player has played." Sleeper's

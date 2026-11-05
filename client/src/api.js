@@ -441,3 +441,14 @@ export function getCopyClaims(leagueId) {
 export function getValueOpps(format = "sf") {
   return request(`/api/value-opps?format=${encodeURIComponent(format)}`);
 }
+
+/* ---------------- Trending / Ending (v4.15.0, P-25) ---------------- */
+export function getTradeIdeas(leagueId) {
+  return request(`/api/trade/ideas?leagueId=${encodeURIComponent(leagueId)}`);
+}
+export function searchTradeIdeas() {
+  return jsonPost(`/api/trade/ideas/search`, {});
+}
+export function buildTradeIdeas(leagueId, forIds, awayIds) {
+  return jsonPost(`/api/trade/ideas/build`, { leagueId, forIds, awayIds });
+}

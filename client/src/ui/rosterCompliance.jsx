@@ -1,6 +1,7 @@
 import * as api from "../api.js";
 import { isLocked } from "../lineup.js";
 import { rosterCompliance } from "./compute.js";
+import { rankDrops } from "../rosterChanges.js";
 import { useMemo, useState } from "react";
 import { PrivateGate, PushResults } from "./common.jsx";
 import { PlayerLink } from "./playerCard.jsx";
@@ -14,6 +15,12 @@ import { C, inputStyle } from "./theme.js";
  */
 export const STAGE_PAUSE_MS = 10000;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+/** v4.15.0 (P-22): once Sleeper has confirmed a push, the league is rebuilt again 3 seconds later (the server keeps what the
+ *  read-back confirmed until Sleeper's public roster agrees), so the eligibility card and suggested moves are recalculated. */
+export const REFRESH_AFTER_PUSH_MS = 3000;
+export function refreshSoon(onRefresh, leagueId) {
+  if (typeof onRefresh === "function") setTimeout(() => { try { onRefresh(leagueId); } catch { /* the page may be gone */ } }, REFRESH_AFTER_PUSH_MS);
+}
 
 /** Selection state + what it means. `blocking` = the roster can't take moves yet; `valid` = the ticks fix that. */
 export function useCompliance(league, { startTicked = true } = {}) {
@@ -25,16 +32,23 @@ export function useCompliance(league, { startTicked = true } = {}) {
   const base = rosterCompliance(league, { outIds: outSel, inIds: inSel });
   const outIds = outSel ?? base.badIr.map((p) => String(p.id));
   const inIds = inSel ?? base.inSelDefault;
+  // v4.15.0 (P-21): the drop lists show the whole team that a drop can fix — starters, bench and the players coming out
+  // of IR (IR and taxi players who stay don't count toward the limit) — lowest weekly projection (redraft) or dynasty
+  // value (dynasty) first. The default pick is the lowest-ranked BENCH player, never a starter.
   const pool = useMemo(
-    () => (league.bench || []).filter((p) => p && !isLocked(p, league) && !inIds.includes(String(p.id))).sort((a, b) => (a.rostered ?? 101) - (b.rostered ?? 101) || (a.proj ?? 0) - (b.proj ?? 0)),
+    () => rankDrops(league, [
+      ...(league.starters || []).map((s) => s?.player && { ...s.player, where: `Starting at ${s.slot}` }),
+      ...(league.bench || []).map((p) => p && { ...p, where: "Bench" }),
+      ...(league.ir || []).filter((p) => p && !p.irEligible && outIds.includes(String(p.id))).map((p) => ({ ...p, where: "IR (moving out)" })),
+    ].filter((p) => p && !isLocked(p, league) && !inIds.includes(String(p.id)))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [league, inIds.join(",")]
+    [league, inIds.join(","), outIds.join(",")]
   );
-  // one drop per card; a card's own choice stands unless another card has it, otherwise the next-lowest-rostered player
+  // one drop per card; a card's own choice stands unless another card has it, otherwise the next-lowest-ranked bench player
   const cardIds = [];
   for (let i = 0; i < base.over; i++) {
     const want = picks[i] != null && pool.some((p) => String(p.id) === String(picks[i])) && !cardIds.includes(String(picks[i])) ? String(picks[i]) : null;
-    const pick = want ?? pool.map((p) => String(p.id)).find((id) => !cardIds.includes(id));
+    const pick = want ?? pool.filter((p) => p.where === "Bench" || p.where === "IR (moving out)").map((p) => String(p.id)).find((id) => !cardIds.includes(id));
     cardIds.push(pick ?? null);
   }
   const cardOn = cardIds.map((id, i) => id != null && (dropOn[i] ?? startTicked));
@@ -57,14 +71,14 @@ export async function runComplianceSteps(league, comp, { onRefresh = null, onSta
       onStage("Moving players out of IR…");
       const r = await api.pushReserve(league.id, afterOut);
       if (!add({ label: `IR out: ${base.badIr.filter((p) => outIds.includes(String(p.id))).map((p) => p.name).join(", ")}`, ok: r.ok, verified: r.verified, detail: r.detail })) return { ok: false, results: out };
-      await onRefresh?.();
+      await onRefresh?.(league.id);
       if (inIds.length || dropIds.length) { onStage("Pausing before the next step…"); await wait(STAGE_PAUSE_MS); }
     }
     if (inIds.length) {
       onStage("Moving players into IR…");
       const r = await api.pushReserve(league.id, [...afterOut, ...inIds]);
       if (!add({ label: `IR in: ${base.inCandidates.filter((p) => inIds.includes(String(p.id))).map((p) => p.name).join(", ")}`, ok: r.ok, verified: r.verified, detail: r.detail })) return { ok: false, results: out };
-      await onRefresh?.();
+      await onRefresh?.(league.id);
       if (dropIds.length) { onStage("Pausing before the drops…"); await wait(STAGE_PAUSE_MS); }
     }
     for (const id of dropIds) {
@@ -103,7 +117,8 @@ export function ComplianceFixes({ league, comp, onRefresh, onOpenAccount, showPu
     setBusy(false);
     setStage(null);
     if (r.results.some((x) => x.ok)) onPushed?.();
-    await onRefresh?.();
+    await onRefresh?.(league.id);
+    if (r.results.some((x) => x.ok)) refreshSoon(onRefresh, league.id);
   };
   const setPick = (i, id) => comp.setPicks((p) => { const n = [...p]; n[i] = id; return n; });
   return (
@@ -147,10 +162,10 @@ export function ComplianceFixes({ league, comp, onRefresh, onOpenAccount, showPu
                     <select value={cur} onChange={(e) => setPick(i, e.target.value)} style={{ ...inputStyle, width: "100%" }} className="rounded px-2 py-1.5 text-sm" aria-label={`Player to drop (${i + 1} of ${base.over})`} data-compliance-drop-select={i}>
                       {!cur && <option value="">Choose a player…</option>}
                       {pool.filter((p) => !taken.has(String(p.id))).map((p) => (
-                        <option key={p.id} value={String(p.id)}>{p.name} · {p.pos}{p.team ? ` · ${p.team}` : ""} · {p.rostered != null ? `${p.rostered}% rostered` : "rostered n/a"} · {p.proj != null ? `proj ${Number(p.proj).toFixed(1)}` : "no proj"}</option>
+                        <option key={p.id} value={String(p.id)}>{p.name} · {p.pos}{p.team ? ` · ${p.team}` : ""} · {p.where} · {p.proj != null ? `proj ${Number(p.proj).toFixed(1)}` : "no proj"}{p.value != null ? ` · value ${Math.round(p.value)}` : ""}</option>
                       ))}
                     </select>
-                    {sel && <div style={{ color: C.textMuted }} className="text-[11px] mt-1">Lowest-rostered bench players come first in the list.</div>}
+                    {sel && <div style={{ color: C.textMuted }} className="text-[11px] mt-1">The whole team is listed, lowest first by {league.leagueType === "dynasty" ? "dynasty value" : "weekly projected points"}.</div>}
                   </div>
                 );
               })}

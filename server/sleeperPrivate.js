@@ -342,6 +342,7 @@ export async function updateReserve(username, { leagueId, rosterId, reserve, con
     const d = await call(username, `mutation($l:Snowflake!,$r:Int!,$s:[String]){ roster_update_reserve(league_id:$l, roster_id:$r, reserve:$s){ roster_id reserve } }`, { l: String(leagueId), r: Number(rosterId), s: list });
     const got = (d.roster_update_reserve?.reserve || []).map(String);
     const ok = got.length === list.length && list.every((id) => got.includes(id)); // v4.8: exact match, so a move OUT of IR is checked too
+    if (ok) sleeperPublic.noteRosterWritten(leagueId, rosterId, { reserve: got }); // v4.15.0
     return { ok, verified: ok, readBack: got, detail: ok ? "reserve updated and verified" : "Sleeper's response didn't list the reserve change — check Sleeper." };
   });
 }
@@ -367,6 +368,7 @@ export async function dropPlayer(username, { leagueId, rosterId, playerId, confi
     } catch {
       /* read-back unavailable */
     }
+    if (gone === true) sleeperPublic.noteRosterWritten(leagueId, rosterId, { dropped: playerId }); // v4.15.0
     return { ok: gone === true, verified: gone === true, detail: gone === true ? "player dropped and verified" : gone === false ? "Sleeper answered but the player is still on the roster — drop him in Sleeper." : "Sleeper answered but the roster could not be read back — check Sleeper." };
   });
 }
@@ -383,6 +385,7 @@ export async function updateTaxi(username, { leagueId, rosterId, taxi, confirm }
     const d = await call(username, `mutation($l:Snowflake!,$r:Int!,$s:[String]){ roster_update_taxi(league_id:$l, roster_id:$r, taxi:$s){ roster_id taxi } }`, { l: String(leagueId), r: Number(rosterId), s: list });
     const got = (d.roster_update_taxi?.taxi || []).map(String);
     const ok = got.length === list.length && list.every((id) => got.includes(id));
+    if (ok) sleeperPublic.noteRosterWritten(leagueId, rosterId, { taxi: got }); // v4.15.0
     return { ok, verified: ok, readBack: got, detail: ok ? "taxi squad updated and verified" : "Sleeper's response didn't match the new taxi squad — check Sleeper." };
   });
 }

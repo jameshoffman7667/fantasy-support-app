@@ -354,20 +354,34 @@ export function openSpotsForAdd(league, plans = {}, exceptKey = null) {
   return slots - (league?.bench || []).filter(Boolean).length - used + empty;
 }
 
-/** Players who can be dropped for an add: bench, IR and taxi players (not locked), plus the starter being replaced. Weakest first. */
+/** v4.15.0 (P-21): what ranks a player for a drop — dynasty value in dynasty leagues, weekly projected points otherwise
+ *  (keeper counts as redraft). null = unknown. */
+export const dropMetric = (league, p) => {
+  const v = league?.leagueType === "dynasty" ? p?.value : p?.proj;
+  return v == null || Number.isNaN(Number(v)) ? null : Number(v);
+};
+/** Rows (players) lowest first by that metric; players with no number go last; ties keep their order. */
+export function rankDrops(league, rows = []) {
+  return rows
+    .map((r, i) => ({ r, i, m: dropMetric(league, r) }))
+    .sort((a, b) => (a.m == null) - (b.m == null) || (a.m ?? 0) - (b.m ?? 0) || a.i - b.i)
+    .map((x) => x.r);
+}
+
+/** Players who can be dropped for an add: the whole team — starters, bench, IR and taxi (not locked) — lowest weekly
+ *  projection (redraft) or dynasty value (dynasty) first. */
 export function dropOptions(league, change, plans = {}, exceptKey = null) {
   const taken = new Set(Object.entries(plans).filter(([k, p]) => k !== exceptKey && p?.dropId).map(([, p]) => String(p.dropId)));
   const out = [];
   const add = (p, where) => {
     if (!p || p.id == null || taken.has(String(p.id))) return;
-    out.push({ id: String(p.id), name: p.name, pos: p.pos, team: p.team, proj: p.proj ?? null, where, locked: isLocked(p, league) });
+    out.push({ id: String(p.id), name: p.name, pos: p.pos, team: p.team, proj: p.proj ?? null, value: p.value ?? null, where, locked: isLocked(p, league) });
   };
+  (league?.starters || []).forEach((s, i) => s?.player && add(s.player, i === change?.slotIndex ? `Starting at ${s.slot} (being replaced)` : `Starting at ${s.slot}`));
   (league?.bench || []).forEach((p) => add(p, "Bench"));
   (league?.ir || []).forEach((p) => add(p, "IR"));
   (league?.taxi || []).forEach((p) => add(p, "Taxi"));
-  const st = (league?.starters || [])[change?.slotIndex]?.player;
-  if (st) add(st, `Starting at ${change.slot} (being replaced)`);
-  return out.filter((o) => !o.locked).sort((a, b) => (Number(a.proj) || 0) - (Number(b.proj) || 0));
+  return rankDrops(league, out.filter((o) => !o.locked));
 }
 
 /* ---------------- v4.5: a note for every player involved in a suggested move ---------------- */

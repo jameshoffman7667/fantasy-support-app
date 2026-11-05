@@ -51,6 +51,7 @@ import * as commish from "./commish.js"; // v3.8: charters
 import * as bestBall from "./bestBall.js"; // v3.8: best ball leaderboards
 import { assetLinks } from "./androidApp.js"; // v4.0: Android app (Digital Asset Links)
 import * as gemini from "./gemini.js";
+import * as tradeIdeas from "./tradeIdeas.js"; // v4.15.0 (P-25)
 import * as tank01 from "./tank01.js";
 import { getLastSummary, cachedPick } from "./projectionHub.js";
 import { searchFreeAgents } from "./playerSearch.js"; // v4.1
@@ -442,6 +443,7 @@ app.get("/api/leagues/cached", (req, res) => {
 // session, not replaced.
 app.post("/api/leagues/build", async (req, res) => {
   const { sessionId, leagueIds, week, trackedIds, manual, opened } = req.body || {};
+  if (manual === true) sleeper.markPlayersFreshOnce(); // v4.15.0: the refresh button re-reads injury statuses (at most every 10 minutes)
   const session = ownSession(req, res, sessionId);
   if (!session) return;
   if (!Array.isArray(leagueIds) || leagueIds.length === 0) {
@@ -751,6 +753,63 @@ app.post("/api/private/claim/cancel", async (req, res) => {
     res.json(out);
   } catch (e) {
     privError(res, e);
+  }
+});
+
+/* ---------------- Trending / Ending (v4.15.0, P-25) ---------------- */
+// The weekly article search's trade-for / trade-away players matched to one league, and trades built from the ticked ones.
+function tradeLeague(req, res, leagueId) {
+  const c = getBuiltLeague(req.user.username, String(leagueId || ""));
+  if (!c?.data?.myRosterId) {
+    res.status(400).json({ error: "That league isn't one of your tracked leagues (or hasn't been built yet)." });
+    return null;
+  }
+  return c.data;
+}
+app.get("/api/trade/ideas", async (req, res) => {
+  const lg = tradeLeague(req, res, req.query.leagueId);
+  if (!lg) return;
+  try {
+    const research = gemini.tradeIdeasCached();
+    const ctx = await tradeIdeas.leagueContext(lg);
+    const { forList, awayList } = tradeIdeas.leagueCandidates({ research, findId: ctx.findId, rosters: ctx.rosters, myRosterId: ctx.myRosterId });
+    const label = new Map(ctx.rosters.map((r) => [r.rosterId, r.label]));
+    const dress = (p) => ({ ...p, ...ctx.infoOf(p.id), owner: label.get(p.ownerRosterId) || null });
+    res.json({ configured: gemini.isConfigured(), at: research?.at ?? null, basis: ctx.basis, dynasty: ctx.dynasty, sources: research?.sources ?? [], forList: forList.map(dress), awayList: awayList.map(dress) });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't load the trade ideas." });
+  }
+});
+app.post("/api/trade/ideas/search", async (req, res) => {
+  if (!gemini.isConfigured()) return res.status(400).json({ error: "Add a Gemini key on the server to search for trade articles." });
+  try {
+    const state = await sleeper.getState();
+    const out = await gemini.tradeIdeas(Number(state.season), Number(state.week), { force: true });
+    res.json({ ok: true, at: out?.at ?? null, count: out?.players?.length ?? 0 });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "The article search failed." });
+  }
+});
+app.post("/api/trade/ideas/build", async (req, res) => {
+  const lg = tradeLeague(req, res, req.body?.leagueId);
+  if (!lg) return;
+  try {
+    const ids = (x) => (Array.isArray(x) ? x.map(String).slice(0, 60) : []);
+    const ctx = await tradeIdeas.leagueContext(lg);
+    const proposals = tradeIdeas.buildTrades({ rosters: ctx.rosters, myRosterId: ctx.myRosterId, posOf: ctx.posOf, valueOf: ctx.valueOf, nameOf: ctx.nameOf, depth: ctx.depth, forIds: ids(req.body?.forIds), awayIds: ids(req.body?.awayIds) });
+    // every player the client may need to show or to add/remove: the user's roster and each team named in a proposal
+    const need = new Set(["me", ...proposals.map((p) => p.theirRosterId)]);
+    const rosters = {};
+    for (const r of ctx.rosters) {
+      const key = r.rosterId === ctx.myRosterId ? "me" : r.rosterId;
+      if (!need.has(key)) continue;
+      rosters[key] = { label: r.label, players: r.players.map((id) => ctx.infoOf(id)).filter((p) => ["QB", "RB", "WR", "TE"].includes(p.pos) && p.value != null).sort((a, b) => b.value - a.value) };
+    }
+    const info = {};
+    for (const p of proposals) for (const id of [...p.get, ...p.give]) info[id] = ctx.infoOf(id);
+    res.json({ basis: ctx.basis, dynasty: ctx.dynasty, lean: tradeIdeas.LEAN, proposals, rosters, info });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't build trades." });
   }
 });
 

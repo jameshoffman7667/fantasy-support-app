@@ -5,7 +5,7 @@ import { computeProposedRoster } from "../ui/compute.js"; // v4.9
 import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ComplianceFixes, runComplianceSteps, useCompliance } from "../ui/rosterCompliance.jsx"; // v4.10
+import { ComplianceFixes, refreshSoon, runComplianceSteps, useCompliance } from "../ui/rosterCompliance.jsx"; // v4.10
 import { ConfirmPush, Headshot, InfoNote, MatchupChip, Modal, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { BackupList, PlayerLink } from "../ui/playerCard.jsx";
 import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, fmtWhen, formatStatLine } from "../ui/theme.js";
@@ -971,6 +971,7 @@ function ProposedLineup({ league, changes, checked, lockedKeys = new Set(), onAd
   const pushRef = useRef(null);
   // The floating "Review & push" button hides once the push panel itself is on screen.
   const [panelVisible, setPanelVisible] = useState(false);
+  const [openSignal, setOpenSignal] = useState(0); // v4.15.0 (P-23): the floating button asks the push panel to open its confirmation
   useEffect(() => {
     const el = pushRef.current;
     if (!el || typeof IntersectionObserver === "undefined") return undefined;
@@ -1042,11 +1043,11 @@ function ProposedLineup({ league, changes, checked, lockedKeys = new Set(), onAd
       {hideMoves && <HiddenMovesNote />}
       {listProps && <SuggestedChanges league={league} changes={listChanges} checked={checked} proposedTab {...listProps} />}
       <div ref={pushRef} className="mt-4">
-        <PushPanel league={league} changes={changes} checked={checked} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onDone} pre={pre} />
+        <PushPanel league={league} changes={changes} checked={checked} onRefresh={onRefresh} onOpenAccount={onOpenAccount} onDone={onDone} pre={pre} openSignal={openSignal} />
       </div>
       {(arr.count > 0 || pre) && !panelVisible && (
         <div className="sticky bottom-0 pt-2 pb-3 -mx-4 px-4" style={{ background: `linear-gradient(to top, ${C.bg} 70%, transparent)` }}>
-          <button type="button" onClick={() => pushRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} style={{ background: C.brand, color: C.text }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium shadow-lg" data-push-jump>
+          <button type="button" onClick={() => setOpenSignal((n) => n + 1)} style={{ background: C.brand, color: C.text }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium shadow-lg" data-push-jump>
             Review &amp; push to Sleeper ({arr.count + (pre ? pre.count : 0)})
           </button>
         </div>
@@ -1081,7 +1082,7 @@ function SwapPicker({ league, arr, target, onClose, onPick }) {
   );
 }
 
-function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone, pre = null }) {
+function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone, pre = null, openSignal = 0 }) {
   const push = useMemo(() => buildPush(league, changes, checked), [league, changes, checked]);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1093,6 +1094,18 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone,
     const t = setTimeout(() => confirmRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" }), 30);
     return () => clearTimeout(t);
   }, [confirming]);
+  // v4.15.0 (P-23): pushing takes two taps. The floating "Review & push" button (shown only while this panel is off screen)
+  // opens the confirmation here and the effect above scrolls it into view; at the bottom, "Push to Sleeper" opens it.
+  // If something blocks the push (errors), the button just scrolls to the panel.
+  const panelRef = useRef(null);
+  const seenSignal = useRef(openSignal);
+  useEffect(() => {
+    if (openSignal === seenSignal.current) return;
+    seenSignal.current = openSignal;
+    if (push.errors.length === 0 && (checked.size > 0 || pre)) setConfirming(true);
+    else panelRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSignal]);
   // v4.5: the confirmation belongs to the league it was pushed for — switching league clears it (and a push that
   // finishes after switching never shows its result on the other league).
   const leagueRef = useRef(league.id);
@@ -1153,10 +1166,11 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone,
       // v4.5.1: re-read THAT league after every push attempt (not only a confirmed one — Sleeper may have taken the change
       // even when its read-back disagreed), so Current / Proposed lineup and the variances show what Sleeper holds.
       if (out.length) onRefresh?.(pushedFor);
+      if (out.some((o) => o.ok)) refreshSoon(onRefresh, pushedFor); // v4.15.0 (P-22): and again 3 s later, from what the read-back confirmed
     }
   };
   return (
-    <div data-update-roster>
+    <div data-update-roster ref={panelRef}>
       <PrivateGate league={league} group="roster" onOpenAccount={onOpenAccount}>
         <PrivateGate league={league} group={push.adds.length ? "claims" : null} onOpenAccount={onOpenAccount}>
         {checked.size === 0 && !pre && !results ? null : (
@@ -1239,7 +1253,7 @@ function AddPlanModal({ league, change, plans, onSave, onCancel }) {
             {options.map((o) => (
               <button key={o.id} type="button" onClick={() => setDropId(o.id)} aria-pressed={dropId === o.id} data-drop-option={o.id} style={{ border: `1px solid ${dropId === o.id ? C.brand : C.border}`, color: C.text }} className="w-full text-left rounded px-2.5 py-1.5 text-xs flex items-center justify-between gap-2">
                 <span className="truncate">{o.name} <span style={{ color: C.textMuted }}>{o.pos} {o.team}</span></span>
-                <span style={{ color: C.textMuted }} className="shrink-0">{o.where}{o.proj != null ? ` · ${Number(o.proj).toFixed(1)}` : ""}</span>
+                <span style={{ color: C.textMuted }} className="shrink-0">{o.where}{o.proj != null ? ` · ${Number(o.proj).toFixed(1)}` : ""}{o.value != null ? ` · value ${Math.round(o.value)}` : ""}</span>
               </button>
             ))}
           </div>

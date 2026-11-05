@@ -237,7 +237,10 @@ export function rosterCompliance(league, { outIds = null, inIds = null } = {}) {
   const inCandidates = irSlots - ir.length + badIr.length > 0 ? [...starters, ...bench].filter((p) => p.irEligible && !isLocked(p, league)) : [];
   const inSel = new Set((inIds ?? inCandidates.slice(0, irOpenAfterOuts).map((p) => String(p.id))).map(String));
   const movingIn = inCandidates.filter((p) => inSel.has(String(p.id))).length;
-  const spots = starters.length + (Number.isFinite(league.benchSlots) ? league.benchSlots : bench.length);
+  // v4.15.0 (P-22): every starting SLOT counts toward the limit, filled or not. Counting only filled slots made an empty
+  // starting spot (e.g. after a starter went to IR) shrink the limit by one and suggest a needless drop.
+  const slotCount = (league.starters || []).length;
+  const spots = slotCount + (Number.isFinite(league.benchSlots) ? league.benchSlots : bench.length);
   const outCount = badIr.filter((p) => outSel.has(String(p.id))).length;
   const players = starters.length + bench.length + outCount - movingIn;
   const over = Math.max(0, players - spots);

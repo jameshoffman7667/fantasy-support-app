@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ConfirmPush, InfoNote, PrivateGate, PushResults, SectionLabel } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { ValueOpportunities } from "./ValueOpps.jsx"; // v4.7
+import { TrendingEnding } from "./TrendingEnding.jsx"; // v4.15.0
 import { C, STATUS, fmtInt, fmtWhen } from "../ui/theme.js";
 
 function StrengthWeaknessRow({ label, items, color }) {
@@ -126,10 +127,11 @@ export function TradeTab(props) {
   return (
     <div>
       <div className="flex mx-4 mt-3" style={{ borderBottom: `1px solid ${C.border}` }}>
-        {tab("trade", "Trade")}
+        {tab("trade", "League analysis")}
+        {tab("ideas", "Trending/Ending")}
         {tab("value", "Value opportunities")}
       </div>
-      {sub === "value" ? <div className="px-4 py-3"><ValueOpportunities league={props.league} /></div> : <TradeMain {...props} />}
+      {sub === "value" ? <div className="px-4 py-3"><ValueOpportunities league={props.league} /></div> : sub === "ideas" ? <TrendingEnding league={props.league} /> : <TradeMain {...props} />}
     </div>
   );
 }

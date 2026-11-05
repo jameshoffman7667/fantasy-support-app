@@ -15,6 +15,7 @@ import * as store from "./projectionStore.js";
 export const FEATURES = {
   hype: { label: "Waiver research (Hype Train)", perItem: true, autoPrefer: true },
   startsit: { label: "Start / sit (Roster page)", perItem: true, autoPrefer: true },
+  tradeideas: { label: "Trade ideas (Trending / Ending)", perItem: true, autoPrefer: true },
   upsets: { label: "Pick'em upset scan", perItem: true, autoPrefer: false },
   trade: { label: "Trade news check", perItem: false, autoPrefer: false },
   injury: { label: "Injury news (Questionable players)", perItem: false, autoPrefer: false },
