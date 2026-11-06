@@ -55,7 +55,7 @@ Notes / questions: Today `server/entrypoint.sh` starts as root (under `tini`), r
 ### P-26 - Drop lists: IR players only when an IR-eligible player is off IR; dropping an IR player swaps first
 Requested: 2026-11-05 (James)
 Type: minor        Status: Pending
-Notes / questions: (1) IR players appear as drop candidates only if the team has IR-eligible players not on IR. (2) If an IR player is picked to be dropped: move that IR player to the bench, put the bench IR-eligible player into the freed IR slot, then drop the selected player, then make the add / waiver claim (push order IR out, IR in, drop, add). Reading, unconfirmed: if several IR-eligible players are off IR, the one put into IR is the lowest-ranked of them (or his pick); the drop-list "players leaving IR" logic from P-21 stays.
+Notes / questions: (1) IR players appear as drop candidates only if the team has IR-eligible players not on IR. (2) If an IR player is picked to be dropped: move that IR player to the bench, put the bench IR-eligible player into the freed IR slot, then drop the selected player, then make the add / waiver claim (push order IR out, IR in, drop, add). [stated 2026-11-05 22:54] If several IR-eligible players are off IR, the HIGHEST-ranked one goes into the IR slot. The drop-list "players leaving IR" logic from P-21 stays.
 
 ### P-27 - Player card news: only relevant news
 Requested: 2026-11-05 (James)
