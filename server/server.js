@@ -720,7 +720,7 @@ app.post("/api/private/add-move", async (req, res) => {
     let after = [];
     if (!onWaivers) after = await pendingMoves.runPending(u, pendingDeps(u)).catch(() => []);
     const finished = after.find((x) => x.id === move.id);
-    res.json({ ok: true, claim, pending: finished ? null : move, finished: finished || null, detail: finished ? finished.detail : onWaivers ? `Claim sent. ${b.addName} is started at ${move.slot} after the waivers process and he is on your roster (checked every 5 minutes).` : `Add sent. ${b.addName} is started at ${move.slot} as soon as he is on your roster (checked every 5 minutes).` });
+    res.json({ ok: true, claim, pending: finished ? null : move, finished: finished || null, detail: finished ? finished.detail : onWaivers ? `Claim sent. ${b.addName} is started at ${move.slot} after the waivers process and he is on your roster (checked at 12:30 PM except Sundays, and 1 hour before each kickoff window).` : `Add sent. ${b.addName} is started at ${move.slot} as soon as he is on your roster (checked at 12:30 PM except Sundays, and 1 hour before each kickoff window).` });
   } catch (e) {
     privError(res, e);
   }

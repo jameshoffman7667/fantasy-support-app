@@ -384,7 +384,7 @@ function CardSummary({ card, preview }) {
               <div key={i} className="rounded-md px-3 py-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
                 <div style={{ color: C.text }} className="text-sm font-semibold leading-snug">{n.headline}</div>
                 {n.story && <div style={{ color: C.textMuted }} className="text-xs mt-1 leading-snug">{n.story}</div>}
-                <div style={{ color: C.textFaint }} className="text-[10px] mt-1">{n.source}{n.published ? ` · ${timeAgo(n.published)} ago` : ""}</div>
+                <div style={{ color: C.textFaint }} className="text-[10px] mt-1">{n.url ? <a href={n.url} target="_blank" rel="noopener noreferrer" className="underline" data-news-link>{n.source}</a> : n.source}{n.published ? ` · ${timeAgo(n.published)} ago` : ""}</div>
               </div>
             ))}
           </div>

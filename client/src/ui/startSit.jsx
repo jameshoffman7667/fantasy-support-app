@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Modal } from "./common.jsx";
+import { SourceNoteList, notesOf } from "./sourceNotes.jsx"; // v4.16.0 (P-28)
 import { C, fmtWhen } from "./theme.js";
 
 /**
@@ -59,7 +60,12 @@ export function StartSitButton({ player }) {
               <span style={{ color: C.textMuted }} className="text-xs">· {ss.start} say start, {ss.sit} say sit</span>
             </div>
             {ss.summary && <div style={{ color: C.text }} className="leading-snug">{ss.summary}</div>}
-            {ss.sources?.length > 0 && <div style={{ color: C.textMuted }} className="text-xs">Sources: {ss.sources.join(", ")}</div>}
+            {(ss.sources?.length > 0 || ss.sourceNotes?.length > 0) && (
+              <div>
+                <div style={{ color: C.textMuted }} className="text-xs mb-1">Sources — tap one to open the page it came from</div>
+                <SourceNoteList notes={notesOf(ss)} />
+              </div>
+            )}
             <div style={{ color: C.textFaint }} className="text-[11px]">AI summary (Gemini) of this week's start/sit articles, rankings columns and posts{ss.at ? ` · ${fmtWhen(ss.at)}` : ""}. It reads the coverage; it doesn't make the call for you.</div>
           </div>
         </Modal>

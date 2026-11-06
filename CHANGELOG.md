@@ -34,6 +34,21 @@ delivered zip.
 
 ---
 
+## v4.16.0 - 2026-11-05
+**Short:** v4.16.0 IR drop swap, source pop-ups, tighter news
+**Long:** v4.16.0: IR drops swap in the best IR-eligible bench player first, source pop-ups with links, news only about the player, waiver follow-up checks at 12:30 PM and before kickoffs, manual lineup moves never reversed, cheer meter slots in time order.
+
+- **Drop lists (P-26):** IR players are offered as drops only when an IR-eligible player on the bench could take the freed IR spot. Choosing an IR player to drop sends, in order: the IR player off IR to the bench, the highest-ranked IR-eligible bench player into IR (weekly projection in redraft, dynasty value in dynasty), then the add or waiver claim with the drop. The drop is sent with the claim, not as a separate earlier step, so a lost waiver claim does not leave you a player short. Each step is confirmed by Sleeper's read-back before the next.
+- **Player news (P-27):** news items are kept only when ESPN tags the player or his name is in the text, duplicates are removed, and the item carries a link when ESPN gave one. Cause of the Derrick Henry case read from the code (items that mention a player or are tagged to other players were shown), not reproduced live; why most players show none was not changed or confirmed.
+- **Source pop-ups (P-28):** wherever sources are listed (start/sit, waiver recommendations, Trending/Ending, the pick'em upset note) tapping the summary opens a pop-up with a line per source saying what that source said; tapping a source opens the page it came from. The searches now ask for one sentence per source, and links are matched to the search's own links by site name, so a source with no matching link shows "No link available". Older cached research shows the source names without detail until the next run.
+- **Waiver follow-up (P-29):** a waiting "add, then move into the lineup" move reads your roster at 12:30 PM Toronto time every day except Sunday and 1 hour before each kickoff window, not every 5 minutes. A free agent add is still checked straight away. The 5-minute timer still runs but only decides whether it is one of those moments (no calls).
+- **Manual lineup moves (P-30):** a player you move into the lineup by hand (for a swap, both players) gets no suggestions while you stay on the Roster page, so no suggested move reverses or overrides your own move.
+- **Cheer meter (P-31):** the game slot filter lists slots earliest kickoff first; games with no kickoff time are last.
+**Manual step required:** none (no compose change beyond the image tag, no new env var). Set `IMAGE_TAG=4.16.0` in the stack `.env`.
+
+- **Not tested here:** the Gemini calls, ESPN news, Sleeper reads and the pop-ups against live data (unit tests, 60 in all, and a client build). The manual-move rule is tested on its helper, not through the full lineup planner.
+- **Still open:** P-4 (dynasty value trend), P-5 to P-11.
+
 ## v4.15.0 - 2026-11-05
 **Short:** v4.15.0 Trending/Ending, fresher injury statuses
 **Long:** v4.15.0: Trade page Trending/Ending with weekly trade articles and trades from ticked players, fresher injury statuses (Tuesday 8:00), 3 s post-push refresh, whole-team drop lists, two-tap push, over-limit fix with an empty slot.

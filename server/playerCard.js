@@ -93,24 +93,54 @@ function seasonRanks(season, throughWeek, settings, players) {
 }
 
 /* ---------- ESPN fantasy news (free, keyless; Rotowire-style items) ---------- */
-export function parseEspnNews(json) {
+const norm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+/**
+ * v4.16.0 (P-27): only items that are ABOUT the player. ESPN's feed can carry items that merely mention him or are tagged to
+ * other players. An item that names its athletes is kept only if our player is one of them; one that names none is kept only
+ * if his full name (or "D. Henry" style) appears in the headline or the story. Pure.
+ */
+export function newsIsAbout(f, { espnId = null, name = null } = {}) {
+  const cats = Array.isArray(f?.categories) ? f.categories : [];
+  const athletes = cats.filter((c) => c?.type === "athlete").map((c) => String(c.athleteId ?? c.athlete?.id ?? "")).filter(Boolean);
+  if (athletes.length) return espnId != null && athletes.includes(String(espnId)) && (athletes.length === 1 || mentions(f, name));
+  return mentions(f, name);
+}
+function mentions(f, name) {
+  const n = norm(name);
+  if (!n) return false;
+  const hay = norm(`${f?.headline || ""} ${f?.story || f?.description || ""}`);
+  if (hay.includes(n)) return true;
+  const parts = n.split(" ");
+  if (parts.length < 2) return false;
+  const last = parts[parts.length - 1];
+  return new RegExp(`(^| )${parts[0][0]} ${last}( |$)`).test(hay);
+}
+export function parseEspnNews(json, who = null) {
   const feed = Array.isArray(json?.feed) ? json.feed : [];
   const strip = (s) => String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const seen = new Set();
   return feed
-    .map((f) => ({ headline: strip(f.headline), story: strip(f.story || f.description).slice(0, 900), published: f.published || f.lastModified || null, source: f.type === "Rotowire" || /rotowire/i.test(f.dataSourceIdentifier || "") ? "RotoWire" : f.type || "ESPN" }))
-    .filter((f) => f.headline)
+    .filter((f) => !who || newsIsAbout(f, who))
+    .map((f) => ({
+      headline: strip(f.headline),
+      story: strip(f.story || f.description).slice(0, 900),
+      published: f.published || f.lastModified || null,
+      source: f.type === "Rotowire" || /rotowire/i.test(f.dataSourceIdentifier || "") ? "RotoWire" : f.type || "ESPN",
+      url: f.links?.web?.href || f.link || f.links?.mobile?.href || null, // v4.16.0 (P-28): the page the item came from
+    }))
+    .filter((f) => f.headline && !seen.has(norm(f.headline)) && seen.add(norm(f.headline)))
     .sort((a, b) => Date.parse(b.published || 0) - Date.parse(a.published || 0))
     .slice(0, 5);
 }
-async function espnNews(espnId) {
+async function espnNews(espnId, name = null) {
   if (!espnId) return { items: [], error: null };
-  const key = `espn-news:${espnId}`;
+  const key = `espn-news2:${espnId}`; // v4.16.0: new key, the older cache held unfiltered items
   const hit = cacheGet(key);
   if (hit !== null) return hit;
   try {
     const res = await fetch(`https://site.api.espn.com/apis/fantasy/v2/games/ffl/news/players?limit=10&playerId=${encodeURIComponent(espnId)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const out = { items: parseEspnNews(await res.json()), error: null };
+    const out = { items: parseEspnNews(await res.json(), { espnId, name }), error: null };
     cacheSet(key, out, HOUR);
     return out;
   } catch (err) {
@@ -372,7 +402,7 @@ export async function getPlayerCard(username, sleeperId, { leagueId = null } = {
     gsis ? adv.compute(season).then((r) => ({ ...adv.rowsFor(gsis, r.all), throughWeek: r.throughWeek })).catch((err) => ({ error: err.message })) : null,
     teamRanks(season, team).catch(() => null),
     depthChart(season, team, players).catch(() => null),
-    espnNews(espnId),
+    espnNews(espnId, meta.full_name || `${meta.first_name || ""} ${meta.last_name || ""}`.trim()),
     leagueHistory(leagueId, id, currentWeek, players).catch(() => ({ moves: [], drafts: [] })),
     career({ gsis, currentSeason: season, rookieSeason: nvp?.rookie_season || (meta.years_exp != null ? season - Number(meta.years_exp) : null), pos, settings }).catch(() => []),
     league ? valuePanel({ leagueType, superflex, ppr: Number(settings.rec ?? 0), tep: Number(settings.bonus_rec_te ?? 0) > 0, teams: Number(league.total_rosters || 12), sleeperId: id, pos }) : null,

@@ -22,3 +22,13 @@ export function scopeCheer(players, leagueSel, ratio) {
   return out.sort((a, b) => b.stake - a.stake || b.lean - a.lean);
 }
 
+/** v4.16.0 (P-31): the game slot filter's labels in kickoff order; labels with no kickoff time (bye, unavailable) go last. */
+export function slotLabelsChronological(players = []) {
+  const first = new Map();
+  for (const p of players) {
+    if (!p.kickoffLabel) continue;
+    const k = p.kickoff == null ? Infinity : Number(p.kickoff);
+    first.set(p.kickoffLabel, Math.min(first.get(p.kickoffLabel) ?? Infinity, k));
+  }
+  return [...first.entries()].map(([label, k], i) => ({ label, k, i })).sort((a, b) => (a.k === b.k ? a.i - b.i : a.k < b.k ? -1 : 1)).map((x) => x.label);
+}

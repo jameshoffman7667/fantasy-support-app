@@ -51,7 +51,8 @@ Search the web for this week's public pick'em articles, expert picks, and "upset
 For EACH game below, count how many distinct articles/experts you found that pick the UNDERDOG to win outright, list up to 3 source names, and write a neutral note (max 70 words, same concise factual style) on injuries, weather, rest or motivation relevant to that game.
 Games:
 ${lines}${ai.promptHints("upsets")}
-Reply with ONLY a JSON array, no prose: [{"game":"AWAY@HOME","upsetMentions":0,"sources":["..."],"note":"..."}]`;
+For each source also give "sourceNotes": one entry per source with one sentence (max 25 words) saying what THAT source said about the game.
+Reply with ONLY a JSON array, no prose: [{"game":"AWAY@HOME","upsetMentions":0,"sources":["..."],"sourceNotes":[{"source":"...","detail":"..."}],"note":"..."}]`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
   const res = await fetch(url, {
@@ -74,10 +75,12 @@ Reply with ONLY a JSON array, no prose: [{"game":"AWAY@HOME","upsetMentions":0,"
     byGame[String(r.game).toUpperCase().replace(/\s+/g, "")] = {
       upsetMentions: Math.max(0, Number(r.upsetMentions) || 0),
       sources: Array.isArray(r.sources) ? r.sources.slice(0, 3).map(String) : [],
+      sourceNotes: ai.cleanNotes(r.sourceNotes, r.sources), // v4.16.0 (P-28)
       note: r.note ? String(r.note).slice(0, 600) : null,
     };
   }
   const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 12);
+  Object.values(byGame).forEach((g) => ai.linkNotes(g, sources));
   const out = { at: Date.now(), model: MODEL(), byGame, sources };
   console.log(`[gemini] Upset scan for ${season} wk${week}: ${Object.keys(byGame).length} games, ${sources.length} grounding sources.`);
   cacheSet(cacheKey, out, TTL);
@@ -358,6 +361,7 @@ export function parseHype(arr) {
       team: r.team ? String(r.team).toUpperCase().slice(0, 4) : null,
       mentions: Math.max(1, Math.min(50, Math.round(Number(r.mentions) || 1))),
       sources: Array.isArray(r.sources) ? r.sources.slice(0, 5).map((s) => String(s).slice(0, 60)) : [],
+      sourceNotes: ai.cleanNotes(r.sourceNotes, r.sources), // v4.16.0 (P-28)
       kind,
       dynasty: Boolean(r.dynasty) || kind === "stash",
       note: r.note ? String(r.note).slice(0, 240) : null,
@@ -383,8 +387,9 @@ Search for:
 3. Reddit POSTS in r/fantasyfootball and r/DynastyFF about waiver adds (posts only, not comments).
 4. X/Twitter POSTS by fantasy football analysts about waiver adds (posts only, not replies).
 List every player recommended as a pickup (up to 60). For each: "mentions" = how many distinct articles/posts you found recommending him; "sources" = up to 4 outlet or account names; "kind" = "spot" (a one-week streamer or spot start), "ros" (should help for the rest of the season) or "stash" (longer-term: dynasty, rookies, handcuffs, injured players returning); "dynasty" = true if the recommendation came from dynasty coverage; "note" = the sources' argument in one sentence (max 30 words: role change, injury ahead of him, usage, schedule...).
+For each source also give "sourceNotes": one entry per source with one sentence (max 25 words) saying what THAT source said about this player.
 Do not invent players or sources. Reply with ONLY a JSON array, no prose:
-[{"name":"Full Name","pos":"WR","team":"NYJ","mentions":3,"sources":["FantasyPros","r/fantasyfootball"],"kind":"ros","dynasty":false,"note":"..."}]`;
+[{"name":"Full Name","pos":"WR","team":"NYJ","mentions":3,"sources":["FantasyPros","r/fantasyfootball"],"sourceNotes":[{"source":"FantasyPros","detail":"..."}],"kind":"ros","dynasty":false,"note":"..."}]`;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
     const res = await fetch(url, {
       method: "POST",
@@ -402,6 +407,7 @@ Do not invent players or sources. Reply with ONLY a JSON array, no prose:
     }
     const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 20);
     const out = { at: Date.now(), model: MODEL(), players: parseHype(arr), sources };
+    out.players.forEach((p) => ai.linkNotes(p, sources));
     console.log(`[gemini] Waiver research ${season} wk${week}: ${out.players.length} players, ${sources.length} sources.`);
     cacheSet(cacheKey, out, HYPE_TTL);
     ai.recordRun("hype", out);
@@ -459,7 +465,7 @@ export function parseStartSit(arr, players, at = Date.now()) {
     const share = start / (start + sit);
     const byCount = share >= 2 / 3 ? "start" : share <= 1 / 3 ? "sit" : "mixed";
     if (!verdict || verdict !== byCount) verdict = byCount;
-    out[id] = { verdict, start, sit, summary: r.summary ? String(r.summary).slice(0, 500) : null, sources: Array.isArray(r.sources) ? r.sources.slice(0, 5).map((s) => String(s).slice(0, 60)) : [], at };
+    out[id] = { verdict, start, sit, summary: r.summary ? String(r.summary).slice(0, 500) : null, sources: Array.isArray(r.sources) ? r.sources.slice(0, 5).map((s) => String(s).slice(0, 60)) : [], sourceNotes: ai.cleanNotes(r.sourceNotes, r.sources), at };
   }
   return out;
 }
@@ -491,10 +497,11 @@ export async function startSit(season, week, players, { force = false } = {}) {
       const lines = batch.map((p) => `- ${p.name} (${p.pos}${p.team ? `, ${p.team}` : ""})`).join("\n");
       const prompt = `You are researching fantasy football start/sit advice for the ${season} NFL season, week ${week}. Use pieces published in the last 7 days: start/sit articles, weekly rankings columns, "starts and sits" lists, expert advice on sites, Reddit posts and analysts' X posts (posts, not comments).${ai.promptHints("startsit")}
 For EACH player below that at least one source discusses for week ${week}: "startVotes" = how many distinct sources say start him, "sitVotes" = how many say sit him, "verdict" = "start" when the sources clearly favour starting, "sit" when they clearly favour sitting, "mixed" otherwise; "summary" = the arguments on both sides in at most 60 words (matchup, role, injuries, weather); "sources" = up to 4 source names.
+For each source also give "sourceNotes": one entry per source with one sentence (max 25 words) saying what THAT source said about this player.
 Leave out any player you find no start/sit advice for. Do not invent sources.
 Players:
 ${lines}
-Reply with ONLY a JSON array, no prose: [{"name":"Full Name","pos":"WR","team":"NYJ","startVotes":3,"sitVotes":1,"verdict":"start","summary":"...","sources":["FantasyPros","ESPN"]}]`;
+Reply with ONLY a JSON array, no prose: [{"name":"Full Name","pos":"WR","team":"NYJ","startVotes":3,"sitVotes":1,"verdict":"start","summary":"...","sources":["FantasyPros","ESPN"],"sourceNotes":[{"source":"FantasyPros","detail":"..."}]}]`;
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
       const res = await fetch(url, {
         method: "POST",
@@ -512,6 +519,7 @@ Reply with ONLY a JSON array, no prose: [{"name":"Full Name","pos":"WR","team":"
       }
       const got = parseStartSit(arr, batch);
       const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 20);
+      Object.values(got).forEach((r) => ai.linkNotes(r, sources));
       for (const p of batch) {
         checked[p.id] = Date.now();
         if (got[p.id]) found[p.id] = got[p.id];
@@ -577,6 +585,7 @@ export function parseTradeIdeas(arr) {
       direction,
       mentions: Math.max(1, Math.min(50, Math.round(Number(r.mentions) || 1))),
       sources: Array.isArray(r.sources) ? r.sources.slice(0, 5).map((x) => String(x).slice(0, 60)) : [],
+      sourceNotes: ai.cleanNotes(r.sourceNotes, r.sources), // v4.16.0 (P-28)
       dynasty: Boolean(r.dynasty),
       note: r.note ? String(r.note).slice(0, 240) : null,
     });
@@ -605,8 +614,9 @@ Do a general search (not only those sources) for:
 2. "Sell high", "trade away", "fallers", "regression candidates" articles.
 3. Reddit POSTS in r/fantasyfootball and r/DynastyFF about trades (posts only), and X/Twitter POSTS by fantasy football analysts about trade targets or sells (posts only).
 List every player recommended to trade FOR ("direction":"for") and every player recommended to trade AWAY ("direction":"away"), up to 60 in all. "mentions" = how many distinct articles/posts say it; "sources" = up to 4 outlet or account names; "dynasty" = true when the advice is about dynasty value; "note" = one short sentence on why.
+For each source also give "sourceNotes": one entry per source with one sentence (max 25 words) saying what THAT source said about this player.
 Do not invent players or sources. Reply with ONLY a JSON array, no prose:
-[{"name":"Full Name","pos":"WR","team":"NYJ","direction":"for","mentions":3,"sources":["FantasyPros","r/DynastyFF"],"dynasty":false,"note":"..."}]`;
+[{"name":"Full Name","pos":"WR","team":"NYJ","direction":"for","mentions":3,"sources":["FantasyPros","r/DynastyFF"],"sourceNotes":[{"source":"FantasyPros","detail":"..."}],"dynasty":false,"note":"..."}]`;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`;
     const res = await fetch(url, {
       method: "POST",
@@ -624,6 +634,7 @@ Do not invent players or sources. Reply with ONLY a JSON array, no prose:
     }
     const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => ({ title: c.web?.title || null, uri: c.web?.uri || null })).filter((s) => s.uri).slice(0, 20);
     const out = { at: Date.now(), model: MODEL(), season, week, players: parseTradeIdeas(arr), sources };
+    out.players.forEach((p) => ai.linkNotes(p, sources));
     console.log(`[gemini] Trade ideas ${season} wk${week}: ${out.players.length} players, ${sources.length} sources.`);
     cacheSet(cacheKey, out, TI_TTL);
     cacheSet(TRADE_IDEAS_LATEST, out, TI_TTL);

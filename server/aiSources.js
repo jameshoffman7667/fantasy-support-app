@@ -117,6 +117,39 @@ export function promptHints(feature) {
 }
 
 /**
+ * v4.16.0 (P-28): per-source detail for one item. `raw` = Gemini's [{source, detail}]; `names` = the plain source names
+ * (used when Gemini gave no detail, so every named source still appears, with no detail). Max 5. Pure.
+ */
+export function cleanNotes(raw, names = []) {
+  const out = [];
+  const add = (source, detail) => {
+    const name = String(source || "").trim().slice(0, 60);
+    if (!name) return;
+    const i = out.findIndex((o) => matches(o.source, name));
+    const d = detail ? String(detail).trim().slice(0, 300) : null;
+    if (i >= 0) { if (!out[i].detail && d) out[i].detail = d; return; }
+    out.push({ source: name, detail: d, url: null });
+  };
+  for (const r of Array.isArray(raw) ? raw : []) add(r?.source ?? r?.name, r?.detail ?? r?.note ?? r?.summary);
+  for (const n of Array.isArray(names) ? names : []) add(n, null);
+  return out.slice(0, 5);
+}
+
+/** The page a source's note came from: the search's grounding link whose site matches the source name, else null. Pure. */
+export function linkFor(name, grounding = []) {
+  const n = String(name || "");
+  if (compact(n).length < 3) return null;
+  const hit = (grounding || []).find((g) => g?.uri && (matches(n, g.title || "") || (/^@|^x$|twitter/i.test(n) && /(^|\.)(x|twitter)\.com|^x$|twitter/i.test(g.title || "")) || (/^r\//i.test(n) && /reddit/i.test(g.title || ""))));
+  return hit?.uri || null;
+}
+
+/** Fills in each note's url from the grounding links. `item` = anything with sourceNotes. Mutates and returns it. */
+export function linkNotes(item, grounding = []) {
+  for (const note of item?.sourceNotes || []) if (!note.url) note.url = linkFor(note.source, grounding);
+  return item;
+}
+
+/**
  * A result with the removed sources taken out (read time, so removals apply to cached results too). Pure apart
  * from reading the config. Shapes: hype { players[] }, startsit { byId{} }, upsets { byGame{} }, all { sources[] }.
  */
@@ -124,6 +157,7 @@ export function applyRemovals(feature, out, removed = getConfig(feature).removed
   if (!out || !removed.length) return out;
   const gone = (name) => removed.some((r) => matches(r, name));
   const keepSources = (list) => (Array.isArray(list) ? list.filter((s) => !gone(s)) : list);
+  const keepNotes = (list) => (Array.isArray(list) ? list.filter((n) => !gone(n?.source || "")) : list);
   const res = { ...out };
   if (Array.isArray(out.sources)) res.sources = out.sources.filter((s) => !gone(s?.title || "") && !gone(s?.uri || ""));
   if (Array.isArray(out.players)) {
@@ -132,7 +166,7 @@ export function applyRemovals(feature, out, removed = getConfig(feature).removed
         const before = (p.sources || []).length;
         const sources = keepSources(p.sources || []);
         const lost = before - sources.length;
-        return { ...p, sources, mentions: Math.max(0, (Number(p.mentions) || 0) - lost) };
+        return { ...p, sources, ...(p.sourceNotes ? { sourceNotes: keepNotes(p.sourceNotes) } : {}), mentions: Math.max(0, (Number(p.mentions) || 0) - lost) };
       })
       .filter((p) => !((p.sources || []).length === 0 && p.mentions === 0));
   }
@@ -143,7 +177,7 @@ export function applyRemovals(feature, out, removed = getConfig(feature).removed
       const before = (r.sources || []).length;
       const sources = keepSources(r.sources || []);
       if (before && !sources.length) continue; // every source behind this verdict was removed
-      res.byId[id] = { ...r, sources };
+      res.byId[id] = { ...r, sources, ...(r.sourceNotes ? { sourceNotes: keepNotes(r.sourceNotes) } : {}) };
     }
   }
   if (out.byGame && typeof out.byGame === "object") {
@@ -151,7 +185,7 @@ export function applyRemovals(feature, out, removed = getConfig(feature).removed
     for (const [k, g] of Object.entries(out.byGame)) {
       const before = (g?.sources || []).length;
       const sources = keepSources(g?.sources || []);
-      res.byGame[k] = { ...g, sources, upsetMentions: Math.max(0, (Number(g?.upsetMentions) || 0) - (before - sources.length)) };
+      res.byGame[k] = { ...g, sources, ...(g?.sourceNotes ? { sourceNotes: keepNotes(g.sourceNotes) } : {}), upsetMentions: Math.max(0, (Number(g?.upsetMentions) || 0) - (before - sources.length)) };
     }
   }
   return res;

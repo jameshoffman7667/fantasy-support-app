@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { InfoNote, SectionLabel } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
+import { SourceSummary } from "../ui/sourceNotes.jsx"; // v4.16.0 (P-28)
 import { tradeNet } from "../tradeNet.js";
 import { C, fmtWhen } from "../ui/theme.js";
 
@@ -21,10 +22,10 @@ function CandidateRow({ p, checked, onToggle, dynasty }) {
       <input type="checkbox" className="mt-1" checked={checked} onChange={onToggle} />
       <span className="min-w-0 flex-1">
         <span style={{ color: C.text }} className="text-sm"><PlayerLink player={p} className="inline underline">{p.name}</PlayerLink> <span style={{ color: C.textFaint }} className="text-xs">{p.pos}{p.team ? ` · ${p.team}` : ""}</span></span>
-        <span style={{ color: C.textMuted }} className="block text-[11px]">
-          {p.owner ? `On ${p.owner} · ` : ""}{p.mentions} mention{p.mentions === 1 ? "" : "s"}{p.sources?.length ? ` · ${p.sources.slice(0, 3).join(", ")}` : ""}
-        </span>
-        {p.note && <span style={{ color: C.textFaint }} className="block text-[11px]">{p.note}</span>}
+        <SourceSummary title={`${p.name} — ${p.direction === "away" ? "trade away" : "trade for"}`} item={p} summary={p.note} className="block text-[11px]" style={{ color: C.textMuted }}>
+          <span className="block">{p.owner ? `On ${p.owner} · ` : ""}{p.mentions} mention{p.mentions === 1 ? "" : "s"}{p.sources?.length ? ` · ${p.sources.slice(0, 3).join(", ")}` : ""}</span>
+          {p.note && <span style={{ color: C.textFaint }} className="block">{p.note}</span>}
+        </SourceSummary>
       </span>
       <span className="text-right shrink-0 text-[11px]" style={{ color: C.textMuted }}>
         <span style={{ color: C.text }} className="block text-xs">{fmtVal(p.value, dynasty)}<span style={{ color: C.textFaint }}> {dynasty ? "value" : "ROS"}</span></span>

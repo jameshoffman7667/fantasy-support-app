@@ -185,18 +185,37 @@ export function buildPush(league, changes, checked) {
   }
   // v4.4.1: free agent / waiver adds — the claim is sent now, the lineup move follows when he is on the roster
   const adds = [];
+  let swapReserve = null;
   for (const c of picked.filter((x) => x.type === "add")) {
     if (!c.plan) { errors.push(`Choose how to add ${c.toName} — untick and tick the suggestion again.`); continue; }
     const pl = c.plan;
-    adds.push({ key: c.key, addId: c.toId, addName: c.toName, dropId: pl.dropId || null, dropName: pl.dropName || null, bid: pl.kind === "waiver" ? Number(pl.bid) || 0 : 0, kind: pl.kind, change: { slotIndex: c.slotIndex, slot: c.slot, fromId: c.fromId, fromName: c.fromName } });
-    summary.push(`Add ${c.toName} (${pl.kind === "waiver" ? `waiver claim${pl.bid != null && pl.isFaab ? ` · $${Number(pl.bid) || 0}` : ""}` : "free agent"})${pl.dropName ? `, drop ${pl.dropName}` : ""} — then ${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName} once he is on your roster${c.delta ? ` (${c.delta > 0 ? "+" : ""}${c.delta.toFixed(1)} pts)` : ""}`);
+    let irSwap = null;
+    if (pl.irSwap && pl.dropId) {
+      // v4.16.0 (P-26): dropping an IR player — he goes to the bench first, the IR-eligible bench player takes his IR spot,
+      // then the add is sent with the drop. The arrays are cumulative over several such adds.
+      const cur = swapReserve || (league.reserveIds || []).map(String);
+      const dropId = String(pl.dropId), inId = String(pl.irSwap.inId);
+      if (!cur.includes(dropId)) { errors.push(`${pl.dropName || "The player to drop"} is no longer on injured reserve — choose the drop again.`); continue; }
+      if (!(league.bench || []).some((p) => p && String(p.id) === inId)) { errors.push(`${pl.irSwap.inName} is no longer on your bench, so he can't take the IR spot — choose the drop again.`); continue; }
+      const outReserve = cur.filter((x) => x !== dropId);
+      const inReserve = [...outReserve, inId];
+      irSwap = { dropId, dropName: pl.dropName || null, inId, inName: pl.irSwap.inName, outReserve, inReserve };
+      swapReserve = inReserve;
+    }
+    adds.push({ key: c.key, addId: c.toId, addName: c.toName, dropId: pl.dropId || null, dropName: pl.dropName || null, irSwap, bid: pl.kind === "waiver" ? Number(pl.bid) || 0 : 0, kind: pl.kind, change: { slotIndex: c.slotIndex, slot: c.slot, fromId: c.fromId, fromName: c.fromName } });
+    summary.push(`Add ${c.toName} (${pl.kind === "waiver" ? `waiver claim${pl.bid != null && pl.isFaab ? ` · $${Number(pl.bid) || 0}` : ""}` : "free agent"})${pl.dropName ? `, drop ${pl.dropName}` : ""}${irSwap ? ` (${pl.dropName} comes off IR to the bench and ${irSwap.inName} takes the IR spot first)` : ""} — then ${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName} once he is on your roster${c.delta ? ` (${c.delta > 0 ? "+" : ""}${c.delta.toFixed(1)} pts)` : ""}`);
   }
   const ir = picked.filter((c) => c.type === "ir");
   if (ir.length) {
-    reserve = [...new Set([...(league.reserveIds || []).map(String), ...ir.map((c) => c.id)])];
+    reserve = [...new Set([...(swapReserve || (league.reserveIds || []).map(String)), ...ir.map((c) => c.id)])];
     for (const c of ir) summary.push(`Move ${c.name} to injured reserve`);
     const startingNow = new Set((starters || league.starterIds || []).map(String));
     for (const c of ir) if (startingNow.has(c.id)) errors.push(`${c.name} is moving to injured reserve but is also in a starting slot — untick one of them.`);
+  }
+  for (const a of adds) {
+    if (!a.irSwap) continue;
+    if (ir.some((c) => String(c.id) === a.irSwap.inId)) errors.push(`${a.irSwap.inName} is already being moved to IR by another suggestion — choose the drop for ${a.addName} again.`);
+    if ((starters || league.starterIds || []).map(String).includes(a.irSwap.inId)) errors.push(`${a.irSwap.inName} is meant to take an IR spot but a ticked move starts him — untick one of them.`);
   }
   const toBench = picked.filter((c) => c.type === "taxi");
   if (toBench.length) {
@@ -368,18 +387,32 @@ export function rankDrops(league, rows = []) {
     .map((x) => x.r);
 }
 
-/** Players who can be dropped for an add: the whole team — starters, bench, IR and taxi (not locked) — lowest weekly
- *  projection (redraft) or dynasty value (dynasty) first. */
+/** v4.16.0 (P-26): the player who takes an IR slot when an IR player is dropped — the HIGHEST-ranked (weekly projection in
+ *  redraft, dynasty value in dynasty) IR-eligible bench player who is not on IR, not locked and not already used by another
+ *  add's IR swap. null = there is none, so IR players are not offered as drops. */
+export function irSwapCandidate(league, plans = {}, exceptKey = null) {
+  const used = new Set(Object.entries(plans).filter(([k, p]) => k !== exceptKey && p?.irSwap).map(([, p]) => String(p.irSwap.inId)));
+  const pool = (league?.bench || []).filter((p) => p && p.irEligible && !isLocked(p, league) && !used.has(String(p.id)));
+  if (!pool.length) return null;
+  const best = [...rankDrops(league, pool)].reverse(); // rankDrops is lowest first
+  const top = best.find((p) => dropMetric(league, p) != null) || best[best.length - 1];
+  return { inId: String(top.id), inName: top.name };
+}
+
+/** Players who can be dropped for an add: the whole team — starters, bench, taxi (not locked), and IR players only when an
+ *  IR-eligible bench player can take the freed IR slot (P-26) — lowest weekly projection (redraft) or dynasty value
+ *  (dynasty) first. An IR option carries `irSwap` = who moves into IR. */
 export function dropOptions(league, change, plans = {}, exceptKey = null) {
   const taken = new Set(Object.entries(plans).filter(([k, p]) => k !== exceptKey && p?.dropId).map(([, p]) => String(p.dropId)));
   const out = [];
-  const add = (p, where) => {
+  const add = (p, where, extra = {}) => {
     if (!p || p.id == null || taken.has(String(p.id))) return;
-    out.push({ id: String(p.id), name: p.name, pos: p.pos, team: p.team, proj: p.proj ?? null, value: p.value ?? null, where, locked: isLocked(p, league) });
+    out.push({ id: String(p.id), name: p.name, pos: p.pos, team: p.team, proj: p.proj ?? null, value: p.value ?? null, where, locked: isLocked(p, league), ...extra });
   };
   (league?.starters || []).forEach((s, i) => s?.player && add(s.player, i === change?.slotIndex ? `Starting at ${s.slot} (being replaced)` : `Starting at ${s.slot}`));
   (league?.bench || []).forEach((p) => add(p, "Bench"));
-  (league?.ir || []).forEach((p) => add(p, "IR"));
+  const swap = (league?.ir || []).some(Boolean) ? irSwapCandidate(league, plans, exceptKey) : null;
+  if (swap) (league?.ir || []).forEach((p) => add(p, `IR — ${swap.inName} takes the IR spot`, { irSwap: swap }));
   (league?.taxi || []).forEach((p) => add(p, "Taxi"));
   return rankDrops(league, out.filter((o) => !o.locked));
 }
@@ -551,6 +584,16 @@ export function remainingSlots(changes, checked) {
 }
 
 /** v4.10: does this suggested move involve one of these players (by id)? Used to drop moves that clash with roster-validity moves. */
+/** v4.16.0 (P-30): the players he moved into the lineup by hand (for a swap, both players). No suggestion may touch them. */
+export function heldPlayerIds(changes = []) {
+  const ids = new Set();
+  for (const c of changes) {
+    if (c?.type !== "custom") continue;
+    if (c.toId != null) ids.add(String(c.toId));
+    if (c.otherSlot != null && c.fromId != null && c.fromId !== "0") ids.add(String(c.fromId));
+  }
+  return ids;
+}
 export function changeTouchesPlayers(c, ids) {
   if (!ids || !ids.size) return false;
   return [c.fromId, c.toId, c.id, c.idA, c.idB].some((x) => x != null && ids.has(String(x)));

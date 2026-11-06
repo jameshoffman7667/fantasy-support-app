@@ -52,37 +52,37 @@ Notes / questions: Today `server/entrypoint.sh` starts as root (under `tini`), r
 - Option B (only when other changes need it): switch to `USER 1000:100`. Needs the server's data folder re-owned to 1000:100 once, a root step for James, before the first start of that release, plus a data copy first.
 (An earlier note here said the image has no `USER` and runs as root; that was wrong: only the entrypoint's first step runs as root.)
 
+## Done
+
 ### P-26 - Drop lists: IR players only when an IR-eligible player is off IR; dropping an IR player swaps first
 Requested: 2026-11-05 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.16.0
 Notes / questions: (1) IR players appear as drop candidates only if the team has IR-eligible players not on IR. (2) If an IR player is picked to be dropped: move that IR player to the bench, put the bench IR-eligible player into the freed IR slot, then drop the selected player, then make the add / waiver claim (push order IR out, IR in, drop, add). [stated 2026-11-05 22:54] If several IR-eligible players are off IR, the HIGHEST-ranked one goes into the IR slot. The drop-list "players leaving IR" logic from P-21 stays.
 
 ### P-27 - Player card news: only relevant news
 Requested: 2026-11-05 (James)
-Type: minor        Status: Pending
-Notes / questions: most players show no news; some show news that is not about them (example: Derrick Henry). Tighten the matching so news appears only when it is about that player. Cause not yet looked at. Not built.
+Type: minor        Status: Built 4.16.0
+Notes / questions: most players show no news; some show news that is not about them (example: Derrick Henry). Tighten the matching so news appears only when it is about that player. Built: items must be tagged to the player or name him; cause read from the code, not reproduced live; why most players show none was not changed.
 
 ### P-28 - Source pop-ups on news and article summaries
 Requested: 2026-11-05 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.16.0
 Notes / questions: wherever sources are listed for news or articles, tapping the summary opens a pop-up with more detail on what was pulled from each source; tapping a source's detail line opens the page it came from. Reading, unconfirmed: applies to player-card news, start/sit, Trending/Ending and any other place that lists sources.
 
 ### P-29 - Waiver add lineup follow-up: check schedule
 Requested: 2026-11-05 (James)
-Type: patch        Status: Pending
-Notes / questions: the lineup page says it checks every 5 minutes for a waiver add to land, then moves the player into the intended slot. If that 5-minute check is not used for anything else, replace it with a check at 12:30 PM Toronto on every day except Sunday and 1 hour before each kickoff window every day. Code not yet checked for other users of the 5-minute check.
+Type: patch        Status: Built 4.16.0
+Notes / questions: the lineup page says it checks every 5 minutes for a waiver add to land, then moves the player into the intended slot. If that 5-minute check is not used for anything else, replace it with a check at 12:30 PM Toronto on every day except Sunday and 1 hour before each kickoff window every day. The 5-minute timer is used for nothing else; it now only asks whether it is one of the check moments. Times read as Toronto time.
 
 ### P-30 - Optimal lineup: a manual move is never reversed by a suggestion
 Requested: 2026-11-05 (James)
-Type: minor (bug-like)        Status: Pending
-Notes / questions: after a manual roster change on the optimal lineup page, no suggested move may be created or ticked that reverses or overrides it; the player he moved in gets no suggestions until he leaves the screen. Today every manual move that lowers the projection is reversed at once unless he unticks the suggestion. Related to the 10-22 "lock in custom moves" item; check what was built in v4.13.0.
+Type: minor (bug-like)        Status: Built 4.16.0
+Notes / questions: after a manual roster change on the optimal lineup page, no suggested move may be created or ticked that reverses or overrides it; the player he moved in gets no suggestions until he leaves the screen. Today every manual move that lowers the projection is reversed at once unless he unticks the suggestion. Built on the v4.13.0 lock-in: held players are excluded from every suggestion; tested on the helper only.
 
 ### P-31 - Cheer meter: game slot filter in chronological order
 Requested: 2026-11-05 (James)
-Type: patch        Status: Pending
+Type: patch        Status: Built 4.16.0
 Notes / questions: sort the game slot filter by kickoff time.
-
-## Done
 
 ### P-20 - BUG: injury statuses lag Sleeper (Carnell Tate shows Questionable, Sleeper says Out)
 Requested: 2026-10-31 (James)

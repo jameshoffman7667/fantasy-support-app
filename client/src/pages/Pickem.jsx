@@ -1,4 +1,5 @@
 import * as api from "../api.js";
+import { SourceSummary } from "../ui/sourceNotes.jsx"; // v4.16.0 (P-28)
 import { Settings2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { BootstrapScreen, ConfirmPush, ErrorScreen, RedDot, TeamLogo, WeatherChip } from "../ui/common.jsx";
@@ -158,10 +159,10 @@ function PickCard({ g, onSeen, onChoose }) {
           </div>
         )}
         {g.gemini?.note && (
-          <div style={{ color: C.textMuted }} className="text-[11px]">
+          <SourceSummary title={`${g.away} @ ${g.home} — upset coverage`} item={g.gemini} summary={g.gemini.note} className="block text-[11px]" style={{ color: C.textMuted }}>
             {g.gemini.note}
             {g.gemini.sources?.length > 0 && <span style={{ color: C.textFaint }}> — {g.gemini.sources.join(", ")}</span>}
-          </div>
+          </SourceSummary>
         )}
       </div>
       <div style={{ color: live ? C.major : final ? C.textMuted : C.textFaint }} className="text-[11px] text-center mt-1" data-pick-status>

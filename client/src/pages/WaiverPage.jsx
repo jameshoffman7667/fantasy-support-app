@@ -11,6 +11,7 @@ import { StatPickers } from "../ui/statPickers.jsx"; // v4.2
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BidBox, ConfirmPush, DragHandle, DragList, EntryModeToggle, Headshot, InfoNote, MatchupChip, Modal, PrivateGate, PushResults, SectionLabel, SourceTag, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
+import { SourceSummary } from "../ui/sourceNotes.jsx"; // v4.16.0 (P-28)
 import { AutoView } from "../ui/autoMode.jsx"; // v4.10
 import { DropCandidatesPage } from "./DropCandidates.jsx"; // v4.8
 import { forgetSent, isSent, markSent } from "../sentClaims.js"; // v4.8
@@ -136,9 +137,11 @@ function AvailableRow({ p, plan, mode, budget, isFaab, faabHint, onBidInfo = nul
           )}
           {p.fillIn && <div style={{ color: C.minor }} className="text-[11px] mt-1" data-fill-in>🩹 {p.fillIn}</div>}
           {p.hype && (
-            <div style={{ color: C.textMuted }} className="text-[11px] mt-1 leading-snug" data-hype-note>
-              <span style={{ color: C.brand }}>📰 {p.hype.mentions} source{p.hype.mentions === 1 ? "" : "s"}{p.hype.sources?.length ? ` (${p.hype.sources.slice(0, 3).join(", ")})` : ""}{p.hype.kind ? ` · ${{ spot: "spot start", ros: "rest of season", stash: "stash" }[p.hype.kind] || p.hype.kind}` : ""}{p.hype.dynasty ? " · dynasty" : ""}:</span> {p.hype.note || "recommended as a pickup."}
-            </div>
+            <SourceSummary title={`${p.name} — waiver recommendations`} item={p.hype} summary={p.hype.note} className="block mt-1 leading-snug text-[11px]" style={{ color: C.textMuted }}>
+              <span data-hype-note>
+                <span style={{ color: C.brand }}>📰 {p.hype.mentions} source{p.hype.mentions === 1 ? "" : "s"}{p.hype.sources?.length ? ` (${p.hype.sources.slice(0, 3).join(", ")})` : ""}{p.hype.kind ? ` · ${{ spot: "spot start", ros: "rest of season", stash: "stash" }[p.hype.kind] || p.hype.kind}` : ""}{p.hype.dynasty ? " · dynasty" : ""}:</span> {p.hype.note || "recommended as a pickup."}
+              </span>
+            </SourceSummary>
           )}
           {p.note && p.rule && <div style={{ color: s.color }} className="text-[11px] mt-1">{p.rule === "Free agent outprojects a starter" ? "Beats a starter" : "Beats a bench player"}: {p.note}</div>}
           {p.usage && <div className="mt-1"><UsageBadge usage={p.usage} /></div>}

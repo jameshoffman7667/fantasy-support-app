@@ -5,7 +5,8 @@ import * as store from "./projectionStore.js";
  *
  * A Roster suggestion that starts a free agent / waiver player is ticked on the Proposed lineup. The app sends the add
  * to Sleeper as a claim (with the drop and, on waivers, the FAAB bid) and stores a PENDING LINEUP MOVE here. A check
- * every 5 minutes (scheduler.pendingMovesTick) looks at your roster; once the player is on it, the lineup move is sent.
+ * v4.16.0 (P-29): the check is no longer every 5 minutes. It looks at your roster at 12:30 PM Toronto on every day except Sunday, and
+ * 1 hour before each kickoff window (scheduler.pendingMovesTick -> checkReason); once the player is on it, the lineup move is sent.
  * Nothing is sent before the player is on the roster, and a move that no longer fits (slot changed, game started, claim
  * lost) is dropped and you are told. Uses the Sleeper token's "Waiver claims" and "Roster changes" switches.
  *
@@ -15,7 +16,37 @@ import * as store from "./projectionStore.js";
 const KEY = (u) => `pendingmoves:${u}`;
 const HOUR = 3600e3;
 export const GIVE_UP_AFTER_RUN_MS = 12 * HOUR;
-export const CHECK_EVERY_MS = 5 * 60 * 1000;
+export const CHECK_EVERY_MS = 5 * 60 * 1000; // how often the scheduler asks checkReason (cheap, no network); NOT how often rosters are read
+export const NOON_HOUR = 12, NOON_MINUTE = 30;
+export const NOON_WINDOW_MS = 15 * 60 * 1000;
+export const KICK_LEAD_MS = 60 * 60 * 1000;
+export const KICK_WINDOW_MS = 15 * 60 * 1000;
+
+/** Toronto date (YYYY-MM-DD), weekday, hour and minute for a timestamp. */
+export function torontoParts(now) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short", hour: "numeric", minute: "2-digit", hour12: false }).formatToParts(new Date(now));
+  const g = (t) => parts.find((p) => p.type === t)?.value;
+  return { date: `${g("year")}-${g("month")}-${g("day")}`, weekday: g("weekday"), hour: Number(g("hour")) % 24, minute: Number(g("minute")) };
+}
+
+/**
+ * v4.16.0 (P-29): is this one of the moments a waiting move's roster should be read? Returns a once-only key or null.
+ * - 12:30 PM Toronto on every day except Sunday (open for 15 minutes so one missed tick doesn't skip it)
+ * - 1 hour before each kickoff window of the week (between 60 and 45 minutes before; Sunday's 1 PM games are covered here)
+ * Pure.
+ */
+export function checkReason(now, kickoffs = []) {
+  const t = torontoParts(now);
+  if (t.weekday !== "Sun") {
+    const since = (t.hour * 60 + t.minute - (NOON_HOUR * 60 + NOON_MINUTE)) * 60000;
+    if (since >= 0 && since < NOON_WINDOW_MS) return `noon:${t.date}`;
+  }
+  for (const k of kickoffs) {
+    const lead = Number(k) - now;
+    if (lead <= KICK_LEAD_MS && lead > KICK_LEAD_MS - KICK_WINDOW_MS) return `kick:${k}`;
+  }
+  return null;
+}
 const LOG_KEY = (u) => `pendingmoves:log:${u}`;
 
 export const list = (username, leagueId = null) => (store.getState(KEY(username), null) || []).filter((m) => leagueId == null || String(m.leagueId) === String(leagueId));

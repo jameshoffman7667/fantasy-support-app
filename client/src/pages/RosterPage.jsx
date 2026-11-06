@@ -1,11 +1,11 @@
 import * as api from "../api.js";
 import { FLEX_ELIGIBLE, GROUP_LABEL, benchOrder, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
-import { acceptAllKeys, arrangement, buildPush, changeNotes, changeTouchesPlayers, customChange, defaultChecked, dropOptions, layerChanges, leagueAfter, openSpotsForAdd, proposeChanges, remainingSlots, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
+import { acceptAllKeys, arrangement, buildPush, changeNotes, changeTouchesPlayers, customChange, defaultChecked, dropOptions, heldPlayerIds, layerChanges, leagueAfter, openSpotsForAdd, proposeChanges, remainingSlots, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
 import { computeProposedRoster } from "../ui/compute.js"; // v4.9
 import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ComplianceFixes, refreshSoon, runComplianceSteps, useCompliance } from "../ui/rosterCompliance.jsx"; // v4.10
+import { ComplianceFixes, refreshSoon, runComplianceSteps, STAGE_PAUSE_MS, useCompliance } from "../ui/rosterCompliance.jsx"; // v4.10
 import { ConfirmPush, Headshot, InfoNote, MatchupChip, Modal, PrivateGate, PushResults, RowChips, SectionLabel, SourceTag, StatLine, UsageBadge, WeatherChip } from "../ui/common.jsx";
 import { BackupList, PlayerLink } from "../ui/playerCard.jsx";
 import { C, POS_COLOR, SOURCE_TAG, SRC_COLOR, STATUS, fmtWhen, formatStatLine } from "../ui/theme.js";
@@ -725,11 +725,14 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
   const [locked, setLocked] = useState(null); // { changes, keys } | null
   useEffect(() => setLocked(null), [league]);
   const baseLg = useMemo(() => (locked ? leagueAfter(league, arrangement(league, locked.changes, locked.keys)) : league), [league, locked]);
+  // v4.16.0 (P-30): the players he moved INTO the lineup by hand (and, for a swap, both players) get no suggestions at all
+  // while he stays on this screen, so no suggested move ever reverses or overrides his own move.
+  const held = useMemo(() => heldPlayerIds(locked?.changes || []), [locked]);
   const suggested = useMemo(() => {
     if (hideMoves) return [];
-    const all = proposeChanges(baseLg, { rejected });
+    const all = proposeChanges(baseLg, { rejected }).filter((c) => !changeTouchesPlayers(c, held));
     return usePre ? all.filter((c) => !changeTouchesPlayers(c, gone)) : all;
-  }, [baseLg, hideMoves, usePre, gone, rejected]);
+  }, [baseLg, hideMoves, usePre, gone, rejected, held]);
   const pre = useMemo(() => {
     if (!usePre || !comp.count) return null;
     const names = (ids, list) => list.filter((p) => ids.includes(String(p.id))).map((p) => p.name).join(", ");
@@ -762,7 +765,7 @@ function RosterPageInner({ league, onSaveRanking, onRefresh, onOpenAccount, onOp
     if (!on && tgt?.pair && !rejected.has(tgt.pair)) {
       const nextRejected = new Set([...rejected, tgt.pair]);
       const raw = proposeChanges(baseLg, { rejected: nextRejected });
-      const list = (usePre ? raw.filter((c) => !changeTouchesPlayers(c, gone)) : raw).map((c) => (c.type === "add" ? { ...c, plan: nextPlans[c.key] } : c));
+      const list = (usePre ? raw.filter((c) => !changeTouchesPlayers(c, gone)) : raw).filter((c) => !changeTouchesPlayers(c, held)).map((c) => (c.type === "add" ? { ...c, plan: nextPlans[c.key] } : c));
       const old = new Set(layered.changes.map((c) => c.key));
       const fresh = [...defaultChecked(list)].filter((k) => !old.has(k));
       let ticks = new Set([...next].filter((k) => list.some((c) => c.key === k)));
@@ -1131,6 +1134,17 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone,
       }
       for (const a of push.adds || []) {
         try {
+          // v4.16.0 (P-26): an IR player chosen as the drop comes off IR first and the bench IR-eligible player takes his spot
+          if (a.irSwap) {
+            const o = await api.pushReserve(league.id, a.irSwap.outReserve);
+            out.push({ label: `IR out: ${a.irSwap.dropName || a.irSwap.dropId}`, ok: o.ok, verified: o.verified, detail: o.detail });
+            if (!o.ok) continue;
+            await new Promise((res) => setTimeout(res, STAGE_PAUSE_MS));
+            const i = await api.pushReserve(league.id, a.irSwap.inReserve);
+            out.push({ label: `IR in: ${a.irSwap.inName}`, ok: i.ok, verified: i.verified, detail: i.detail });
+            if (!i.ok) continue;
+            await new Promise((res) => setTimeout(res, STAGE_PAUSE_MS));
+          }
           const r = await api.pushAddMove(league.id, a);
           out.push({ label: `Add ${a.addName}`, ok: r.ok, verified: r.claim?.verified, detail: r.detail });
         } catch (e) {
@@ -1260,7 +1274,7 @@ function AddPlanModal({ league, change, plans, onSave, onCancel }) {
         </div>
         <div className="flex items-center justify-end gap-2 pt-1">
           <button type="button" onClick={onCancel} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-sm" data-add-cancel>Cancel</button>
-          <button type="button" disabled={!ready} onClick={() => onSave({ kind, bid: kind === "waiver" && isFaab ? bidN : 0, isFaab, dropId: drop?.id || null, dropName: drop?.name || null })} style={{ background: C.brand, color: C.text, opacity: ready ? 1 : 0.5 }} className="rounded-md px-3 py-1.5 text-sm" data-add-save>Use these settings</button>
+          <button type="button" disabled={!ready} onClick={() => onSave({ kind, bid: kind === "waiver" && isFaab ? bidN : 0, isFaab, dropId: drop?.id || null, dropName: drop?.name || null, irSwap: drop?.irSwap || null })} style={{ background: C.brand, color: C.text, opacity: ready ? 1 : 0.5 }} className="rounded-md px-3 py-1.5 text-sm" data-add-save>Use these settings</button>
         </div>
       </div>
     </Modal>

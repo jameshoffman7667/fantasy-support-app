@@ -1,4 +1,4 @@
-import { scopeCheer } from "../gameDayCheer.js"; // v4.8
+import { scopeCheer, slotLabelsChronological } from "../gameDayCheer.js"; // v4.8, v4.16.0
 import { primetimeNeed } from "../primetimeNeed.js"; // v4.13
 import { gameProgress, livePaceTone, paceColor } from "../livePace.js"; // v4.13
 import { fmtProj, listText, tnfView } from "../tnf.js"; // v4.11
@@ -431,7 +431,7 @@ export function GameDayScreen({ leagues = [] }) {
 
   if (error && !data) return <div className="px-4 py-6"><ErrorScreen message={error} /></div>;
   if (!data) return <BootstrapScreen />;
-  const slots = [...new Set(data.players.map((p) => p.kickoffLabel).filter(Boolean))];
+  const slots = slotLabelsChronological(data.players); // v4.16.0 (P-31): earliest kickoff first
   const scoped = scopeCheer(data.players, leagueSel, data.settings.ratio); // v4.8
   const shown = scoped.filter((p) => (slot === "all" || p.kickoffLabel === slot) && (cat === "all" || p.category === cat));
   const counts = { for: 0, balanced: 0, against: 0 };

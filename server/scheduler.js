@@ -412,15 +412,36 @@ export function pendingDeps(username) {
     },
   };
 }
-/** Every 5 minutes: look at each waiting add-then-lineup move whose time has come (one live roster read each). */
-async function pendingMovesTick(now = Date.now()) {
-  for (const state of getAllUserStates()) {
-    if (!pendingMoves.list(state.username).length) continue;
+/**
+ * v4.16.0 (P-29): waiting add-then-lineup moves are checked at 12:30 PM Toronto (not Sunday) and 1 hour before each kickoff
+ * window, not every 5 minutes. The timer still ticks every 5 minutes, but a tick only reads rosters at one of those moments
+ * (each once; pendingMoves.checkReason), so a quiet tick costs no calls.
+ */
+async function pendingMovesTick(now = Date.now(), { kickoffs = null, force = false } = {}) {
+  const users = getAllUserStates().filter((s) => pendingMoves.list(s.username).length);
+  if (!users.length) return;
+  let reason = "forced";
+  if (!force) {
+    let ks = kickoffs;
+    if (!ks) {
+      try {
+        const st = await sleeper.getState();
+        const sched = await schedule.getWeekSchedule(st.season, st.week);
+        ks = [...new Set(Object.values(sched?.byTeam || {}).map((g) => g.kickoffMillis).filter((k) => k != null))];
+      } catch { ks = []; }
+    }
+    reason = pendingMoves.checkReason(now, ks);
+    if (!reason) return;
+    const doneKey = `pendingcheck:${reason}`;
+    if (cacheGet(doneKey) !== null) return;
+    cacheSet(doneKey, true, 2 * 24 * 60 * 60 * 1000);
+  }
+  for (const state of users) {
     const user = getUser(state.username);
     if (!user?.active) continue;
     try {
       const done = await pendingMoves.runPending(state.username, pendingDeps(state.username), now);
-      if (done.length) console.log(`[scheduler] Pending lineup moves for ${state.username}: ${done.map((d) => d.status).join(", ")}.`);
+      if (done.length) console.log(`[scheduler] Pending lineup moves for ${state.username} (${reason}): ${done.map((d) => d.status).join(", ")}.`);
     } catch (err) {
       console.warn(`[scheduler] Pending lineup moves failed for ${state.username}: ${err.message}`);
     }
@@ -467,7 +488,7 @@ export function startScheduler() {
   }, 10 * 60 * 1000);
   // v4.4: Auto mode claims, one hour before each switched-on league's waivers process.
   setInterval(() => autoClaimTick().catch((err) => console.warn(`[scheduler] Auto mode check failed: ${err.message}`)), 10 * 60 * 1000);
-  // v4.4.1: waiting "add a player, then move him into the lineup" moves, checked every 5 minutes.
+  // v4.4.1: waiting "add a player, then move him into the lineup" moves (v4.16.0: roster read only at 12:30 PM Toronto except Sunday and 1 h before each kickoff window).
   setInterval(() => pendingMovesTick().catch((err) => console.warn(`[scheduler] Pending moves check failed: ${err.message}`)), pendingMoves.CHECK_EVERY_MS);
   // v4.15.0: weekly trade-article search, Thursday 08:00 Toronto.
   setInterval(() => tradeIdeasTick().catch((err) => console.warn(`[scheduler] Trade ideas search failed: ${err.message}`)), 10 * 60 * 1000);
