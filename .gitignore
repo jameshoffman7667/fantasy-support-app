@@ -7,3 +7,6 @@ dist/
 *.keystore
 *.keystore.b64
 *.jks
+# local test database and sandbox lock files (Dockerfiles use npm install, no lock files tracked)
+data/
+package-lock.json
