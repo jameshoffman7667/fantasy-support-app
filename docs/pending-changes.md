@@ -12,18 +12,21 @@ Notes / questions: Chris Godwin shows value 277 but a trend of down 1,729 (7 day
 
 ### P-5 - Designed desktop layout (spec audit, 2026-10-22)
 Requested: 2026-10-22 (spec audit)
-Type: major (James decides)        Status: Blocked
+Type: major (James decides)        Status: Pending (answered, build on "build")
 Notes / questions: The app is one `max-w-lg` phone column on every screen size. The spec wants a designed desktop layout (sidebar navigation, multi-column and table views, side-by-side panes, keyboard shortcuts, visible focus). Needs design decisions: sidebar contents, which pages go multi-column first, whether the bottom tabs stay on tablets.
+[stated 2026-11-08 15:20] Desktop layout answers: cascade the pages left to right. League management: league cards on the left, the page selection (Roster, Waivers, Trade radar, etc.) for the selected league to their right, page content to the right of that. Game Day: leagues in a left column instead of across the top, page content widened on the right. Pick'em: wider boxes, with the write-up, weather and upset potential moved to the right so rows get shorter. Analytics and Commish: widened a bit. Everything planned for a 16:10 screen; wider screens keep blank sides as now. Phone layout unchanged. My readings, unconfirmed: the breakpoint between phone and desktop is about 1024 px; the bottom tabs stay on phones; max content width about 1600 px centred (16:10 at 1440 to 1600 wide).
 
 ### P-6 - Light and dark mode (spec audit)
 Requested: 2026-10-22 (spec audit)
-Type: minor        Status: Blocked
+Type: minor        Status: Pending (answered, build on "build")
 Notes / questions: The app is dark only; colours are constants in client/src/ui/theme.js. The spec wants `prefers-color-scheme` with a matching `theme-color`. Question: should light mode be offered at all, or is dark-only accepted?
+[stated 2026-11-08 15:19] Defaults accepted: light mode is offered and follows the device's colour scheme (prefers-color-scheme), dark stays the fallback, with a matching theme-color.
 
 ### P-7 - Security baseline for an app reachable from outside (spec audit)
 Requested: 2026-10-22 (spec audit)
-Type: minor to major (several parts)        Status: Blocked
+Type: minor to major (several parts)        Status: Partly answered
 Notes / questions: The app holds Sleeper tokens and CBS credentials and is reachable through Cloudflare. Today: username + password, per-user sessions, login throttling. Missing against the spec baseline: mandatory TOTP, hashed server-side sessions with an idle timeout (check), CSRF header plus Origin check on writes, password re-entry before sensitive actions, strict CSP (blocked: the UI uses inline styles heavily), Cloudflare Access JWT check, an audit log. Needs James to pick which parts matter.
+[stated 2026-11-08 15:20] James is fine with the current in-app password login. My reading, unconfirmed: no mandatory TOTP and no password-policy change. Still open: whether to add the CSRF header + Origin check on writes, an idle session timeout and an audit log of sign-ins and pushes, and whether Cloudflare Access sits in front of the app.
 
 ### P-8 - Split the JavaScript bundle (spec audit)
 Requested: 2026-10-22 (spec audit)
