@@ -24,13 +24,14 @@ Notes / questions: The app is dark only; colours are constants in client/src/ui/
 
 ### P-7 - Security baseline for an app reachable from outside (spec audit)
 Requested: 2026-10-22 (spec audit)
-Type: minor to major (several parts)        Status: Partly answered
+Type: minor to major (several parts)        Status: Pending (scope cut to the audit log only; build on "build")
 Notes / questions: The app holds Sleeper tokens and CBS credentials and is reachable through Cloudflare. Today: username + password, per-user sessions, login throttling. Missing against the spec baseline: mandatory TOTP, hashed server-side sessions with an idle timeout (check), CSRF header plus Origin check on writes, password re-entry before sensitive actions, strict CSP (blocked: the UI uses inline styles heavily), Cloudflare Access JWT check, an audit log. Needs James to pick which parts matter.
 [stated 2026-11-08 15:20] James is fine with the current in-app password login. My reading, unconfirmed: no mandatory TOTP and no password-policy change. Still open: whether to add the CSRF header + Origin check on writes, an idle session timeout and an audit log of sign-ins and pushes, and whether Cloudflare Access sits in front of the app.
+[stated 2026-11-08 15:30] Scope: just the audit log. No TOTP, CSRF/Origin check, idle timeout, password re-entry, CSP or Cloudflare Access check. My reading, unconfirmed: the log records sign-ins (success and failure), sign-outs, and every push to Sleeper/CBS and settings/credential change (user, time, action, no secrets), stored in the app's database, shown in Account for the owner, kept 90 days.
 
 ### P-8 - Split the JavaScript bundle (spec audit)
 Requested: 2026-10-22 (spec audit)
-Type: minor        Status: Pending
+Type: minor        Status: Pending (on the build list, James 2026-11-08 15:30)
 Notes / questions: One JS file over 500 kB (vite warns). Lazy-load heavy pages (Analytics, Commish, Scouting, Game Day).
 
 ### P-9 - Data migration safeguards (spec audit)
