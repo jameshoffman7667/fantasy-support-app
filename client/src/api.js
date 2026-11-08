@@ -452,3 +452,14 @@ export function searchTradeIdeas() {
 export function buildTradeIdeas(leagueId, forIds, awayIds) {
   return jsonPost(`/api/trade/ideas/build`, { leagueId, forIds, awayIds });
 }
+
+// v4.17.0: the read-only ticker token for the IPTV Multiview app (owner only; the token is shown once).
+export function getTickerToken() {
+  return request(`/api/ticker-token`);
+}
+export function createTickerToken() {
+  return jsonPost(`/api/ticker-token`, {});
+}
+export function revokeTickerToken() {
+  return request(`/api/ticker-token`, { method: "DELETE" });
+}

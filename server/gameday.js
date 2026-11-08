@@ -181,7 +181,7 @@ export function primetimeCard({ my = [], opp = [], myPoints = 0, oppPoints = 0, 
   return { stage, leader, gap, earlierPending: earlier, my: { points: r2(myPoints), remProj: sum(a.remaining), remaining: a.remaining }, opp: { points: r2(oppPoints), remProj: sum(b.remaining), remaining: b.remaining }, need };
 }
 
-export async function getGameDay(username, { week: weekParam } = {}) {
+export async function getGameDay(username, { week: weekParam, ticker = false } = {}) {
   const state = getUserState(username);
   const leagueIds = state?.leagueIds || [];
   const settings = getSettings(username);
@@ -253,6 +253,13 @@ export async function getGameDay(username, { week: weekParam } = {}) {
       };
       const me = sideInfo(myM);
       const opp = sideInfo(oppM);
+      // v4.17.0 (P-33): the ticker also needs both sides' starters (and optionally benches) per league. Not sent to /api/gameday.
+      const benchOf = (m) => (m.players || []).filter((id) => id && id !== "0" && !(m.starters || []).includes(id)).map((id) => {
+        const p = players[id];
+        const g = gameFor(p?.team || (p?.position === "DEF" ? id : null));
+        return { id, pts: m.players_points?.[id] != null ? Number(m.players_points[id]) : null, proj: proj ? hub.pick(proj, id).proj : null, name: p?.position === "DEF" ? `${p?.first_name || id} ${p?.last_name || "D/ST"}`.trim() : name(p, id), pos: p?.position || null, team: p?.team || (p?.position === "DEF" ? id : null), state: g?.state ?? null, statusDetail: g?.statusDetail ?? null };
+      });
+      if (ticker) summary.ticker = { myRosterId: mine.roster_id, oppRosterId: oppM.roster_id, my: me.list, opp: opp.list, myBench: benchOf(myM), oppBench: benchOf(oppM) };
       const close = closenessFactor(me.final, opp.final, settings);
       Object.assign(summary, {
         myPoints: r2(me.points),

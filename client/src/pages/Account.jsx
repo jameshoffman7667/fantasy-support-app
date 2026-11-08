@@ -443,6 +443,54 @@ function ApiPresetsPanel({ isOwner }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  v4.17.0 — Multiview access (read-only ticker token)                 */
+/* ------------------------------------------------------------------ */
+function MultiviewPanel() {
+  const [info, setInfo] = useState(null);
+  const [fresh, setFresh] = useState(null); // the plain token, shown once
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => api.getTickerToken().then(setInfo).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, []);
+  const create = async () => {
+    if (info?.exists && !window.confirm("Make a new token? The old one stops working at once, so Multiview needs the new one.")) return;
+    setBusy(true); setErr(null);
+    try { const r = await api.createTickerToken(); setFresh(r.token); await load(); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  const revoke = async () => {
+    if (!window.confirm("Turn the Multiview ticker off? Its token stops working.")) return;
+    setBusy(true); setErr(null);
+    try { await api.revokeTickerToken(); setFresh(null); await load(); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  const small = { background: C.surface, border: `1px solid ${C.border}`, color: C.text };
+  const when = (iso) => (iso ? new Date(iso).toLocaleString() : "never");
+  return (
+    <div className="space-y-2" data-multiview>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 leading-snug">
+        A read-only token for the IPTV Multiview app: it can read your league totals, scoring events and player pictures, and nothing else. Leagues follow the include switch on Game Day. Only the owner can make it.
+      </div>
+      {err && <div style={{ color: C.major }} className="text-xs px-1">{err}</div>}
+      {fresh && (
+        <div style={{ background: C.surface, border: `1px solid ${C.brand}` }} className="rounded-md px-3 py-2 space-y-1" data-multiview-token>
+          <div style={{ color: C.text }} className="text-xs">Copy this now. It is shown once and only a fingerprint is kept.</div>
+          <code style={{ color: C.text }} className="block text-xs break-all select-all">{fresh}</code>
+          <button type="button" onClick={() => navigator.clipboard?.writeText(fresh)} style={small} className="text-[11px] rounded-full px-2.5 py-1">Copy</button>
+        </div>
+      )}
+      {info && (
+        <div style={{ color: C.textMuted }} className="text-xs px-1" data-multiview-status>
+          {info.exists ? `Token made ${when(info.createdAt)} · last used ${when(info.lastUsedAt)}` : "No token yet — the ticker API is off."}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <button type="button" onClick={create} disabled={busy || !info} style={small} className="text-xs rounded-full px-3 py-1.5" data-multiview-create>{info?.exists ? "Make a new token" : "Create token"}</button>
+        {info?.exists && <button type="button" onClick={revoke} disabled={busy} style={{ ...small, color: C.major }} className="text-xs rounded-full px-3 py-1.5" data-multiview-revoke>Turn off</button>}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  v4.12 — Install the app (PWA)                                       */
 /* ------------------------------------------------------------------ */
 function InstallAppPanel() {
@@ -500,6 +548,12 @@ export function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
         <SectionLabel>API call presets</SectionLabel>
         <div className="pt-1.5"><ApiPresetsPanel isOwner={authUser?.role === "owner"} /></div>
       </div>
+      {authUser?.role === "owner" && (
+        <div>
+          <SectionLabel>Multiview access</SectionLabel>
+          <div className="pt-1.5"><MultiviewPanel /></div>
+        </div>
+      )}
       <div>
         <SectionLabel>AI sources</SectionLabel>
         <div className="pt-1.5"><AiSourcesPanel isOwner={authUser?.role === "owner"} /></div>

@@ -1,4 +1,5 @@
 import * as sleeper from "./sleeper.js";
+import * as ticker from "./ticker.js"; // v4.17.0
 import * as schedule from "./schedule.js";
 import * as slp from "./sleeperProjections.js";
 import * as espn from "./espnProjections.js";
@@ -452,6 +453,7 @@ export function startScheduler() {
   // Run once shortly after boot (so a fresh deploy warms up quickly
   // rather than waiting a full hour), then on the regular interval.
   setTimeout(refreshAllUsers, 15 * 1000);
+  ticker.start(); // v4.17.0: keeps the Multiview ticker snapshot warm and detects scores (only for users with a token)
   setInterval(refreshAllUsers, REFRESH_INTERVAL_MS);
   setInterval(preKickoffCheck, PREKICK_CHECK_MS);
   // v2.5: actual scores for finished weeks (hourly) and the history backfill's

@@ -4,6 +4,8 @@ import { pushKeys, waiverBaselineKeys } from "../variances.js";
 import { CATEGORIES, PERF_SORTS, POSITION_FILTERS, categoryRows, categoryView, keyLabel, perfValue } from "../waiverLists.js"; // v3.9, v4.8
 import { CopyEntries, applyCopiedBid, useCopyClaims } from "../ui/copyClaims.jsx"; // v4.7, v4.8
 import { availableElsewhere, compareToRoster, waiverRosterWarnings } from "../ui/compute.js"; // v3.9, v4.1
+import { fromDollars } from "../waiverPlan.js";
+import { compareClaims, isOff, planPush, integrateRow, applyIntegration, planSignature, freshPlan } from "../claimCompare.js"; // v4.17 (P-32)
 import { claimKey, clearClaims, clearDrops, afterPush, bidGroups, deleteBid, describeClaim, dropPool, effectiveClaims, flatten, groupClaims, orderDrops, reorderBids, resetClaims, selectedClaims, setBid, simulate, stampBids, syncDrops, toDollars } from "../waiverPlan.js";
 import { ChevronRight, Loader2, Search, SlidersHorizontal, X } from "lucide-react";
 import { expandPositions, fmtValue, normalizeView, sortRows } from "../statsView.js"; // v4.2
@@ -944,6 +946,13 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
   const benchById = useMemo(() => new Map(bench.map((p) => [String(p.id), p])), [bench]);
 
   const eff = useMemo(() => effectiveClaims({ ...plan, drops: syncedDrops }, { openSpots }), [plan, syncedDrops, openSpots]);
+  const addCandidates = league.addCandidates?.length ? league.addCandidates : league.waiver.rows || [];
+  // v4.1: names (and card details) for claims already queued in Sleeper, which arrive as player ids.
+  const nameOf = useMemo(() => {
+    const m = new Map();
+    for (const p of [...Object.values(league.waiverCategories?.cards || {}), ...(league.waiver?.rows || []), ...addCandidates, ...allBench.filter(Boolean)]) if (p?.id != null) m.set(String(p.id), p);
+    return (id) => m.get(String(id)) || { id: String(id), name: String(id) };
+  }, [league.waiverCategories, league.waiver, addCandidates, allBench]);
   // v3.0: claims already queued in Sleeper aren't proposed again. A queued claim matches a
   // proposed one when it adds the same player and drops the same player (or nobody).
   const pending = league.privateInfo?.claims?.pending || [];
@@ -951,24 +960,40 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
     () => pending.map((x) => ({ key: `sl:${x.id}`, addId: String(x.adds[0] ?? ""), dropId: x.drops[0] != null ? String(x.drops[0]) : null, bid: Number(x.bid) || 0, source: "sleeper", dropPriority: -2, entryIdx: -1, txId: x.id, leg: x.leg ?? null })),
     [pending]
   );
-  const existingKeys = useMemo(() => new Set(existing.map((x) => claimKey(x.addId, x.dropId))), [existing]);
   // v3.1: a claim for a player whose game has started is hidden until the week's last game ends.
   const lockedIds = useMemo(() => new Set((league.waiverLock?.lockedIds || []).map(String)), [league.waiverLock]);
-  const visibleClaims = useMemo(() => eff.claims.filter((c) => !existingKeys.has(claimKey(c.addId, c.dropId)) && !lockedIds.has(String(c.addId))), [eff.claims, existingKeys, lockedIds]);
+  // v4.17 (P-32): proposed claims are built from the bids and drops alone, then compared with the queued ones.
+  const visibleClaims = useMemo(() => eff.claims.filter((c) => !lockedIds.has(String(c.addId))), [eff.claims, lockedIds]);
   const hiddenCount = eff.claims.length - visibleClaims.length;
   const groups = useMemo(() => groupClaims(visibleClaims, plan.order), [visibleClaims, plan.order]);
   const ordered = useMemo(() => flatten(groups), [groups]);
   // v4.1: tick boxes — only ticked claims are pushed and listed on the checklist.
   const unselected = useMemo(() => new Set(plan.unselected || []), [plan.unselected]);
+  const cmp = useMemo(() => compareClaims(ordered, existing, nameOf), [ordered, existing, nameOf]);
+  const offOf = (c) => isOff(c, cmp, plan.unselected, plan.dupOn);
+  const pushPlan = useMemo(() => planPush(ordered, cmp, existing, { unselected: plan.unselected, dupOn: plan.dupOn }), [ordered, cmp, existing, plan.unselected, plan.dupOn]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const toPush = useMemo(() => selectedClaims(ordered, plan.unselected).filter((c) => !isSent(league.id, c)), [ordered, plan.unselected, league.id, sentTick]);
-  const allTicked = toPush.length === ordered.length;
+  const toPush = useMemo(() => pushPlan.push.filter((c) => cmp.get(c.key)?.status !== "new" || !isSent(league.id, c)), [pushPlan, cmp, league.id, sentTick]);
+  const allTicked = ordered.every((c) => !offOf(c));
   const onSelect = (c, on) => setPlan((pl) => {
+    if (cmp.get(c.key)?.status === "same") {
+      const d = new Set(pl.dupOn || []);
+      if (on) d.add(c.key); else d.delete(c.key);
+      return { ...pl, dupOn: [...d] };
+    }
     const set = new Set(pl.unselected || []);
     if (on) set.delete(c.key);
     else set.add(c.key);
     return { ...pl, unselected: [...set] };
   });
+  // v4.17: any change to the Available bids or the Drop candidates re-evaluates the claims from fresh (manual edits, order and ticks go).
+  const sigRef = useRef(null);
+  const sig = planSignature(plan);
+  useEffect(() => {
+    if (sigRef.current != null && sigRef.current !== sig) setPlan((pl) => freshPlan(pl));
+    sigRef.current = sig;
+  }, [sig, setPlan]);
+  const [integ, setInteg] = useState(null); // null | { sel: Set(txId), text: {txId: string} }
   const [clearArm, setClearArm] = useState(null); // "claims" | "drops" — the second tap clears
   useEffect(() => {
     if (!clearArm) return undefined;
@@ -1005,13 +1030,6 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
     if (c.source === "custom") setPlan((pl) => ({ ...pl, custom: pl.custom.filter((x) => x.key !== c.key) }));
     else setPlan((pl) => ({ ...pl, removed: [...new Set([...pl.removed, c.key])] }));
   };
-  const addCandidates = league.addCandidates?.length ? league.addCandidates : league.waiver.rows || [];
-  // v4.1: names (and card details) for claims already queued in Sleeper, which arrive as player ids.
-  const nameOf = useMemo(() => {
-    const m = new Map();
-    for (const p of [...Object.values(league.waiverCategories?.cards || {}), ...(league.waiver?.rows || []), ...addCandidates, ...allBench.filter(Boolean)]) if (p?.id != null) m.set(String(p.id), p);
-    return (id) => m.get(String(id)) || { id: String(id), name: String(id) };
-  }, [league.waiverCategories, league.waiver, addCandidates, allBench]);
   const addCustom = () => {
     const fa = addCandidates.find((r) => r.id === draft.addId) || (league.waiver.rows || []).find((r) => r.id === draft.addId);
     const bid = toDollars(draft.bidText, mode, budget);
@@ -1056,7 +1074,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
         <SectionLabel>Proposed claims — {visibleClaims.length}</SectionLabel>
         <div className="flex items-center gap-2 pb-2 flex-wrap px-1">
           {ordered.length > 0 && (
-            <button type="button" onClick={() => setPlan((pl) => ({ ...pl, unselected: allTicked ? ordered.map((c) => c.key) : [] }))} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="text-xs rounded-md px-2 py-1" data-select-all>
+            <button type="button" onClick={() => setPlan((pl) => ({ ...pl, unselected: allTicked ? ordered.filter((c) => cmp.get(c.key)?.status !== "same").map((c) => c.key) : [], dupOn: allTicked ? [] : ordered.filter((c) => cmp.get(c.key)?.status === "same").map((c) => c.key) }))} style={{ color: C.brand, border: `1px solid ${C.brand}66` }} className="text-xs rounded-md px-2 py-1" data-select-all>
               {allTicked ? "Deselect all" : "Select all"}
             </button>
           )}
@@ -1094,10 +1112,10 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
       {eff.warnings.map((w, i) => (
         <div key={i} style={{ color: C.minor }} className="text-[11px] px-1 pb-1">{w}</div>
       ))}
-      {hiddenCount > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-1" data-hidden-existing>{hiddenCount} proposed claim{hiddenCount === 1 ? " is" : "s are"} already in Sleeper and hidden here.</div>}
+      {hiddenCount > 0 && <div style={{ color: C.textFaint }} className="text-[11px] px-1 pb-1" data-hidden-existing>{hiddenCount} proposed claim{hiddenCount === 1 ? " is" : "s are"} for a player whose game has started and {hiddenCount === 1 ? "is" : "are"} hidden until the week's last game ends.</div>}
       {visibleClaims.length === 0 ? (
         <div style={{ color: C.textMuted }} className="text-sm px-1 py-2">
-          {hiddenCount > 0 ? "Everything proposed is already queued in Sleeper." : <>No claims yet. Enter a bid on the Available page{plan.bids.length ? ", then tick the bench players you're willing to drop above" : ""}.</>}
+          {hiddenCount > 0 ? "Everything proposed is hidden until the week's last game ends." : <>No claims yet. Enter a bid on the Available page{plan.bids.length ? ", then tick the bench players you're willing to drop above" : ""}.</>}
         </div>
       ) : (
         <div className="space-y-3">
@@ -1116,7 +1134,11 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
                   setPlan((pl) => ({ ...pl, order: next }));
                 }}
                 render={(c, { handleProps, groupHandleProps, dragging }) => (
-                  <ClaimRow c={c} result={resultByKey.get(c.key)} sim={mcByKey.get(c.key)} mode={mode} budget={budget} isFaab={isFaab} bench={benchByProj} dragging={dragging} handle={<DragHandle handleProps={handleProps} dragging={dragging} />} groupHandle={g.claims.filter((x) => x.addId === c.addId).length > 1 ? <DragHandle big handleProps={groupHandleProps} dragging={dragging} /> : null} onBid={onBid} onDrop={onDrop} onDelete={onDelete} selected={!unselected.has(c.key)} onSelect={onSelect} />
+                  <div style={{ opacity: cmp.get(c.key)?.status === "same" && offOf(c) ? 0.5 : 1 }} data-claim-compare={cmp.get(c.key)?.status || "new"}>
+                  <ClaimRow c={c} result={resultByKey.get(c.key)} sim={mcByKey.get(c.key)} mode={mode} budget={budget} isFaab={isFaab} bench={benchByProj} dragging={dragging} handle={<DragHandle handleProps={handleProps} dragging={dragging} />} groupHandle={g.claims.filter((x) => x.addId === c.addId).length > 1 ? <DragHandle big handleProps={groupHandleProps} dragging={dragging} /> : null} onBid={onBid} onDrop={onDrop} onDelete={onDelete} selected={!offOf(c)} onSelect={onSelect} />
+                  {cmp.get(c.key)?.status === "same" && <div style={{ color: C.textFaint }} className="text-[11px] px-3 pb-1" data-claim-note>Already queued in Sleeper with this bid and drop. Tick it to cancel and re-push it in this order.</div>}
+                  {(cmp.get(c.key)?.notes || []).map((n, i) => <div key={i} style={{ color: C.minor }} className="text-[11px] px-3 pb-1" data-claim-note>{n}</div>)}
+                  </div>
                 )}
               />
             </div>
@@ -1124,7 +1146,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
         </div>
       )}
 
-      <ClaimsPush league={league} ordered={toPush} onSent={(pushed) => { setSentTick((t) => t + 1); if (pushed?.length) setPlan((pl) => afterPush(pl, pushed)); }} pushSignal={pushSignal} existing={existing} isFaab={isFaab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} nameOf={nameOf} />
+      <ClaimsPush league={league} ordered={toPush} cancelList={pushPlan.cancel} resendAll={pushPlan.resendAll} integ={integ} setInteg={setInteg} plan={plan} setPlan={setPlan} onSent={(pushed) => { setSentTick((t) => t + 1); if (pushed?.length) setPlan((pl) => afterPush(pl, pushed)); }} pushSignal={pushSignal} existing={existing} isFaab={isFaab} onRefresh={onRefresh} onOpenAccount={onOpenAccount} nameOf={nameOf} />
 
       {toPush.length > 0 && (
         <>
@@ -1150,7 +1172,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
 // v3.0: push the proposed claims to Sleeper (private API, opt-in, confirm, read-back).
 // The FIRST push is a single claim; once one has been read back from Sleeper — or the user has confirmed he can
 // see it in Sleeper (v4.1) — every ticked claim goes in one go.
-function ClaimsPush({ league, ordered, onSent = null, pushSignal = 0, existing, isFaab, onRefresh, onOpenAccount, nameOf = (id) => ({ id, name: id }) }) {
+function ClaimsPush({ league, ordered, cancelList = [], resendAll = false, integ = null, setInteg = () => {}, plan = null, setPlan = () => {}, onSent = null, pushSignal = 0, existing, isFaab, onRefresh, onOpenAccount, nameOf = (id) => ({ id, name: id }) }) {
   const [st, setSt] = useState(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1163,6 +1185,18 @@ function ClaimsPush({ league, ordered, onSent = null, pushSignal = 0, existing, 
   const proven = Boolean(st?.claimsProven) || Boolean(st?.log?.some((l) => l.action === "submit_waiver_claim" && l.ok && /and verified/.test(l.detail || "")));
   const batch = proven ? ordered : ordered.slice(0, 1);
   const label = (c) => (isFaab ? describeClaim(c) : `Claim ${c.addName}${c.dropName ? ` and drop ${c.dropName}` : " (no drop)"}`);
+  const budgetOf = league.waiverInfo?.budget || 0;
+  const chosenIntegration = () => (integ?.sel || []).map((id) => {
+    const x = existing.find((e) => e.txId === id);
+    const bid = isFaab ? toDollars(integ.text[id], plan.entryMode, budgetOf) : 0;
+    return { x, bid };
+  });
+  const integReady = Boolean(integ) && integ.sel.length > 0 && chosenIntegration().every((c) => c.x && c.bid != null);
+  const confirmIntegration = () => {
+    // v4.17 (P-32): tick each selected claim's drop on Drop candidates, put its bid on the pickup on Available, recalculate.
+    setPlan((pl) => applyIntegration(pl, chosenIntegration(), nameOf, setBid));
+    setInteg(null);
+  };
   const rootRef = useRef(null);
   useEffect(() => {
     // v4.9: the bar's "Push to Sleeper" button opens the confirm box here and scrolls it into view.
@@ -1177,7 +1211,31 @@ function ClaimsPush({ league, ordered, onSent = null, pushSignal = 0, existing, 
     setBusy(true);
     const out = [];
     const okClaims = [];
-    for (const c of batch) {
+    // v4.17 (P-32): updates are cancel + re-push. Cancel the queued claims first and only push once every cancel was accepted.
+    let cancelFailed = false;
+    for (const x of cancelList) {
+      try {
+        const r = await api.cancelClaim(league.id, x.txId, x.leg ?? null);
+        out.push({ label: `Cancel queued claim ${x.txId}`, ok: r.ok, detail: r.detail });
+        if (!r.ok) { cancelFailed = true; break; }
+        const q = existing.find((e) => String(e.txId) === String(x.txId));
+        if (q) forgetSent(league.id, { addId: q.addId, dropId: q.dropId, bid: q.bid });
+      } catch (e) {
+        out.push({ label: `Cancel queued claim ${x.txId}`, ok: false, detail: e.message });
+        cancelFailed = true;
+        break;
+      }
+    }
+    if (cancelFailed) {
+      out.push({ label: "Nothing was pushed", ok: false, detail: "a cancel wasn't accepted, so the new claims were held back to avoid doubling up." });
+      setResults(out);
+      setBusy(false);
+      setConfirming(false);
+      loadStatus();
+      onRefresh?.();
+      return;
+    }
+    for (const c of (cancelList.length ? ordered : batch)) {
       try {
         const r = await api.pushClaim(league.id, { addId: c.addId, dropId: c.dropId, bid: c.bid }, { keys: pushKeys(league, "waiver"), baseline: waiverBaselineKeys(league) });
         out.push({ label: label(c), ok: r.ok, verified: r.verified, detail: r.detail });
@@ -1221,18 +1279,33 @@ function ClaimsPush({ league, ordered, onSent = null, pushSignal = 0, existing, 
         {league.privateInfo?.claims?.error && <div style={{ color: C.minor }} className="text-[11px] px-1">Couldn't read your queued claims from Sleeper ({league.privateInfo.claims.error}) — proposed claims may duplicate ones already there.</div>}
         {existing.length > 0 && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y" data-existing-claims>
-            <div style={{ color: C.textFaint }} className="px-3 py-1.5 text-[11px]">Already queued in Sleeper</div>
+            <div className="px-3 py-1.5 flex items-center justify-between gap-2">
+              <span style={{ color: C.textFaint }} className="text-[11px]">Already queued in Sleeper</span>
+              {plan && (integ ? (
+                <button type="button" disabled={!integReady} onClick={confirmIntegration} style={{ background: C.brand, color: "#fff", border: `1px solid ${C.brand}`, opacity: integReady ? 1 : 0.5 }} className="text-xs rounded-md px-2 py-1" data-confirm-updates>Confirm updates</button>
+              ) : (
+                <button type="button" onClick={() => setInteg({ sel: [], text: {} })} style={{ background: "transparent", color: C.brand, border: `1px solid ${C.brand}` }} className="text-xs rounded-md px-2 py-1" data-integrate-claims>Integrate claims</button>
+              ))}
+            </div>
             {existing.map((x) => {
               const add = nameOf(x.addId);
               const drop = x.dropId ? nameOf(x.dropId) : null;
+              const row = integrateRow(x, plan?.bids || []);
+              const picked = integ?.sel.includes(x.txId);
               return (
                 <div key={x.key} style={{ color: C.text, borderColor: C.border }} className="px-3 py-2 text-xs flex items-center justify-between gap-2" data-existing-claim={x.txId}>
-                  <span className="min-w-0">
+                  {integ && <input type="checkbox" checked={Boolean(picked)} onChange={(e) => setInteg((v) => ({ sel: e.target.checked ? [...v.sel, x.txId] : v.sel.filter((t) => t !== x.txId), text: e.target.checked && v.text[x.txId] == null ? { ...v.text, [x.txId]: row.prefill == null ? "" : fromDollars(row.prefill, plan.entryMode, budgetOf) } : v.text }))} aria-label={`Integrate the claim for ${add.name}`} data-integrate-check />}
+                  <span className="min-w-0 flex-1">
                     Add <PlayerLink player={add} className="inline underline">{add.name}</PlayerLink>
                     {drop ? <>, drop <PlayerLink player={drop} className="inline underline">{drop.name}</PlayerLink></> : ""}
-                    {isFaab ? ` · bid ${fmtMoney(x.bid)}` : ""}
+                    {isFaab && !integ ? ` · bid ${fmtMoney(x.bid)}` : ""}
+                    {integ && picked && row.differs && <div style={{ color: C.minor }} className="text-[11px]" data-integrate-differs>Queued bid {fmtMoney(row.oldBid)} · Available page bid {fmtMoney(row.availableBid)} — enter the bid to use.</div>}
                   </span>
-                  <button type="button" onClick={() => cancel(x)} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded px-2 py-0.5 text-[11px] shrink-0">Cancel</button>
+                  {integ ? (
+                    isFaab && picked && <input value={integ.text[x.txId] ?? ""} onChange={(e) => setInteg((v) => ({ ...v, text: { ...v.text, [x.txId]: e.target.value } }))} placeholder={plan.entryMode === "percent" ? "bid %" : "bid $"} inputMode="decimal" style={{ ...inputStyle, width: 80 }} className="rounded px-2 py-1 text-xs outline-none" aria-label="Bid" data-integrate-bid />
+                  ) : (
+                    <button type="button" onClick={() => cancel(x)} style={{ color: C.major, border: `1px solid ${C.major}66` }} className="rounded px-2 py-0.5 text-[11px] shrink-0">Cancel</button>
+                  )}
                 </div>
               );
             })}
@@ -1245,7 +1318,7 @@ function ClaimsPush({ league, ordered, onSent = null, pushSignal = 0, existing, 
             {proven ? `Push ${ordered.length} claim${ordered.length === 1 ? "" : "s"} to Sleeper` : "Push first claim to Sleeper (test)"}
           </button>
         ) : (
-          <ConfirmPush title={proven ? "Send these claims to Sleeper?" : "Send ONE test claim to Sleeper?"} lines={batch.map(label)} buttonLabel={proven ? "Yes, submit them" : "Yes, submit this claim"} busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note={proven ? "Each claim is read back from Sleeper; the push stops at the first one Sleeper doesn't accept." : "This sends only the first ticked claim and reads it back. Once one is confirmed — by the read-back or by you seeing it in Sleeper — the next push sends the rest. Either way, the checklist below still works."} />
+          <ConfirmPush title={proven ? "Send these claims to Sleeper?" : "Send ONE test claim to Sleeper?"} lines={[...(cancelList.length ? [`First cancel ${cancelList.length} queued claim${cancelList.length === 1 ? "" : "s"} in Sleeper${resendAll ? " (the order of identical claims changed, so every queued claim is re-sent)" : ""}`] : []), ...(cancelList.length ? ordered : batch).map(label)]} buttonLabel={proven ? "Yes, submit them" : "Yes, submit this claim"} busy={busy} onConfirm={send} onCancel={() => setConfirming(false)} note={proven ? "Each claim is read back from Sleeper; the push stops at the first one Sleeper doesn't accept." : "This sends only the first ticked claim and reads it back. Once one is confirmed — by the read-back or by you seeing it in Sleeper — the next push sends the rest. Either way, the checklist below still works."} />
         )}
         <PushResults results={results} />
         {sentUnverified && (

@@ -34,6 +34,17 @@ delivered zip.
 
 ---
 
+## v4.17.0 - 2026-11-08
+**Short:** v4.17.0 Claim compare, Multiview ticker API
+**Long:** v4.17.0: Claim Generator compares fresh claims with queued ones (duplicates greyed, update notes, Integrate claims, cancel then re-push) and a read-only ticker API with its own token for the IPTV Multiview app.
+
+- **Claim Generator (P-32):** claims are built from the Available bids and Drop candidates alone, and re-built from scratch whenever a bid or a ticked drop changes (manual edits, order and ticks go). Only then are they compared with the claims queued in Sleeper: an identical claim is shown greyed and unticked but can still be moved; a different bid or drop on the same pickup shows a note that the queued claim will be updated; a different pickup with the same drop shows a note. Sleeper has no edit call, so an update means cancelling the queued claim and pushing the new one; if identical claims are put in a different order than they sit in Sleeper, every queued claim is cancelled and re-sent in the new order. A push cancels first, stops if any cancel is not accepted, and only then sends the claims. "Integrate claims" (above the queued claims) turns them into a checklist with a bid box (filled with the queued bid, or left empty when the Available page already has a different bid, showing both); "Confirm updates" ticks each selected claim's drop and puts its bid on the pickup, then recalculates.
+- **Multiview ticker API (P-33):** read-only endpoints for the IPTV Multiview app, behind a separate revocable bearer token made in Account (Multiview access): `GET /api/ticker/summary`, `GET /api/ticker/stream` (server-sent `score` events when a starter's points rise, kept 10 minutes), `GET /api/headshot/<playerId>`, `GET /api/ticker/health`. Leagues are the ones Game Day includes; league colour is Game Day's rule. The contract is in `docs/multiview-api-handoff.md`. The stream needs no proxy buffering, which is set in the client image's nginx.
+**Manual step required:** none (no compose change beyond the image tag, no new env var). Set `IMAGE_TAG=4.17.0` in the stack `.env`.
+
+- **Not tested here:** nothing ran against live Sleeper, ESPN or Multiview (unit tests, 73 in all, and a client build). Sleeper's cancel call has not been seen to work live; a failed cancel stops the push. The stream was tested through its functions, not through nginx.
+- **Still open:** P-4 (dynasty value trend), P-5 to P-11. v4.16.0 was built but not deployed; this release includes it.
+
 ## v4.16.0 - 2026-11-05
 **Short:** v4.16.0 IR drop swap, source pop-ups, tighter news
 **Long:** v4.16.0: IR drops swap in the best IR-eligible bench player first, source pop-ups with links, news only about the player, waiver follow-up checks at 12:30 PM and before kickoffs, manual lineup moves never reversed, cheer meter slots in time order.

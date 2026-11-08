@@ -33,6 +33,7 @@ import * as pendingMoves from "./pendingMoves.js";
 import { computeAccuracy } from "./accuracy.js";
 import * as backfill from "./backfill.js";
 import * as gameday from "./gameday.js";
+import * as ticker from "./ticker.js"; // v4.17.0
 import * as pickem from "./pickem.js";
 import * as cbs from "./cbs.js";
 import * as performance from "./performance.js";
@@ -383,6 +384,7 @@ app.use("/api/push", requireAuth);
 app.use("/api/dvp", requireAuth);
 app.use("/api/weather", requireAuth);
 app.use("/api/img", requireAuth);
+app.use("/api/ticker-token", requireAuth); // v4.17.0: token management is a logged-in owner action; the ticker routes themselves use the bearer token
 app.use("/api/variances", requireAuth);
 app.use("/api/waiver-plan", requireAuth);
 app.use("/api/private", requireAuth);
@@ -1423,6 +1425,48 @@ app.get("/api/img/:kind/:id", async (req, res) => {
   } catch {
     res.status(404).end();
   }
+});
+
+/* ---------------- Ticker API for IPTV Multiview (v4.17.0, P-33; read-only, bearer token) ---------------- */
+app.get("/api/ticker-token", requireOwner, (req, res) => res.json(ticker.tokenStatus(req.user.username)));
+app.post("/api/ticker-token", requireOwner, (req, res) => res.json(ticker.createToken(req.user.username))); // the token is shown once
+app.delete("/api/ticker-token", requireOwner, (req, res) => {
+  ticker.revokeToken(req.user.username);
+  res.json({ ok: true });
+});
+function tickerAuth(req, res, next) {
+  const username = ticker.verifyBearer(req.headers.authorization);
+  if (!username) return res.status(401).set("WWW-Authenticate", "Bearer").json({ error: "A valid ticker token is required." });
+  req.tickerUser = username;
+  next();
+}
+app.get("/api/ticker/health", tickerAuth, (req, res) => res.json({ status: "ok", version: APP_VERSION, lastProviderUpdate: ticker.lastUpdate(req.tickerUser) }));
+app.get("/api/ticker/summary", tickerAuth, async (req, res) => {
+  try {
+    const week = req.query.week != null && /^\d{1,2}$/.test(String(req.query.week)) ? Number(req.query.week) : null;
+    res.set("Cache-Control", "no-store");
+    res.json(await ticker.getSummary(req.tickerUser, { week, bench: req.query.bench === "1" }));
+  } catch (err) {
+    res.status(502).json({ error: `Couldn't build the ticker summary: ${err.message}` });
+  }
+});
+app.get("/api/ticker/stream", tickerAuth, (req, res) => {
+  res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+  req.socket.setTimeout(0);
+  res.flushHeaders?.();
+  res.write(": connected\n\n");
+  const since = req.headers["last-event-id"] || req.query.since || null;
+  const unsubscribe = ticker.subscribe(req.tickerUser, res, since);
+  req.on("close", unsubscribe);
+});
+app.get("/api/headshot/:playerId", tickerAuth, async (req, res) => {
+  const id = String(req.params.playerId || "");
+  res.set("Cache-Control", "private, max-age=86400");
+  try {
+    const img = /^[A-Za-z0-9]{1,12}$/.test(id) ? await getImage("player", id) : null;
+    if (img) return res.type(img.type).send(img.buf);
+  } catch { /* fall through to the placeholder */ }
+  res.type("image/svg+xml").send(ticker.PLACEHOLDER_SVG);
 });
 
 /* ---------------- Data-source status (v2.6) ---------------- */
