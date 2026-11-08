@@ -52,6 +52,13 @@ Notes / questions: Today `server/entrypoint.sh` starts as root (under `tini`), r
 - Option B (only when other changes need it): switch to `USER 1000:100`. Needs the server's data folder re-owned to 1000:100 once, a root step for James, before the first start of that release, plus a data copy first.
 (An earlier note here said the image has no `USER` and runs as root; that was wrong: only the entrypoint's first step runs as root.)
 
+### P-34 - Ticker summary: slot, kickoffAt, statLine/stats per player (Multiview follow-up)
+Requested: 2026-11-08 (James, follow-up file from the Multiview chat)
+Type: patch (additive fields on GET /api/ticker/summary; no compose or env change)        Status: Pending
+Notes / questions: On each players[] entry add (1) `slot` (QB, RB, WR, TE, FLEX, SUPER_FLEX, K, DEF) and `slotOrder` (integer lineup order), (2) `kickoffAt` (ISO UTC of his game, null if unknown), (3) `statLine` short string for live or final games (null before kickoff) or, if only raw stats are available, a `stats` object (passYds, passTd, int, rushAtt, rushYds, rushTd, rec, recYds, recTd, fgm, xpm, sacks) and say which. (4) Confirm league `colour` is the colour to use for team name and score (no `mine.colour`). Also confirm: (a) DEF playerId = team abbreviation and headshot works, (b) stable player order / slotOrder, (c) ticker read by Multiview's server only, so LAN address + token are the only setup. Deliverable back: the version carrying the fields and an updated example response.
+Readings from code (2026-11-08, not built): kickoff exists already (Game Day kickoffMillis); slot comes from Sleeper's starters order aligned with the league's roster_positions (needs a small change in gameday.js); live stats are cached 90 s and raw, so `stats` is the likely form, `statLine` only if formatted server-side; DEF ids are team abbreviations and /api/headshot serves the team logo for them (not run live).
+Build only on James's "build".
+
 ## Done
 
 ### P-26 - Drop lists: IR players only when an IR-eligible player is off IR; dropping an IR player swaps first
