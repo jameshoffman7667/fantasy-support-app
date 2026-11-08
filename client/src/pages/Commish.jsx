@@ -2,7 +2,7 @@ import * as api from "../api.js";
 import { ArrowLeft, ChevronRight, Copy, Loader2, Trophy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Avatar, ConfirmPush, SectionLabel } from "../ui/common.jsx";
-import { C, fmtWhen, inputStyle } from "../ui/theme.js";
+import { C, ON_OK, fmtWhen, inputStyle } from "../ui/theme.js";
 
 /* ------------------------------------------------------------------ */
 /*  v3.8 COMMISH: Charters + Best Ball                                  */
@@ -44,7 +44,7 @@ function SourceForm({ leagueId, onDone, compact = false }) {
     <div className="space-y-2" data-charter-source-form>
       <div className="flex gap-2">
         <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Google Docs / Drive link (Anyone with the link can view)" style={inputStyle} className="flex-1 min-w-0 rounded px-2 py-1.5 text-sm outline-none" aria-label="Charter link" data-charter-link />
-        <button type="button" disabled={!leagueId || !link.trim() || busy} onClick={() => run(() => api.setCharterLink(leagueId, link.trim()))} style={{ background: C.brand, color: C.text, opacity: !leagueId || !link.trim() || busy ? 0.5 : 1 }} className="rounded px-3 py-1.5 text-sm shrink-0" data-charter-read>
+        <button type="button" disabled={!leagueId || !link.trim() || busy} onClick={() => run(() => api.setCharterLink(leagueId, link.trim()))} style={{ background: C.brand, color: "#fff", opacity: !leagueId || !link.trim() || busy ? 0.5 : 1 }} className="rounded px-3 py-1.5 text-sm shrink-0" data-charter-read>
           {busy ? "Reading…" : "Read"}
         </button>
       </div>
@@ -82,7 +82,7 @@ function ActionEditor({ a, onSave, onCancel }) {
         <label className="flex items-center gap-1"><input type="checkbox" checked={d.repeat} onChange={(e) => setD({ ...d, repeat: e.target.checked })} /> Every year</label>
         <span className="flex-1" />
         <button type="button" onClick={onCancel} style={{ color: C.textMuted }} className="underline">Cancel</button>
-        <button type="button" disabled={!d.title.trim()} onClick={() => onSave({ ...a, title: d.title.trim(), description: d.description, due: d.due || null, repeat: d.repeat ? "yearly" : null })} style={{ background: C.brand, color: C.text, opacity: d.title.trim() ? 1 : 0.5 }} className="rounded px-2.5 py-1">Save</button>
+        <button type="button" disabled={!d.title.trim()} onClick={() => onSave({ ...a, title: d.title.trim(), description: d.description, due: d.due || null, repeat: d.repeat ? "yearly" : null })} style={{ background: C.brand, color: "#fff", opacity: d.title.trim() ? 1 : 0.5 }} className="rounded px-2.5 py-1">Save</button>
       </div>
     </div>
   );
@@ -175,7 +175,7 @@ function RuleChanges({ charter, onSaveRules, onDraft, onResolve, gemini }) {
       <SectionLabel>Rule changes</SectionLabel>
       <div className="flex gap-2 mb-2">
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Proposed rule change" style={inputStyle} className="flex-1 min-w-0 rounded px-2 py-1.5 text-sm outline-none" aria-label="Proposed rule change" data-rule-input />
-        <button type="button" disabled={!text.trim()} onClick={() => (onSaveRules([...rules, { id: newId(), text: text.trim(), status: "proposed", createdAt: Date.now() }]), setText(""))} style={{ background: C.brand, color: C.text, opacity: text.trim() ? 1 : 0.5 }} className="rounded px-3 py-1.5 text-sm shrink-0" data-rule-add>Add</button>
+        <button type="button" disabled={!text.trim()} onClick={() => (onSaveRules([...rules, { id: newId(), text: text.trim(), status: "proposed", createdAt: Date.now() }]), setText(""))} style={{ background: C.brand, color: "#fff", opacity: text.trim() ? 1 : 0.5 }} className="rounded px-3 py-1.5 text-sm shrink-0" data-rule-add>Add</button>
       </div>
       <div className="space-y-1.5">
         {rules.length === 0 && <div className="text-xs px-1" style={{ color: C.textMuted }}>No rule changes recorded.</div>}
@@ -199,7 +199,7 @@ function RuleChanges({ charter, onSaveRules, onDraft, onResolve, gemini }) {
         ))}
       </div>
       {approved.length > 0 && !charter.draft && (
-        <button type="button" disabled={!gemini || busy} onClick={draft} style={{ background: C.brand, color: C.text, opacity: !gemini || busy ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2 text-sm mt-2" data-draft-charter>
+        <button type="button" disabled={!gemini || busy} onClick={draft} style={{ background: C.brand, color: "#fff", opacity: !gemini || busy ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2 text-sm mt-2" data-draft-charter>
           {busy ? "Drafting…" : `Draft the charter update with ${approved.length} approved change${approved.length === 1 ? "" : "s"} (Gemini)`}
         </button>
       )}
@@ -227,7 +227,7 @@ function RuleChanges({ charter, onSaveRules, onDraft, onResolve, gemini }) {
             >
               <Copy size={13} /> {copied ? "Copied" : "Copy"}
             </button>
-            <button type="button" onClick={() => onResolve(true, md)} style={{ background: C.ok, color: "#10171A" }} className="rounded-md px-3 py-1.5" data-draft-accept>Accept</button>
+            <button type="button" onClick={() => onResolve(true, md)} style={{ background: C.ok, color: ON_OK }} className="rounded-md px-3 py-1.5" data-draft-accept>Accept</button>
             <button type="button" onClick={() => onResolve(false)} style={btn(C.textMuted)} className="rounded-md px-3 py-1.5">Discard</button>
           </div>
         </div>
@@ -535,7 +535,7 @@ function BestBallDetail({ league, all, gemini, onBack }) {
                   })}
                 </div>
               )}
-              <button type="button" disabled={saving} onClick={() => save(form)} style={{ background: C.brand, color: C.text, opacity: saving ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2 text-sm" data-bb-save>{saving ? "Saving…" : "Save and recalculate"}</button>
+              <button type="button" disabled={saving} onClick={() => save(form)} style={{ background: C.brand, color: "#fff", opacity: saving ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2 text-sm" data-bb-save>{saving ? "Saving…" : "Save and recalculate"}</button>
             </>
           )}
         </div>

@@ -453,6 +453,11 @@ export function buildTradeIdeas(leagueId, forIds, awayIds) {
   return jsonPost(`/api/trade/ideas/build`, { leagueId, forIds, awayIds });
 }
 
+// v4.18.0 (P-7): owner-only audit log (sign-ins, pushes, setting and user changes), newest first.
+export function getAuditLog(kind = "", limit = 200) {
+  return request(`/api/audit-log?limit=${limit}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}`);
+}
+
 // v4.17.0: the read-only ticker token for the IPTV Multiview app (owner only; the token is shown once).
 export function getTickerToken() {
   return request(`/api/ticker-token`);

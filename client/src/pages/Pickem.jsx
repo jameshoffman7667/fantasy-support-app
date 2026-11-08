@@ -3,7 +3,8 @@ import { SourceSummary } from "../ui/sourceNotes.jsx"; // v4.16.0 (P-28)
 import { Settings2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { BootstrapScreen, ConfirmPush, ErrorScreen, RedDot, TeamLogo, WeatherChip } from "../ui/common.jsx";
-import { C, TEAM_COLORS, pct } from "../ui/theme.js";
+import { C, ON_OK, TEAM_COLORS, pct } from "../ui/theme.js";
+import { useDesktop } from "../ui/desktop.js"; // v4.18.0 (P-5)
 
 function hexDist(a, b) {
   const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -33,6 +34,7 @@ function barColors(away, home) {
 // card. After the game: ✓ on the winner's box, ✗ on the loser's outside corner. The card's own border shows how
 // the pick that counts (yours, else the app's) is doing: green leading/won, red trailing/lost, grey level.
 function PickCard({ g, onSeen, onChoose }) {
+  const desktop = useDesktop();
   const colors = barColors(g.away, g.home);
   const awayP = g.homeProb == null ? 0.5 : 1 - g.homeProb;
   const textOn = (hex) => (luminance(hex) > 0.6 ? "#10171A" : "#FFFFFF");
@@ -85,7 +87,7 @@ function PickCard({ g, onSeen, onChoose }) {
         >
           <TeamLogo team={team} size={46} />
           {winner === team && (
-            <span style={{ background: C.ok, color: "#10171A" }} className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-bold" data-pick-won aria-label="won">✓</span>
+            <span style={{ background: C.ok, color: ON_OK }} className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-bold" data-pick-won aria-label="won">✓</span>
           )}
           {lost && (
             <span style={{ background: C.major, color: "#fff" }} className={`absolute -top-2 ${align === "items-start" ? "-left-2" : "-right-2"} w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold`} data-pick-lost aria-label="lost">✕</span>
@@ -112,12 +114,9 @@ function PickCard({ g, onSeen, onChoose }) {
             <RedDot title="Recommendation changed" /> App pick changed{g.prevPick ? ` from ${g.prevPick}` : ""} — tap to dismiss
           </div>
         )}
-        {w && (
-          <div className="flex flex-col items-center gap-0.5" data-pick-weather={w.flag ? "bad" : "ok"}>
-            <WeatherChip player={{ weather: w }} />
-            {w.flag && <span style={{ color: C.minor }} className="text-[10px] text-center">{w.reasons.join("; ")}</span>}
-          </div>
-        )}
+        {desktop ? (
+          <div className="flex gap-6 items-center" data-pick-wide>
+            <div className="w-[46%] shrink-0 space-y-2">
         <div className="flex items-center gap-2">
           {side(g.away, "Away", "items-start")}
           <div className="flex-1 min-w-0">
@@ -140,6 +139,16 @@ function PickCard({ g, onSeen, onChoose }) {
             ? `App pick ${g.pick} (dashed)${canPick ? " — tap a logo to make your own pick" : ""}`
             : "No pick yet"}
         </div>
+
+            </div>
+            <div className="flex-1 min-w-0 space-y-2" data-pick-side-info>
+        {w && (
+          <div className="flex flex-col items-center gap-0.5" data-pick-weather={w.flag ? "bad" : "ok"}>
+            <WeatherChip player={{ weather: w }} />
+            {w.flag && <span style={{ color: C.minor }} className="text-[10px] text-center">{w.reasons.join("; ")}</span>}
+          </div>
+        )}
+
         {g.reason && g.upset && <div style={{ color: C.textMuted }} className="text-[11px]">{g.reason}</div>}
         {g.underdog && (
           <div>
@@ -163,6 +172,68 @@ function PickCard({ g, onSeen, onChoose }) {
             {g.gemini.note}
             {g.gemini.sources?.length > 0 && <span style={{ color: C.textFaint }}> — {g.gemini.sources.join(", ")}</span>}
           </SourceSummary>
+        )}
+
+            </div>
+          </div>
+        ) : (
+          <>
+        {w && (
+          <div className="flex flex-col items-center gap-0.5" data-pick-weather={w.flag ? "bad" : "ok"}>
+            <WeatherChip player={{ weather: w }} />
+            {w.flag && <span style={{ color: C.minor }} className="text-[10px] text-center">{w.reasons.join("; ")}</span>}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          {side(g.away, "Away", "items-start")}
+          <div className="flex-1 min-w-0">
+            <div className="flex h-7 rounded overflow-hidden text-[11px] font-semibold" role="img" aria-label={`Win chance: ${g.away} ${pct(awayP)}, ${g.home} ${pct(g.homeProb)}`}>
+              <div style={{ width: `${awayP * 100}%`, background: colors.away, color: textOn(colors.away) }} className="flex items-center pl-1.5 min-w-[2.25rem]">{pct(awayP)}</div>
+              <div style={{ width: `${(1 - awayP) * 100}%`, background: colors.home, color: textOn(colors.home) }} className="flex items-center justify-end pr-1.5 min-w-[2.25rem]">{pct(g.homeProb)}</div>
+            </div>
+            <div style={{ color: C.textFaint }} className="text-[9px] mt-1 text-center leading-tight">
+              {g.source || "no line yet"} · FPI {g.fpiHomeProb != null ? `${g.home} ${pct(g.fpiHomeProb)}` : "—"}
+            </div>
+          </div>
+          {side(g.home, "Home", "items-end")}
+        </div>
+        <div style={{ color: C.textFaint }} className="text-[10px] text-center" data-pick-legend>
+          {g.chosen
+            ? g.pick && g.pick !== g.chosen
+              ? `Your pick ${g.chosen} (solid) · app pick ${g.pick} (dashed)`
+              : `Your pick ${g.chosen} — same as the app`
+            : g.pick
+            ? `App pick ${g.pick} (dashed)${canPick ? " — tap a logo to make your own pick" : ""}`
+            : "No pick yet"}
+        </div>
+
+        {g.reason && g.upset && <div style={{ color: C.textMuted }} className="text-[11px]">{g.reason}</div>}
+        {g.underdog && (
+          <div>
+            <div className="flex justify-between text-[10px]" style={{ color: C.textMuted }}>
+              <span>Upset potential ({g.underdog})</span>
+              <span title={`odds ${g.upsetParts?.base} · line move ${g.upsetParts?.shift} · articles ${g.upsetParts?.gemini}`}>{g.upsetPotential}/100</span>
+            </div>
+            <div className="h-1.5 rounded mt-0.5" style={{ background: C.surfaceRaised }}>
+              <div className="h-1.5 rounded" style={{ width: `${g.upsetPotential}%`, background: g.upsetPotential >= 60 ? C.major : g.upsetPotential >= 35 ? C.minor : C.textFaint }} />
+            </div>
+            <div style={{ color: C.textFaint }} className="text-[10px] mt-0.5">
+              {Math.abs(g.dogShift) >= 0.005
+                ? `Line moved ${g.dogShift > 0 ? "toward" : "away from"} ${g.underdog} by ${Math.abs(Math.round(g.dogShift * 100))}% since ${g.openedAt ? new Date(g.openedAt).toLocaleDateString([], { weekday: "short" }) : "the first snapshot"}`
+                : "No line movement yet"}
+              {g.gemini ? ` · ${g.gemini.upsetMentions} article(s) picking the upset` : ""}
+            </div>
+          </div>
+        )}
+        {g.gemini?.note && (
+          <SourceSummary title={`${g.away} @ ${g.home} — upset coverage`} item={g.gemini} summary={g.gemini.note} className="block text-[11px]" style={{ color: C.textMuted }}>
+            {g.gemini.note}
+            {g.gemini.sources?.length > 0 && <span style={{ color: C.textFaint }}> — {g.gemini.sources.join(", ")}</span>}
+          </SourceSummary>
+        )}
+
+          </>
         )}
       </div>
       <div style={{ color: live ? C.major : final ? C.textMuted : C.textFaint }} className="text-[11px] text-center mt-1" data-pick-status>

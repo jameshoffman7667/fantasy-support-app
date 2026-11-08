@@ -1,4 +1,5 @@
 import db from "./db.js";
+import { migrate } from "./migrate.js";
 
 /**
  * v2.5 SQLite tables for projection tracking, lean calibration, the local
@@ -87,9 +88,9 @@ db.exec(`
 `);
 
 // Column added after the table first shipped — add it to existing databases.
-if (!db.prepare("PRAGMA table_info(crosswalk)").all().some((c) => c.name === "ext_ids")) {
-  db.exec("ALTER TABLE crosswalk ADD COLUMN ext_ids TEXT");
-}
+migrate(db, "2.5-crosswalk-ext-ids", "crosswalk gains ext_ids", () => {
+  if (!db.prepare("PRAGMA table_info(crosswalk)").all().some((c) => c.name === "ext_ids")) db.exec("ALTER TABLE crosswalk ADD COLUMN ext_ids TEXT");
+});
 
 /* ---------------- app state ---------------- */
 export function getState(key, fallback = null) {

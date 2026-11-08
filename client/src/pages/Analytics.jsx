@@ -531,7 +531,7 @@ function WeatherSettingsPanel() {
         <Toggle checked={s.enabled !== false} onChange={(v) => setS({ ...s, enabled: v })}>Flags on</Toggle>
         <button
           onClick={() => api.saveWeatherSettings(s).then((n) => { setS(n); setSaved(true); })}
-          style={{ background: C.brand, color: C.text }}
+          style={{ background: C.brand, color: "#fff" }}
           className="text-xs rounded-md px-3 py-1.5"
         >
           Save

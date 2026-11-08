@@ -1103,7 +1103,7 @@ function ClaimsPage({ league, plan, setPlan, onRefresh, onOpenAccount, pushSigna
             {isFaab && (
               <input value={draft.bidText} onChange={(e) => setDraft({ ...draft, bidText: e.target.value })} placeholder={mode === "percent" ? "bid %" : "bid $"} inputMode="decimal" style={{ ...inputStyle, width: 90 }} className="rounded px-2 py-1.5 text-sm outline-none" aria-label="Bid" />
             )}
-            <button type="button" onClick={addCustom} disabled={!draft.addId || (isFaab && toDollars(draft.bidText, mode, budget) == null)} style={{ background: C.brand, color: C.text, opacity: !draft.addId || (isFaab && toDollars(draft.bidText, mode, budget) == null) ? 0.5 : 1 }} className="text-sm rounded-md px-3 py-1.5">
+            <button type="button" onClick={addCustom} disabled={!draft.addId || (isFaab && toDollars(draft.bidText, mode, budget) == null)} style={{ background: C.brand, color: "#fff", opacity: !draft.addId || (isFaab && toDollars(draft.bidText, mode, budget) == null) ? 0.5 : 1 }} className="text-sm rounded-md px-3 py-1.5">
               Add claim
             </button>
           </div>
@@ -1314,7 +1314,7 @@ function ClaimsPush({ league, ordered, cancelList = [], resendAll = false, integ
         {ordered.length === 0 ? (
           <div style={{ color: C.textMuted }} className="text-xs px-1">Nothing ticked to push.</div>
         ) : !confirming ? (
-          <button type="button" disabled={busy} onClick={() => setConfirming(true)} style={{ background: C.brand, color: C.text, opacity: busy ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium" data-push-claims>
+          <button type="button" disabled={busy} onClick={() => setConfirming(true)} style={{ background: C.brand, color: "#fff", opacity: busy ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium" data-push-claims>
             {proven ? `Push ${ordered.length} claim${ordered.length === 1 ? "" : "s"} to Sleeper` : "Push first claim to Sleeper (test)"}
           </button>
         ) : (
@@ -1445,7 +1445,7 @@ function OpponentsPage({ league }) {
             <select name="hour" defaultValue={w.hourET ?? 3} style={inputStyle} className="rounded px-1.5 py-1">
               {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{hourLabel(h)} ET</option>)}
             </select>
-            <button type="submit" style={{ background: C.brand, color: C.text }} className="rounded px-2.5 py-1">Save</button>
+            <button type="submit" style={{ background: C.brand, color: "#fff" }} className="rounded px-2.5 py-1">Save</button>
             {w.source === "your setting" && <button type="button" onClick={() => saveTime(0, 0, true)} style={{ color: C.textMuted }} className="underline">Use the league's setting</button>}
           </form>
         )}
@@ -1832,9 +1832,9 @@ export function WaiverTab({ league, sessionId, onRefresh, onOpenAccount, allLeag
             <button type="button" onClick={() => go(PAGE_FLOW[PAGE_FLOW.indexOf(sub) - 1])} style={{ flex: "1 1 0", color: C.text, border: `1px solid ${C.border}`, background: C.surface }} className="rounded-md py-2.5 text-sm font-medium" data-nav-back>← Back</button>
           )}
           {sub === "claims" ? (
-            <button type="button" onClick={() => setPushSignal((n) => n + 1)} style={{ flex: "2 1 0", background: C.brand, color: C.text }} className="rounded-md py-2.5 text-sm font-medium" data-nav-push>Push to Sleeper</button>
+            <button type="button" onClick={() => setPushSignal((n) => n + 1)} style={{ flex: "2 1 0", background: C.brand, color: "#fff" }} className="rounded-md py-2.5 text-sm font-medium" data-nav-push>Push to Sleeper</button>
           ) : (
-            <button type="button" onClick={() => go(PAGE_FLOW[PAGE_FLOW.indexOf(sub) + 1])} style={{ flex: sub === PAGE_FLOW[0] ? "1 1 100%" : "2 1 0", background: C.brand, color: C.text }} className="rounded-md py-2.5 text-sm font-medium" data-nav-next>Next →</button>
+            <button type="button" onClick={() => go(PAGE_FLOW[PAGE_FLOW.indexOf(sub) + 1])} style={{ flex: sub === PAGE_FLOW[0] ? "1 1 100%" : "2 1 0", background: C.brand, color: "#fff" }} className="rounded-md py-2.5 text-sm font-medium" data-nav-next>Next →</button>
           )}
         </div>
       )}

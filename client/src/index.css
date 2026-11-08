@@ -7,4 +7,11 @@
 html, body, #root {
   height: 100%;
   background: #10171a;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  html, body, #root {
+    background: #f2f6f5;
+    color-scheme: light;
+  }
 }

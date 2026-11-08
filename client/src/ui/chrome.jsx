@@ -3,6 +3,7 @@ import { ArrowLeftRight, Bell, BellOff, CheckCircle2, ChevronRight, ClipboardLis
 import React, { useEffect, useRef, useState } from "react";
 import { Avatar, FootballPlayerIcon, UprightsIcon } from "./common.jsx";
 import { C, STATUS } from "./theme.js";
+import { useDesktop } from "./desktop.js"; // v4.18.0 (P-5)
 
 function WeekPicker({ week, onChange, disabled }) {
   if (week == null) return null;
@@ -167,11 +168,16 @@ export const TAB_META = {
 // v3.9: the team pages as tabs under the League Management header (Overview, Roster, Waivers, …).
 // v4.1: the tabs look like the status boxes on the dashboard's league card (StatusBadge: same colour, tint and icon
 // per page status). Pages without a status (Overview, Outlook) are neutral boxes. The open page has a solid outline.
-export function LeagueTabs({ active, onSelect, statusOf }) {
+export function LeagueTabs({ active, onSelect, statusOf, vertical = false }) {
   // v4.4.2: no Overview / Outlook buttons here (Overview = the league name in the breadcrumb menu, Outlook = the dashboard card)
-  const tabs = Object.entries(TAB_META).filter(([key]) => key !== "odds").map(([key, m]) => ({ key, short: m.short }));
+  const tabs = Object.entries(TAB_META).filter(([key]) => key !== "odds").map(([key, m]) => ({ key, short: m.short, label: m.label }));
   return (
-    <div className="flex overflow-x-auto gap-1.5 px-3 py-2" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }} data-league-tabs>
+    <div className={vertical ? "flex flex-col gap-1.5 p-3" : "flex overflow-x-auto gap-1.5 px-3 py-2"} style={{ borderBottom: vertical ? "none" : `1px solid ${C.border}`, background: C.bg }} data-league-tabs>
+      {vertical && (
+        <button type="button" onClick={() => onSelect("overview")} aria-current={active === "overview" ? "page" : undefined} data-league-tab="overview" style={{ background: C.surface, color: active === "overview" ? C.text : C.textMuted, border: `1px solid ${active === "overview" ? C.brand : C.border}` }} className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-left">
+          Overview
+        </button>
+      )}
       {tabs.map((t) => {
         const st = statusOf?.(t.key);
         const s = st && STATUS[st] ? STATUS[st] : null;
@@ -187,10 +193,10 @@ export function LeagueTabs({ active, onSelect, statusOf }) {
             data-league-tab={t.key}
             data-tab-status={st || "none"}
             style={{ background: s ? s.bg : C.surface, color, border: `1px solid ${on ? color : `${s ? s.color : C.border}33`}`, boxShadow: on ? `inset 0 0 0 1px ${color}` : "none" }}
-            className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium whitespace-nowrap"
+            className={vertical ? "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-left" : "shrink-0 flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium whitespace-nowrap"}
           >
-            {Icon && <Icon size={11} strokeWidth={2.3} />}
-            {t.short}
+            {Icon && <Icon size={vertical ? 14 : 11} strokeWidth={2.3} />}
+            {vertical ? t.label : t.short}
           </button>
         );
       })}
@@ -293,14 +299,15 @@ const TABS = [
 
 export function TabBar({ active, onSelect, dots = {} }) {
   // v3.5: icon above a short label so every tab fits on a phone (and a fifth tab can be added).
+  const desktop = useDesktop();
   return (
-    <div className="flex" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+    <div className={desktop ? "flex gap-1 px-3" : "flex"} style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }} data-tab-bar>
       {TABS.map(({ key, label, Icon }) => (
         <button
           key={key}
           onClick={() => onSelect(key)}
           style={{ color: active === key ? C.text : C.textMuted, borderBottom: `2px solid ${active === key ? C.brand : "transparent"}` }}
-          className="flex-1 min-w-0 pt-2 pb-1.5 px-0.5 flex flex-col items-center justify-center gap-0.5"
+          className={desktop ? "min-w-0 py-2.5 px-4 flex items-center justify-center gap-2" : "flex-1 min-w-0 pt-2 pb-1.5 px-0.5 flex flex-col items-center justify-center gap-0.5"}
           aria-current={active === key ? "page" : undefined}
           data-tab={key}
         >
@@ -308,7 +315,7 @@ export function TabBar({ active, onSelect, dots = {} }) {
             <Icon size={18} />
             {dots[key] ? <span className="absolute -top-0.5 -right-1.5 inline-block w-2 h-2 rounded-full" style={{ background: C.major }} aria-label={key === "commish" ? "Charter action due within a week" : "Changed picks"} /> : null}
           </span>
-          <span className="text-[10.5px] font-medium leading-tight text-center">{label}</span>
+          <span className={desktop ? "text-sm font-medium leading-tight" : "text-[10.5px] font-medium leading-tight text-center"}>{label}</span>
         </button>
       ))}
     </div>

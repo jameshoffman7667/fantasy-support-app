@@ -34,6 +34,21 @@ delivered zip.
 
 ---
 
+## v4.18.0 - 2026-11-08
+**Short:** v4.18.0 Desktop layout, light mode, audit log
+**Long:** v4.18.0: desktop layout in columns for 16:10 screens, light mode that follows the device, an activity log in Account, a smaller first download (pages load on use) and safer, recorded database changes.
+
+- **Desktop layout (P-5):** from 1024 px wide the app uses columns, planned for a 16:10 screen (content tops out at 1600 px, wider screens keep blank sides). League Management: league cards on the left, the chosen league's pages (Overview, Roster, Waivers, Trade Radar, Injury Watch, League) in the middle, the page on the right. Game Day: leagues in a column on the left, content widened. Pick'em: wider cards with the write-up, weather and upset potential on the right, so each row is shorter. Analytics and Commish are a little wider; Account, sign-in and league choice stay phone-sized and centred. The top tabs sit left in one row. Phones are unchanged.
+- **Light mode (P-6):** the app follows the device's colour scheme (dark when the browser doesn't say), with a matching browser theme colour. If the device switches while the app is open the page reloads once.
+- **Activity log (P-7):** Account → Activity log (owner only) lists sign-ins (and failed ones), sign-outs, pushes to Sleeper and CBS, and setting, credential and user changes, newest first, with time, user, result and address. No passwords, tokens or request bodies are stored; entries are kept 90 days. Jobs the server runs on its own are not listed.
+- **Smaller first download (P-8):** the main script is about 340 kB (was about 730 kB); Roster, Waivers, Trade, Injury, League, Outlook, Game Day, Pick'em, Analytics and Commish load the first time they are opened.
+- **Database changes (P-9):** every change to the database structure is now recorded in a `schema_version` table and runs once, inside a transaction. A change that has to drop or rewrite data first writes a timestamped copy of the database to the data folder's `backups` folder (never deleted by the app). The older changes were recorded as applied the first time this version starts.
+- **Checks (P-10):** Lighthouse on the sign-in page (mobile profile, served by a test server, not nginx): performance 98, accessibility 100, best practices 96, SEO 91; layouts checked at 390, 1440 and 2200 px with no sideways scroll.
+**Manual step required:** none (no compose change beyond the image tag, no new env var). Set `IMAGE_TAG=4.18.0` in the stack `.env`.
+
+- **Not tested here:** the signed-in pages were looked at only with made-up data (the league screens as errors, one Pick'em screen); Game Day, Analytics, Commish, Roster and Waivers were not looked at in the desktop or light layouts with real data. The audit log and migrations were unit-tested, not run on your real database. Lighthouse's installability check is not part of version 12; the app's install settings were not re-checked. Unit tests: 81, and a client build.
+- **Still open:** P-4 (dynasty value trend) needs Roster Audit's raw response for Godwin. v4.16.0 and v4.17.x were pushed but may not be deployed yet.
+
 ## v4.17.1 - 2026-11-08
 **Short:** v4.17.1 Ticker slot, kickoff and stats fields
 **Long:** v4.17.1: the Multiview ticker summary adds lineup slot and order, kickoff time and raw counting stats for each player, and returns players in a stable order.

@@ -67,7 +67,7 @@ export function ClaimSection({ league, player, onOpenAccount, onRefresh }) {
         </div>
         {needsDrop && !drop && <div style={{ color: C.minor }} className="text-[11px]">Your bench is full — pick a player to drop.</div>}
         {!confirming ? (
-          <button type="button" disabled={needsDrop && !drop} onClick={() => setConfirming(true)} style={{ background: C.brand, color: C.text, opacity: needsDrop && !drop ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2 text-sm font-medium" data-claim-submit>
+          <button type="button" disabled={needsDrop && !drop} onClick={() => setConfirming(true)} style={{ background: C.brand, color: "#fff", opacity: needsDrop && !drop ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2 text-sm font-medium" data-claim-submit>
             Submit claim
           </button>
         ) : (

@@ -10,16 +10,16 @@ import { C, STATUS } from "../ui/theme.js";
 // v3.8: a league with a charter gets a "Commish" box — red when an action is due within a week, yellow within a month.
 const COMMISH_STATUS = { red: "major", yellow: "minor", ok: "ok" };
 
-export function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, onOpenAccuracy, sleeperUser, onOpenVariances, commishSummary = {}, onOpenCommish }) {
+export function Dashboard({ computed, onOpenLeague, onOpenTab, onLogout, onEditLeagues, onOpenAccount, onOpenAccuracy, sleeperUser, onOpenVariances, commishSummary = {}, onOpenCommish, selectedId = null, desktop = false }) {
   const allVariances = computed.flatMap((lg) => lg.variances || []);
   return (
-    <div className="px-4 py-3">
+    <div className={desktop ? "px-3 py-3" : "px-4 py-3"}>
       <div className="flex justify-end pb-2">
         <VarianceButton variances={allVariances} onOpen={() => onOpenVariances({})} label="Variance report — all leagues" />
       </div>
       <div className="space-y-3">
         {computed.map((lg) => (
-          <div key={lg.id} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-lg overflow-hidden">
+          <div key={lg.id} style={{ background: C.surface, border: `1px solid ${selectedId === lg.id ? C.brand : C.border}`, boxShadow: selectedId === lg.id ? `inset 0 0 0 1px ${C.brand}` : "none" }} className="rounded-lg overflow-hidden" data-league-card={lg.id} aria-current={selectedId === lg.id ? "true" : undefined}>
             <div className="flex items-center justify-between gap-2 px-4 py-3">
               <button onClick={() => onOpenLeague(lg.id)} className="text-left min-w-0 flex-1 flex items-center gap-2.5" data-league-open={lg.id}>
                 <Avatar avatar={lg.avatar} name={lg.name} size={34} square />

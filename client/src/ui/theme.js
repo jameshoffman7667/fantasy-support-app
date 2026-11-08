@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle2, HelpCircle, XCircle } from "lucide-react";
 /* ------------------------------------------------------------------ */
 /*  DESIGN TOKENS                                                     */
 /* ------------------------------------------------------------------ */
-export const C = {
+const DARK = {
   bg: "#10171A",
   surface: "#1A2426",
   surfaceRaised: "#212C2E",
@@ -19,6 +19,33 @@ export const C = {
   major: "#D6533B",
   majorBg: "rgba(214,83,59,0.14)",
 };
+// v4.18.0 (P-6): light palette (text colours checked for contrast on the white cards; 6-digit hex so `${C.x}66` still works).
+const LIGHT = {
+  bg: "#F2F6F5",
+  surface: "#FFFFFF",
+  surfaceRaised: "#E8EFED",
+  border: "#C9D6D3",
+  text: "#162124",
+  textMuted: "#47605B",
+  textFaint: "#5D716C",
+  brand: "#2A6FA8",
+  ok: "#237A3A",
+  okBg: "rgba(35,122,58,0.12)",
+  minor: "#8F6200",
+  minorBg: "rgba(143,98,0,0.13)",
+  major: "#B93A25",
+  majorBg: "rgba(185,58,37,0.11)",
+};
+// The app follows the device's colour scheme; dark is the fallback when the browser can't say. A change while the app is
+// open reloads the page once so every colour is picked up.
+const query = typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: light)") : null;
+export const SCHEME = query?.matches ? "light" : "dark";
+export const C = { ...(SCHEME === "light" ? LIGHT : DARK) };
+// text on solid ok / minor buttons (dark text on the bright dark-mode colours, white on the deeper light-mode ones)
+export const ON_OK = SCHEME === "light" ? "#FFFFFF" : "#10171A";
+export const ON_MINOR = SCHEME === "light" ? "#FFFFFF" : "#1A1400";
+export const PALETTES = { dark: DARK, light: LIGHT };
+if (query && typeof query.addEventListener === "function") query.addEventListener("change", () => window.location.reload());
 
 export const STATUS = {
   ok: { color: C.ok, bg: C.okBg, Icon: CheckCircle2, label: "OK" },

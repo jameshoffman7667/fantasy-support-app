@@ -174,7 +174,7 @@ export function ComplianceFixes({ league, comp, onRefresh, onOpenAccount, showPu
           )}
           {showPush && (
             <PrivateGate league={league} group="roster" write onOpenAccount={onOpenAccount}>
-              <button type="button" disabled={busy || nothing} onClick={push} style={{ background: C.brand, color: C.text, opacity: busy || nothing ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2 text-sm font-medium mt-3" data-compliance-push>
+              <button type="button" disabled={busy || nothing} onClick={push} style={{ background: C.brand, color: "#fff", opacity: busy || nothing ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2 text-sm font-medium mt-3" data-compliance-push>
                 {busy ? stage || "Sending…" : "Push to Sleeper"}
               </button>
               <div style={{ color: C.textFaint }} className="text-[10px] mt-1">Runs in steps with a short pause between them: IR moves out, then IR moves in, then drops. It stops at the first step Sleeper does not confirm. The IR move and the drop calls have not been verified against Sleeper yet.</div>

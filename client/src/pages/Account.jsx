@@ -65,7 +65,7 @@ function SleeperAccessPanel() {
         <>
           <div style={{ color: C.textMuted }} className="text-xs">In Sleeper's website, open the browser's developer tools → Application → Local storage → sleeper.com → <code>token</code>, and paste its value here.</div>
           <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Sleeper token" autoComplete="off" style={inputStyle} className="w-full rounded px-2 py-1.5 text-sm outline-none" aria-label="Sleeper token" data-token-input />
-          <button type="button" disabled={busy || token.trim().length < 20} onClick={() => act(() => api.setPrivateToken(token), "Connected. Reading is on; every kind of change to Sleeper is still switched off.")} style={{ background: C.brand, color: C.text, opacity: busy || token.trim().length < 20 ? 0.5 : 1 }} className="rounded-md px-3 py-1.5 text-sm" data-save-token>Verify &amp; save</button>
+          <button type="button" disabled={busy || token.trim().length < 20} onClick={() => act(() => api.setPrivateToken(token), "Connected. Reading is on; every kind of change to Sleeper is still switched off.")} style={{ background: C.brand, color: "#fff", opacity: busy || token.trim().length < 20 ? 0.5 : 1 }} className="rounded-md px-3 py-1.5 text-sm" data-save-token>Verify &amp; save</button>
         </>
       )}
       {msg && <div style={{ color: C.minor }} className="text-xs">{msg}</div>}
@@ -445,6 +445,48 @@ function ApiPresetsPanel({ isOwner }) {
 /* ------------------------------------------------------------------ */
 /*  v4.17.0 — Multiview access (read-only ticker token)                 */
 /* ------------------------------------------------------------------ */
+/* v4.18.0 (P-7): audit log */
+function AuditPanel() {
+  const [kind, setKind] = useState("");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    setData(null);
+    api.getAuditLog(kind).then((r) => alive && setData(r)).catch((e) => alive && setErr(e.message));
+    return () => { alive = false; };
+  }, [kind]);
+  const KINDS = [["", "All"], ["auth", "Sign-ins"], ["push", "Pushes"], ["setting", "Settings"], ["user", "Users"]];
+  return (
+    <div className="space-y-2" data-audit-log>
+      <div style={{ color: C.textMuted }} className="text-xs px-1 leading-snug">
+        Sign-ins (and failed ones), pushes to Sleeper and CBS, and setting, credential and user changes made from the app, newest first. No passwords or tokens are stored. Kept {data?.keepDays ?? 90} days. Jobs the server runs on its own are not listed.
+      </div>
+      <div className="flex gap-1.5 flex-wrap">
+        {KINDS.map(([k, label]) => (
+          <button key={k || "all"} type="button" onClick={() => setKind(k)} style={{ background: kind === k ? C.brand : C.surface, color: C.text, border: `1px solid ${kind === k ? C.brand : C.border}` }} className="text-[11px] rounded-full px-2.5 py-1">{label}</button>
+        ))}
+      </div>
+      {err && <div style={{ color: C.major }} className="text-xs px-1">{err}</div>}
+      {!data && !err && <div style={{ color: C.textMuted }} className="text-xs px-1">Loading…</div>}
+      {data && data.entries.length === 0 && <div style={{ color: C.textMuted }} className="text-xs px-1">Nothing logged yet.</div>}
+      {data && data.entries.length > 0 && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md divide-y max-h-96 overflow-y-auto">
+          {data.entries.map((e) => (
+            <div key={e.id} style={{ borderColor: C.border }} className="px-3 py-1.5 text-[11px]" data-audit-row>
+              <div className="flex justify-between gap-2">
+                <span style={{ color: e.ok ? C.text : C.major }}>{e.action}{e.ok ? "" : " (failed)"}</span>
+                <span style={{ color: C.textFaint }} className="shrink-0">{new Date(e.at).toLocaleString()}</span>
+              </div>
+              <div style={{ color: C.textFaint }}>{[e.username, e.detail, e.ip].filter(Boolean).join(" · ")}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MultiviewPanel() {
   const [info, setInfo] = useState(null);
   const [fresh, setFresh] = useState(null); // the plain token, shown once
@@ -552,6 +594,12 @@ export function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
         <div>
           <SectionLabel>Multiview access</SectionLabel>
           <div className="pt-1.5"><MultiviewPanel /></div>
+        </div>
+      )}
+      {authUser?.role === "owner" && (
+        <div>
+          <SectionLabel>Activity log</SectionLabel>
+          <div className="pt-1.5"><AuditPanel /></div>
         </div>
       )}
       <div>

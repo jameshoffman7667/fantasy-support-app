@@ -154,7 +154,7 @@ export function TrendingEnding({ league }) {
         </>
       )}
       {data && !none && (
-        <button type="button" onClick={build} disabled={!ticked || building} style={{ background: C.brand, color: C.text, opacity: !ticked || building ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium mt-3" data-ideas-build>
+        <button type="button" onClick={build} disabled={!ticked || building} style={{ background: C.brand, color: "#fff", opacity: !ticked || building ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium mt-3" data-ideas-build>
           {building ? "Building trades…" : ticked ? `Build trades from ${ticked} player${ticked === 1 ? "" : "s"}` : "Tick players to build trades"}
         </button>
       )}

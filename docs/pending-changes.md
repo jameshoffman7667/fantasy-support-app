@@ -10,39 +10,11 @@ Type: patch (bug)        Status: Pending
 Notes / questions: Chris Godwin shows value 277 but a trend of down 1,729 (7 days) and down 5,253 (30 days), which is impossible for a 277 value. Code path: server/values.js `parseRaValues` (trend_7d / trend_30d), server/playerCard.js `valuePanel`, client/src/ui/playerCard.jsx (~line 383). Suspect a different unit or scale; cause not confirmed, needs a raw Roster Audit sample for Godwin.
 [stated 2026-11-08] Screenshots from James: app shows value 293 with trend down 614 (7d) and up 110 (30d); Roster Audit's own page shows SF value 290 with down 19 (7d) (1QB value 359, down 48 (7d)). So the value is close but the app's trend numbers are on another scale or from another field; cause still unconfirmed, needs the raw Roster Audit response for Godwin (list row and /players/<id>) to see which field holds the 19. Code: trend7/trend30 are read from trend_7d/trend_30d (server/values.js parseRaValues), detail first, then the list row (server/playerCard.js line 353).
 
-### P-5 - Designed desktop layout (spec audit, 2026-10-22)
-Requested: 2026-10-22 (spec audit)
-Type: major (James decides)        Status: Pending (answered, build on "build")
-Notes / questions: The app is one `max-w-lg` phone column on every screen size. The spec wants a designed desktop layout (sidebar navigation, multi-column and table views, side-by-side panes, keyboard shortcuts, visible focus). Needs design decisions: sidebar contents, which pages go multi-column first, whether the bottom tabs stay on tablets.
-[stated 2026-11-08 15:20] Desktop layout answers: cascade the pages left to right. League management: league cards on the left, the page selection (Roster, Waivers, Trade radar, etc.) for the selected league to their right, page content to the right of that. Game Day: leagues in a left column instead of across the top, page content widened on the right. Pick'em: wider boxes, with the write-up, weather and upset potential moved to the right so rows get shorter. Analytics and Commish: widened a bit. Everything planned for a 16:10 screen; wider screens keep blank sides as now. Phone layout unchanged. My readings, unconfirmed: the breakpoint between phone and desktop is about 1024 px; the bottom tabs stay on phones; max content width about 1600 px centred (16:10 at 1440 to 1600 wide).
 
-### P-6 - Light and dark mode (spec audit)
-Requested: 2026-10-22 (spec audit)
-Type: minor        Status: Pending (answered, build on "build")
-Notes / questions: The app is dark only; colours are constants in client/src/ui/theme.js. The spec wants `prefers-color-scheme` with a matching `theme-color`. Question: should light mode be offered at all, or is dark-only accepted?
-[stated 2026-11-08 15:19] Defaults accepted: light mode is offered and follows the device's colour scheme (prefers-color-scheme), dark stays the fallback, with a matching theme-color.
 
-### P-7 - Security baseline for an app reachable from outside (spec audit)
-Requested: 2026-10-22 (spec audit)
-Type: minor to major (several parts)        Status: Pending (scope cut to the audit log only; build on "build")
-Notes / questions: The app holds Sleeper tokens and CBS credentials and is reachable through Cloudflare. Today: username + password, per-user sessions, login throttling. Missing against the spec baseline: mandatory TOTP, hashed server-side sessions with an idle timeout (check), CSRF header plus Origin check on writes, password re-entry before sensitive actions, strict CSP (blocked: the UI uses inline styles heavily), Cloudflare Access JWT check, an audit log. Needs James to pick which parts matter.
-[stated 2026-11-08 15:20] James is fine with the current in-app password login. My reading, unconfirmed: no mandatory TOTP and no password-policy change. Still open: whether to add the CSRF header + Origin check on writes, an idle session timeout and an audit log of sign-ins and pushes, and whether Cloudflare Access sits in front of the app.
-[stated 2026-11-08 15:30] Scope: just the audit log. No TOTP, CSRF/Origin check, idle timeout, password re-entry, CSP or Cloudflare Access check. My reading, unconfirmed: the log records sign-ins (success and failure), sign-outs, and every push to Sleeper/CBS and settings/credential change (user, time, action, no secrets), stored in the app's database, shown in Account for the owner, kept 90 days.
 
-### P-8 - Split the JavaScript bundle (spec audit)
-Requested: 2026-10-22 (spec audit)
-Type: minor        Status: Pending (on the build list, James 2026-11-08 15:30)
-Notes / questions: One JS file over 500 kB (vite warns). Lazy-load heavy pages (Analytics, Commish, Scouting, Game Day).
 
-### P-9 - Data migration safeguards (spec audit)
-Requested: 2026-10-22 (spec audit)
-Type: minor        Status: Pending (on the build list, James 2026-11-08 15:21)
-Notes / questions: Migrations are ad hoc (`ALTER TABLE` guards in projectionStore.js and statConfig.js). The spec wants a `schema_version` table, forward-only idempotent migrations in a transaction and a timestamped database copy before a data-changing migration.
 
-### P-10 - Lighthouse PWA audit and signed-in layout checks (spec audit)
-Requested: 2026-10-22 (spec audit)
-Type: patch (checks)        Status: Pending (on the build list, James 2026-11-08 15:21)
-Notes / questions: Lighthouse was not run, and only the sign-in screen was checked at phone, tablet and desktop widths because the authoring session has no mock data for the signed-in pages. Run both from a session that has the app's fixtures or a live login.
 
 ### P-11 - More "Medium" API preset parameters
 Requested: 2026-10-08 (James, "coming later")
@@ -197,3 +169,36 @@ Type: patch (additive fields on GET /api/ticker/summary; no compose or env chang
 Notes / questions: On each players[] entry add (1) `slot` (QB, RB, WR, TE, FLEX, SUPER_FLEX, K, DEF) and `slotOrder` (integer lineup order), (2) `kickoffAt` (ISO UTC of his game, null if unknown), (3) `statLine` short string for live or final games (null before kickoff) or, if only raw stats are available, a `stats` object (passYds, passTd, int, rushAtt, rushYds, rushTd, rec, recYds, recTd, fgm, xpm, sacks) and say which. (4) Confirm league `colour` is the colour to use for team name and score (no `mine.colour`). Also confirm: (a) DEF playerId = team abbreviation and headshot works, (b) stable player order / slotOrder, (c) ticker read by Multiview's server only, so LAN address + token are the only setup. Deliverable back: the version carrying the fields and an updated example response.
 Readings from code (2026-11-08, not built): kickoff exists already (Game Day kickoffMillis); slot comes from Sleeper's starters order aligned with the league's roster_positions (needs a small change in gameday.js); live stats are cached 90 s and raw, so `stats` is the likely form, `statLine` only if formatted server-side; DEF ids are team abbreviations and /api/headshot serves the team logo for them (not run live).
 
+### P-5 - Designed desktop layout (spec audit, 2026-10-22)
+Requested: 2026-10-22 (spec audit)
+Type: major (James decides)        Status: Built 4.18.0
+Notes / questions: The app is one `max-w-lg` phone column on every screen size. The spec wants a designed desktop layout (sidebar navigation, multi-column and table views, side-by-side panes, keyboard shortcuts, visible focus). Needs design decisions: sidebar contents, which pages go multi-column first, whether the bottom tabs stay on tablets.
+[stated 2026-11-08 15:20] Desktop layout answers: cascade the pages left to right. League management: league cards on the left, the page selection (Roster, Waivers, Trade radar, etc.) for the selected league to their right, page content to the right of that. Game Day: leagues in a left column instead of across the top, page content widened on the right. Pick'em: wider boxes, with the write-up, weather and upset potential moved to the right so rows get shorter. Analytics and Commish: widened a bit. Everything planned for a 16:10 screen; wider screens keep blank sides as now. Phone layout unchanged. My readings, unconfirmed: the breakpoint between phone and desktop is about 1024 px; the bottom tabs stay on phones; max content width about 1600 px centred (16:10 at 1440 to 1600 wide).
+
+### P-6 - Light and dark mode (spec audit)
+Requested: 2026-10-22 (spec audit)
+Type: minor        Status: Built 4.18.0
+Notes / questions: The app is dark only; colours are constants in client/src/ui/theme.js. The spec wants `prefers-color-scheme` with a matching `theme-color`. Question: should light mode be offered at all, or is dark-only accepted?
+[stated 2026-11-08 15:19] Defaults accepted: light mode is offered and follows the device's colour scheme (prefers-color-scheme), dark stays the fallback, with a matching theme-color.
+
+### P-7 - Security baseline for an app reachable from outside (spec audit)
+Requested: 2026-10-22 (spec audit)
+Type: minor to major (several parts)        Status: Built 4.18.0
+Notes / questions: The app holds Sleeper tokens and CBS credentials and is reachable through Cloudflare. Today: username + password, per-user sessions, login throttling. Missing against the spec baseline: mandatory TOTP, hashed server-side sessions with an idle timeout (check), CSRF header plus Origin check on writes, password re-entry before sensitive actions, strict CSP (blocked: the UI uses inline styles heavily), Cloudflare Access JWT check, an audit log. Needs James to pick which parts matter.
+[stated 2026-11-08 15:20] James is fine with the current in-app password login. My reading, unconfirmed: no mandatory TOTP and no password-policy change. Still open: whether to add the CSRF header + Origin check on writes, an idle session timeout and an audit log of sign-ins and pushes, and whether Cloudflare Access sits in front of the app.
+[stated 2026-11-08 15:30] Scope: just the audit log. No TOTP, CSRF/Origin check, idle timeout, password re-entry, CSP or Cloudflare Access check. My reading, unconfirmed: the log records sign-ins (success and failure), sign-outs, and every push to Sleeper/CBS and settings/credential change (user, time, action, no secrets), stored in the app's database, shown in Account for the owner, kept 90 days.
+
+### P-8 - Split the JavaScript bundle (spec audit)
+Requested: 2026-10-22 (spec audit)
+Type: minor        Status: Built 4.18.0
+Notes / questions: One JS file over 500 kB (vite warns). Lazy-load heavy pages (Analytics, Commish, Scouting, Game Day).
+
+### P-9 - Data migration safeguards (spec audit)
+Requested: 2026-10-22 (spec audit)
+Type: minor        Status: Built 4.18.0
+Notes / questions: Migrations are ad hoc (`ALTER TABLE` guards in projectionStore.js and statConfig.js). The spec wants a `schema_version` table, forward-only idempotent migrations in a transaction and a timestamped database copy before a data-changing migration.
+
+### P-10 - Lighthouse PWA audit and signed-in layout checks (spec audit)
+Requested: 2026-10-22 (spec audit)
+Type: patch (checks)        Status: Built 4.18.0
+Notes / questions: Lighthouse was not run, and only the sign-in screen was checked at phone, tablet and desktop widths because the authoring session has no mock data for the signed-in pages. Run both from a session that has the app's fixtures or a live login.

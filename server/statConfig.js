@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import db from "./db.js";
+import { migrate } from "./migrate.js";
 import { DEFS, publicDefs } from "./statDefs.js";
 import { readXlsx, writeXlsx } from "./xlsxLite.js";
 
@@ -22,7 +23,9 @@ db.exec(`
   );
 `);
 // v4.3: short column titles for Scouting ("Abbrev" in the spreadsheet)
-if (!db.prepare("PRAGMA table_info(stat_config)").all().some((c) => c.name === "abbrev")) db.exec("ALTER TABLE stat_config ADD COLUMN abbrev TEXT");
+migrate(db, "4.3-stat-config-abbrev", "stat_config gains abbrev", () => {
+  if (!db.prepare("PRAGMA table_info(stat_config)").all().some((c) => c.name === "abbrev")) db.exec("ALTER TABLE stat_config ADD COLUMN abbrev TEXT");
+});
 
 export const TYPES = ["Projection", "Stat", "Both", "Neither"];
 export const HEADERS = ["ID", "Stat", "Abbrev", "Category", "Type", "In drop-down", "Positions", "Data from", "Notes"];

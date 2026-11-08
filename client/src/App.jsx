@@ -1,26 +1,31 @@
 import * as api from "./api.js";
 import { PAGE_LABEL, applyAcks, autoClearKeys, collectVariances, presentKeys, worstLive } from "./variances.js";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccountScreen, AdminScreen, ForcePasswordScreen, LoginScreen } from "./pages/Account.jsx";
-import { AnalyticsScreen } from "./pages/Analytics.jsx";
-import { CommishScreen } from "./pages/Commish.jsx"; // v3.8
 import { Dashboard, LeagueOverview, SelectLeaguesScreen } from "./pages/Dashboard.jsx";
-import { GameDayScreen } from "./pages/GameDay.jsx";
-import { InjuryTab } from "./pages/InjuryPage.jsx";
-import { LeaguePage } from "./pages/LeaguePage.jsx";
-import { PickemScreen } from "./pages/Pickem.jsx";
-import { RosterPage } from "./pages/RosterPage.jsx";
-import { SeasonOutlookTab } from "./pages/SeasonOutlook.jsx";
-import { TradeTab } from "./pages/TradePage.jsx";
-import { WaiverTab } from "./pages/WaiverPage.jsx";
 import { LeagueTabs, STATUS_BADGE_TABS, TAB_META, TabBar, TopBar, sourceStatusLabel } from "./ui/chrome.jsx";
 import { BootstrapScreen, CardCtx, ErrorScreen } from "./ui/common.jsx";
 import { computeInjury, computeLineup, computeRoster, computeTrade, computeWaiver } from "./ui/compute.js";
 import { ClearVariancesButton, DvpDetailModal, VarianceButton, VarianceReportModal, WeatherModal } from "./ui/modals.jsx";
 import { PlayerCardCtx, PlayerCardModal } from "./ui/playerCard.jsx";
 import { C } from "./ui/theme.js";
+import { MAX_DESKTOP_WIDTH, useDesktop } from "./ui/desktop.js"; // v4.18.0 (P-5)
 
-const TAB_COMPONENTS = { roster: RosterPage, waiver: WaiverTab, trade: TradeTab, injury: InjuryTab, league: LeaguePage, odds: SeasonOutlookTab };
+// v4.18.0 (P-8): the heavy pages load on first use, so the first screen's script is much smaller.
+const named = (loader, name) => lazy(() => loader().then((m) => ({ default: m[name] })));
+const AnalyticsScreen = named(() => import("./pages/Analytics.jsx"), "AnalyticsScreen");
+const CommishScreen = named(() => import("./pages/Commish.jsx"), "CommishScreen"); // v3.8
+const GameDayScreen = named(() => import("./pages/GameDay.jsx"), "GameDayScreen");
+const PickemScreen = named(() => import("./pages/Pickem.jsx"), "PickemScreen");
+const TAB_COMPONENTS = {
+  roster: named(() => import("./pages/RosterPage.jsx"), "RosterPage"),
+  waiver: named(() => import("./pages/WaiverPage.jsx"), "WaiverTab"),
+  trade: named(() => import("./pages/TradePage.jsx"), "TradeTab"),
+  injury: named(() => import("./pages/InjuryPage.jsx"), "InjuryTab"),
+  league: named(() => import("./pages/LeaguePage.jsx"), "LeaguePage"),
+  odds: named(() => import("./pages/SeasonOutlook.jsx"), "SeasonOutlookTab"),
+};
+const PageLoading = () => <div className="px-4 py-6 text-sm" style={{ color: C.textMuted }} data-page-loading>Loading…</div>;
 
 /* ------------------------------------------------------------------ */
 /*  ROOT APP                                                           */
@@ -591,10 +596,61 @@ export default function App() {
   const showRefresh = view.screen === "dashboard" || view.screen === "league" || view.screen === "tab";
   const showWeek = showRefresh && week != null;
 
+  // v4.18.0 (P-5): on a desktop screen (1024 px and up) League Management is three columns: the league cards, the pages of the
+  // chosen league, and the page itself. Everything else keeps the single column, centred.
+  const desktop = useDesktop();
+  const shell = desktop && ["dashboard", "league", "tab"].includes(view.screen);
+  const showDashboard = view.screen === "dashboard";
+  const dashboardEl = (showDashboard || shell) && (
+        <Dashboard
+          computed={computed}
+          onOpenLeague={(id) => navigate({ screen: "league", leagueId: id })}
+          onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })}
+          onLogout={handleLogout}
+          onEditLeagues={handleEditLeagues}
+          onOpenAccount={() => navigate({ screen: "account" })}
+          sleeperUser={sleeperUser}
+          onOpenVariances={openVariances}
+          commishSummary={commishSummary}
+          onOpenCommish={(id) => navigate({ screen: "commish", commishLeagueId: id })}
+          selectedId={shell ? activeLeague?.id || null : null}
+          desktop={shell}
+        />
+      );
+  const leagueNavEl = (view.screen === "league" || view.screen === "tab") && activeLeague && (
+        <LeagueTabs
+          vertical={shell}
+          active={view.screen === "league" ? "overview" : view.tab === "lineup" ? "roster" : view.tab}
+          statusOf={(k) => activeLeague[k]?.status}
+          onSelect={(k) => navigate(k === "overview" ? { screen: "league", leagueId: activeLeague.id } : { screen: "tab", leagueId: activeLeague.id, tab: k })}
+        />
+      );
+  const leagueEl = view.screen === "league" && activeLeague && (
+        <LeagueOverview league={activeLeague} onOpenVariances={openVariances} onOpenTab={(tab) => navigate({ screen: "tab", leagueId: activeLeague.id, tab })} />
+      );
+  // wider pages get their own widths on desktop; account, sign-in and league selection stay phone-sized and centred
+  const boxed = (cls, el) => (desktop ? <div className={cls}>{el}</div> : el);
+  const tabEl = view.screen === "tab" && activeLeague && (() => {
+        if (activeLeague.error) return <ErrorScreen message={activeLeague.error} />;
+        const tabKey = view.tab === "lineup" ? "roster" : view.tab; // v3.0: Lineup merged into Roster
+        const Comp = TAB_COMPONENTS[tabKey];
+        const pageVariances = (activeLeague.variances || []).filter((v) => v.page === tabKey);
+        return (
+          <>
+            {STATUS_BADGE_TABS.includes(tabKey) && (
+              <div className="flex justify-end items-center gap-2 px-4 pt-3 -mb-1">
+                <ClearVariancesButton variances={pageVariances} onClear={clearVariances} />
+                <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: tabKey })} label="Variance report — this page" />
+              </div>
+            )}
+            <Comp league={activeLeague} allLeagues={computed} onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={(id) => (typeof id === "string" ? refreshOne(id) : handleRefresh({ manual: true }))} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
+          </>
+        );
+      })();
   return (
     <CardCtx.Provider value={cardCtx}>
     <PlayerCardCtx.Provider value={playerCardCtx}>
-    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="max-w-lg mx-auto">
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif", maxWidth: desktop ? MAX_DESKTOP_WIDTH : undefined }} className={desktop ? "mx-auto" : "max-w-lg mx-auto"} data-layout={desktop ? "desktop" : "phone"}>
       {cardTarget && <PlayerCardModal target={cardTarget} onClose={closeCard} league={computed.find((l) => l.id === cardTarget.leagueId) || null} onOpenAccount={() => { closeCard(); navigate({ screen: "account" }); }} onRefresh={(id) => refreshOne(id)} />}
       {modal?.type === "dvp" && <DvpDetailModal params={modal.params} onClose={closeModal} />}
       {modal?.type === "weather" && <WeatherModal gameKey={modal.key} week={modal.week} onClose={closeModal} />}
@@ -638,61 +694,38 @@ export default function App() {
           }}
         />
       )}
-      {(view.screen === "league" || view.screen === "tab") && activeLeague && (
-        <LeagueTabs
-          active={view.screen === "league" ? "overview" : view.tab === "lineup" ? "roster" : view.tab}
-          statusOf={(k) => activeLeague[k]?.status}
-          onSelect={(k) => navigate(k === "overview" ? { screen: "league", leagueId: activeLeague.id } : { screen: "tab", leagueId: activeLeague.id, tab: k })}
-        />
-      )}
-      {view.screen === "bootstrapping" && <BootstrapScreen />}
-      {view.screen === "login" && (
+      {shell ? (
+        <div className="flex items-start" data-desktop-shell>
+          <aside style={{ borderRight: `1px solid ${C.border}` }} className="w-[340px] shrink-0 sticky top-0 max-h-screen overflow-y-auto" data-desktop-leagues>{dashboardEl}</aside>
+          {activeLeague && <nav style={{ borderRight: `1px solid ${C.border}` }} className="w-[190px] shrink-0 sticky top-0 self-start" data-desktop-nav>{leagueNavEl}</nav>}
+          <main className="flex-1 min-w-0" data-desktop-content>
+            <Suspense fallback={<PageLoading />}>
+              {leagueEl}
+              {tabEl}
+            </Suspense>
+            {!activeLeague && <div style={{ color: C.textMuted }} className="px-6 py-10 text-sm" data-desktop-hint>Pick a league on the left to see its pages.</div>}
+          </main>
+        </div>
+      ) : leagueNavEl}
+      {view.screen === "bootstrapping" && boxed("max-w-lg mx-auto", <BootstrapScreen />)}
+      {view.screen === "login" && boxed("max-w-lg mx-auto", (
         <LoginScreen username={username} setUsername={setUsername} password={password} setPassword={setPassword} onSubmit={handleLoginSubmit} loading={loggingIn} error={loginError} />
-      )}
-      {view.screen === "dashboard" && (
-        <Dashboard
-          computed={computed}
-          onOpenLeague={(id) => navigate({ screen: "league", leagueId: id })}
-          onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })}
-          onLogout={handleLogout}
-          onEditLeagues={handleEditLeagues}
-          onOpenAccount={() => navigate({ screen: "account" })}
-          sleeperUser={sleeperUser}
-          onOpenVariances={openVariances}
-          commishSummary={commishSummary}
-          onOpenCommish={(id) => navigate({ screen: "commish", commishLeagueId: id })}
-        />
-      )}
-      {view.screen === "forceChange" && <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />}
-      {view.screen === "analytics" && <AnalyticsScreen authUser={authUser} leagues={computed} onDvpChange={() => setDvpVersion((v) => v + 1)} />}
+      ))}
+      {!shell && dashboardEl}
+      {view.screen === "forceChange" && boxed("max-w-lg mx-auto", <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />)}
+      <Suspense fallback={<PageLoading />}>
+      {view.screen === "analytics" && boxed("max-w-[900px] mx-auto", <AnalyticsScreen authUser={authUser} leagues={computed} onDvpChange={() => setDvpVersion((v) => v + 1)} />)}
       {view.screen === "gameday" && <GameDayScreen leagues={computed} />}
-      {view.screen === "pickem" && <PickemScreen onChangedCount={setPickemChanged} />}
-      {view.screen === "commish" && <CommishScreen key={view.commishLeagueId || "all"} initialLeagueId={view.commishLeagueId || null} onSummaryChange={loadCommishSummary} />}
-      {view.screen === "account" && <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />}
-      {view.screen === "admin" && authUser?.role === "owner" && <AdminScreen authUser={authUser} />}
-      {view.screen === "select" && (
+      {view.screen === "pickem" && boxed("max-w-[1100px] mx-auto", <PickemScreen onChangedCount={setPickemChanged} />)}
+      {view.screen === "commish" && boxed("max-w-[900px] mx-auto", <CommishScreen key={view.commishLeagueId || "all"} initialLeagueId={view.commishLeagueId || null} onSummaryChange={loadCommishSummary} />)}
+      {view.screen === "account" && boxed("max-w-lg mx-auto", <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />)}
+      {view.screen === "admin" && authUser?.role === "owner" && boxed("max-w-lg mx-auto", <AdminScreen authUser={authUser} />)}
+      {view.screen === "select" && boxed("max-w-lg mx-auto", (
         <SelectLeaguesScreen leagues={availableLeagues} selectedIds={selectedIds} onToggle={handleToggleLeague} onConfirm={handleConfirmSelection} loading={loadingLeagues || connecting} error={connectError} />
-      )}
-      {view.screen === "league" && activeLeague && (
-        <LeagueOverview league={activeLeague} onOpenVariances={openVariances} onOpenTab={(tab) => navigate({ screen: "tab", leagueId: activeLeague.id, tab })} />
-      )}
-      {view.screen === "tab" && activeLeague && (() => {
-        if (activeLeague.error) return <ErrorScreen message={activeLeague.error} />;
-        const tabKey = view.tab === "lineup" ? "roster" : view.tab; // v3.0: Lineup merged into Roster
-        const Comp = TAB_COMPONENTS[tabKey];
-        const pageVariances = (activeLeague.variances || []).filter((v) => v.page === tabKey);
-        return (
-          <>
-            {STATUS_BADGE_TABS.includes(tabKey) && (
-              <div className="flex justify-end items-center gap-2 px-4 pt-3 -mb-1">
-                <ClearVariancesButton variances={pageVariances} onClear={clearVariances} />
-                <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: tabKey })} label="Variance report — this page" />
-              </div>
-            )}
-            <Comp league={activeLeague} allLeagues={computed} onOpenTab={(id, tab) => navigate({ screen: "tab", leagueId: id, tab })} sessionId={sessionId} onSaveRanking={handleSaveRanking} onRefresh={(id) => (typeof id === "string" ? refreshOne(id) : handleRefresh({ manual: true }))} onOpenAccount={() => navigate({ screen: "account" })} onClearVariances={clearVariances} />
-          </>
-        );
-      })()}
+      ))}
+      {!shell && leagueEl}
+      {!shell && tabEl}
+      </Suspense>
       {showRefresh && (
         // v3.5: sync status lives at the bottom of the page instead of under the header
         <div className="px-4 pt-2 pb-6 text-[11px]" style={{ color: C.textFaint }} data-sync-status>

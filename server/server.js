@@ -33,7 +33,8 @@ import * as pendingMoves from "./pendingMoves.js";
 import { computeAccuracy } from "./accuracy.js";
 import * as backfill from "./backfill.js";
 import * as gameday from "./gameday.js";
-import * as ticker from "./ticker.js"; // v4.17.0
+import * as ticker from "./ticker.js";
+import * as audit from "./auditLog.js"; // v4.18.0 (P-7) // v4.17.0
 import * as pickem from "./pickem.js";
 import * as cbs from "./cbs.js";
 import * as performance from "./performance.js";
@@ -160,6 +161,8 @@ app.get("/.well-known/assetlinks.json", (req, res) => {
 });
 
 /* ---------------- Login / logout / auth status (per-user, v2.1) ---------------- */
+// v4.18.0 (P-7): audit log of pushes, setting/credential changes and user admin (login and logout are recorded in their routes).
+app.use(audit.auditMiddleware(resolveUser));
 app.post("/api/login", async (req, res) => {
   try {
     if (!envOwnerUsername()) {
@@ -171,6 +174,7 @@ app.post("/api/login", async (req, res) => {
       return res.status(400).json({ error: "Enter your Sleeper username and password." });
     }
     if (isThrottled(username)) {
+      audit.record({ username, kind: "auth", action: "Sign-in blocked (too many attempts)", ok: false, ip: audit.clientIp(req) });
       return res.status(429).json({ error: "Too many failed attempts for that username — wait a few minutes and try again." });
     }
 
@@ -183,6 +187,7 @@ app.post("/api/login", async (req, res) => {
 
     if (!user || !passwordOk) {
       recordFailure(username);
+      audit.record({ username, kind: "auth", action: "Sign-in failed", ok: false, ip: audit.clientIp(req) });
       return res.status(401).json({ error: "Wrong username or password." });
     }
     if (!user.active) {
@@ -192,6 +197,7 @@ app.post("/api/login", async (req, res) => {
 
     clearFailures(username);
     touchUserLogin(username);
+    audit.record({ username, kind: "auth", action: "Signed in", ok: true, ip: audit.clientIp(req) });
     const token = newSessionToken(username);
     res.setHeader("Set-Cookie", buildSetCookieHeader(req, token));
     res.json({ ok: true, user: publicUser(user) });
@@ -203,6 +209,7 @@ app.post("/api/login", async (req, res) => {
 
 app.post("/api/logout", (req, res) => {
   const token = getSessionToken(req);
+  try { const u = resolveUser(req); if (u) audit.record({ username: u.username, kind: "auth", action: "Signed out", ok: true, ip: audit.clientIp(req) }); } catch { /* not signed in */ }
   if (token) deleteWebSession(token);
   res.setHeader("Set-Cookie", buildSetCookieHeader(req, null, { clear: true }));
   res.json({ ok: true });
@@ -1440,6 +1447,7 @@ function tickerAuth(req, res, next) {
   req.tickerUser = username;
   next();
 }
+app.get("/api/audit-log", requireAuth, requireOwner, (req, res) => res.json({ keepDays: 90, entries: audit.list({ limit: req.query.limit, kind: ["auth", "push", "setting", "user"].includes(String(req.query.kind)) ? String(req.query.kind) : null }) }));
 app.get("/api/ticker/health", tickerAuth, (req, res) => res.json({ status: "ok", version: APP_VERSION, lastProviderUpdate: ticker.lastUpdate(req.tickerUser) }));
 app.get("/api/ticker/summary", tickerAuth, async (req, res) => {
   try {

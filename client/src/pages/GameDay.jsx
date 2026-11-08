@@ -8,6 +8,7 @@ import { ChevronRight, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Avatar, BootstrapScreen, ErrorScreen, Headshot, InfoNote, PrimaryButton, Select, Toggle } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
+import { useDesktop } from "../ui/desktop.js"; // v4.18.0 (P-5)
 import { C } from "../ui/theme.js";
 
 /* ------------------------------------------------------------------ */
@@ -390,6 +391,7 @@ function TnfTab({ leagues, sel }) {
 }
 
 export function GameDayScreen({ leagues = [] }) {
+  const desktop = useDesktop();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -457,7 +459,9 @@ export function GameDayScreen({ leagues = [] }) {
           }}
         />
       )}
-      <div className="grid grid-cols-2 gap-1.5" data-gd-cards>
+      <div className={desktop ? "flex gap-4 items-start" : "space-y-3"} data-gd-layout>
+      <div className={desktop ? "w-72 shrink-0 space-y-3 sticky top-2" : "space-y-3"} data-gd-left>
+      <div className={`grid gap-1.5 ${desktop ? "grid-cols-1" : "grid-cols-2"}`} data-gd-cards>
         {data.leagues.map((l) => (
           <GameDayLeagueCard key={l.id} l={l} selected={leagueSel.has(l.id)} onToggle={() => toggleLeague(l.id)} />
         ))}
@@ -465,6 +469,8 @@ export function GameDayScreen({ leagues = [] }) {
       <div style={{ color: C.textFaint }} className="text-[10px] px-0.5">
         Your score (expected final) – opponent's. Green: you lead by at least 5% of the points both teams still have to score; red: you trail by that much. A projection in red has dropped since the week's first kickoff.
       </div>
+      </div>
+      <div className={desktop ? "flex-1 min-w-0 space-y-3" : "space-y-3"} data-gd-right>
       <div className="flex" style={{ borderBottom: `1px solid ${C.border}` }} data-gd-tabs>
         {[["cheer", "Cheer meter"], ["primetime", "Primetime"], ["tnf", "TNF"]].map(([k, label]) => (
           <button key={k} type="button" onClick={() => setView(k)} aria-current={view === k ? "page" : undefined} data-gd-tab={k} style={{ color: view === k ? C.text : C.textMuted, borderBottom: `2px solid ${view === k ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium">
@@ -508,6 +514,8 @@ export function GameDayScreen({ leagues = [] }) {
         </div>
       )}
       </>}
+      </div>
+      </div>
     </div>
   );
 }

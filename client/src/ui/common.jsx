@@ -529,7 +529,7 @@ export function ConfirmPush({ title, lines, buttonLabel, busy, onConfirm, onCanc
       </ul>
       {note && <div style={{ color: C.textMuted }} className="text-[11px]">{note}</div>}
       <div className="flex items-center gap-2">
-        <button type="button" disabled={busy} onClick={onConfirm} style={{ background: C.brand, color: C.text, opacity: busy ? 0.6 : 1 }} className="rounded-md px-3 py-1.5 text-sm" data-confirm-send>
+        <button type="button" disabled={busy} onClick={onConfirm} style={{ background: C.brand, color: "#fff", opacity: busy ? 0.6 : 1 }} className="rounded-md px-3 py-1.5 text-sm" data-confirm-send>
           {busy ? "Sending…" : buttonLabel}
         </button>
         <button type="button" disabled={busy} onClick={onCancel} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-sm">Cancel</button>

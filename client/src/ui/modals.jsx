@@ -3,7 +3,7 @@ import { ackKey, canClear, groupTree, minorKeys } from "../variances.js";
 import { CheckCircle2, ChevronRight, ListChecks, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Modal, TeamLogo } from "./common.jsx";
-import { C, SAMPLE_LABEL, SEV_COLOR, STATUS, TIER_COLORS, TIER_LABELS, ordinal, worstSev } from "./theme.js";
+import { C, ON_MINOR, SAMPLE_LABEL, SEV_COLOR, STATUS, TIER_COLORS, TIER_LABELS, ordinal, worstSev } from "./theme.js";
 
 export function DvpDetailModal({ params, onClose }) {
   const [d, setD] = useState(null);
@@ -193,7 +193,7 @@ export function ClearVariancesButton({ variances, onClear }) {
           setBusy(false);
         }
       }}
-      style={{ color: none ? C.textFaint : "#1a1400", background: none ? "transparent" : C.minor, border: `1px solid ${none ? C.border : C.minor}` }}
+      style={{ color: none ? C.textFaint : ON_MINOR, background: none ? "transparent" : C.minor, border: `1px solid ${none ? C.border : C.minor}` }}
       className="text-xs px-2.5 py-1.5 rounded-full font-medium shrink-0"
       aria-label={`Clear variances: ${keys.length} clearable`}
       data-clear-variances={keys.length}

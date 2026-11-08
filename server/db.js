@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { migrate } from "./migrate.js";
 
 // Mounted as a volume in docker-compose.yml so data survives container
 // recreation, not just restarts within the same container.
@@ -89,8 +90,11 @@ function tableHasColumn(table, column) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
   return cols.length === 0 || cols.some((c) => c.name === column); // no table yet -> nothing to migrate
 }
+// v4.18.0 (P-9): recorded in schema_version; a database copy is taken first if a table really has to be dropped.
 for (const table of ["web_sessions", "push_subscriptions"]) {
-  if (!tableHasColumn(table, "username")) db.exec(`DROP TABLE ${table}`);
+  migrate(db, `2.1-recreate-${table}-with-username`, `${table} gains a username column (table recreated)`, ({ backup }) => {
+    if (!tableHasColumn(table, "username")) { backup(); db.exec(`DROP TABLE ${table}`); }
+  });
 }
 
 db.exec(`

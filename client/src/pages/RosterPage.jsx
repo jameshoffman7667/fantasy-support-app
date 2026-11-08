@@ -941,7 +941,7 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onR
               Accept all
             </button>
             {onGoProposed && (
-              <button type="button" onClick={onGoProposed} disabled={checked.size === 0} style={{ background: C.brand, color: C.text, opacity: checked.size ? 1 : 0.5 }} className="rounded-md px-3 py-1.5 text-sm" data-go-update>
+              <button type="button" onClick={onGoProposed} disabled={checked.size === 0} style={{ background: C.brand, color: "#fff", opacity: checked.size ? 1 : 0.5 }} className="rounded-md px-3 py-1.5 text-sm" data-go-update>
                 Proposed lineup →
               </button>
             )}
@@ -1050,7 +1050,7 @@ function ProposedLineup({ league, changes, checked, lockedKeys = new Set(), onAd
       </div>
       {(arr.count > 0 || pre) && !panelVisible && (
         <div className="sticky bottom-0 pt-2 pb-3 -mx-4 px-4" style={{ background: `linear-gradient(to top, ${C.bg} 70%, transparent)` }}>
-          <button type="button" onClick={() => setOpenSignal((n) => n + 1)} style={{ background: C.brand, color: C.text }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium shadow-lg" data-push-jump>
+          <button type="button" onClick={() => setOpenSignal((n) => n + 1)} style={{ background: C.brand, color: "#fff" }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium shadow-lg" data-push-jump>
             Review &amp; push to Sleeper ({arr.count + (pre ? pre.count : 0)})
           </button>
         </div>
@@ -1199,7 +1199,7 @@ function PushPanel({ league, changes, checked, onRefresh, onOpenAccount, onDone,
                 </div>
                 {push.errors.map((e, i) => <div key={i} style={{ color: C.major }} className="text-xs px-1">{e}</div>)}
                 {!confirming && (
-                  <button type="button" disabled={push.errors.length > 0} onClick={() => setConfirming(true)} style={{ background: C.brand, color: C.text, opacity: push.errors.length ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium" data-push-sleeper>
+                  <button type="button" disabled={push.errors.length > 0} onClick={() => setConfirming(true)} style={{ background: C.brand, color: "#fff", opacity: push.errors.length ? 0.5 : 1 }} className="w-full rounded-md px-3 py-2.5 text-sm font-medium" data-push-sleeper>
                     Push to Sleeper
                   </button>
                 )}
@@ -1274,7 +1274,7 @@ function AddPlanModal({ league, change, plans, onSave, onCancel }) {
         </div>
         <div className="flex items-center justify-end gap-2 pt-1">
           <button type="button" onClick={onCancel} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-sm" data-add-cancel>Cancel</button>
-          <button type="button" disabled={!ready} onClick={() => onSave({ kind, bid: kind === "waiver" && isFaab ? bidN : 0, isFaab, dropId: drop?.id || null, dropName: drop?.name || null, irSwap: drop?.irSwap || null })} style={{ background: C.brand, color: C.text, opacity: ready ? 1 : 0.5 }} className="rounded-md px-3 py-1.5 text-sm" data-add-save>Use these settings</button>
+          <button type="button" disabled={!ready} onClick={() => onSave({ kind, bid: kind === "waiver" && isFaab ? bidN : 0, isFaab, dropId: drop?.id || null, dropName: drop?.name || null, irSwap: drop?.irSwap || null })} style={{ background: C.brand, color: "#fff", opacity: ready ? 1 : 0.5 }} className="rounded-md px-3 py-1.5 text-sm" data-add-save>Use these settings</button>
         </div>
       </div>
     </Modal>
