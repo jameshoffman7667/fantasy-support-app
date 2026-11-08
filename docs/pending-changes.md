@@ -35,12 +35,12 @@ Notes / questions: One JS file over 500 kB (vite warns). Lazy-load heavy pages (
 
 ### P-9 - Data migration safeguards (spec audit)
 Requested: 2026-10-22 (spec audit)
-Type: minor        Status: Pending
+Type: minor        Status: Pending (on the build list, James 2026-11-08 15:21)
 Notes / questions: Migrations are ad hoc (`ALTER TABLE` guards in projectionStore.js and statConfig.js). The spec wants a `schema_version` table, forward-only idempotent migrations in a transaction and a timestamped database copy before a data-changing migration.
 
 ### P-10 - Lighthouse PWA audit and signed-in layout checks (spec audit)
 Requested: 2026-10-22 (spec audit)
-Type: patch (checks)        Status: Pending
+Type: patch (checks)        Status: Pending (on the build list, James 2026-11-08 15:21)
 Notes / questions: Lighthouse was not run, and only the sign-in screen was checked at phone, tablet and desktop widths because the authoring session has no mock data for the signed-in pages. Run both from a session that has the app's fixtures or a live login.
 
 ### P-11 - More "Medium" API preset parameters
