@@ -8,6 +8,7 @@ Requests are logged here and built only when James sends a build message ("build
 Requested: 2026-10-22 (James, screenshot)
 Type: patch (bug)        Status: Pending
 Notes / questions: Chris Godwin shows value 277 but a trend of down 1,729 (7 days) and down 5,253 (30 days), which is impossible for a 277 value. Code path: server/values.js `parseRaValues` (trend_7d / trend_30d), server/playerCard.js `valuePanel`, client/src/ui/playerCard.jsx (~line 383). Suspect a different unit or scale; cause not confirmed, needs a raw Roster Audit sample for Godwin.
+[stated 2026-11-08] Screenshots from James: app shows value 293 with trend down 614 (7d) and up 110 (30d); Roster Audit's own page shows SF value 290 with down 19 (7d) (1QB value 359, down 48 (7d)). So the value is close but the app's trend numbers are on another scale or from another field; cause still unconfirmed, needs the raw Roster Audit response for Godwin (list row and /players/<id>) to see which field holds the 19. Code: trend7/trend30 are read from trend_7d/trend_30d (server/values.js parseRaValues), detail first, then the list row (server/playerCard.js line 353).
 
 ### P-5 - Designed desktop layout (spec audit, 2026-10-22)
 Requested: 2026-10-22 (spec audit)
@@ -41,7 +42,7 @@ Notes / questions: Lighthouse was not run, and only the sign-in screen was check
 
 ### P-11 - More "Medium" API preset parameters
 Requested: 2026-10-08 (James, "coming later")
-Type: patch        Status: Blocked
+Type: patch        Status: Dropped (James 2026-11-08: scrap for now)
 Notes / questions: James will send more parameters for the Medium preset (server/apiPresets.js `PRESETS.medium`).
 
 ### P-12 - Fixed non-root user for the server image (spec audit)
