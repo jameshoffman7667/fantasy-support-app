@@ -196,6 +196,20 @@ export async function getGameDay(username, { week: weekParam, ticker = false } =
   const liveNow = Object.values(sched0?.byTeam || {}).some((g) => g.kickoffMillis != null && g.kickoffMillis <= nowMs && nowMs <= g.kickoffMillis + 5 * 3600 * 1000);
   const [players, sched] = await Promise.all([sleeper.getPlayers(), liveNow ? schedule.getWeekSchedule(season, week, { live: true }).catch(() => sched0) : sched0]);
   const gameFor = (team) => (team && sched ? sched.byTeam?.[schedule.normalizeTeam(team)] || null : null);
+  // v4.17.1 (P-34): counting stats for the ticker (Sleeper's raw week stats, 90 s shared copy); null before kickoff.
+  const weekStats = ticker ? await sleeper.getWeekStatsLive(season, week).catch(() => null) : null;
+  const statsOf = (id, pos, g) => {
+    if (!ticker || !weekStats || !g || (g.state !== "in" && g.state !== "post")) return null;
+    const r = weekStats[id] || {};
+    const n = (k) => Number(r[k]) || 0;
+    const pass = { passCmp: n("pass_cmp"), passAtt: n("pass_att"), passYds: n("pass_yd"), passTd: n("pass_td"), int: n("pass_int") };
+    const rush = { rushAtt: n("rush_att"), rushYds: n("rush_yd"), rushTd: n("rush_td") };
+    const rec = { rec: n("rec"), recYds: n("rec_yd"), recTd: n("rec_td") };
+    if (pos === "QB") return { ...pass, ...rush };
+    if (pos === "K") return { fgm: n("fgm"), xpm: n("xpm") };
+    if (pos === "DEF") return { sacks: n("sack"), int: n("int") };
+    return { ...rush, ...rec };
+  };
 
   const leagues = [];
   const byPlayer = new Map();
@@ -237,9 +251,10 @@ export async function getGameDay(username, { week: weekParam, ticker = false } =
       // points, games in progress the larger of points so far and the
       // projection (a rough live estimate), games not started the projection.
       const sideInfo = (m) => {
-        const starters = (m.starters || []).filter((id) => id && id !== "0");
+        const slotNames = (league.roster_positions || []).filter((x) => x !== "BN" && x !== "IR" && x !== "TAXI");
+        const starters = (m.starters || []).map((id, i) => ({ id, i })).filter((x) => x.id && x.id !== "0");
         let final = 0;
-        const list = starters.map((id) => {
+        const list = starters.map(({ id, i }) => {
           const p = players[id];
           const g = gameFor(p?.team || (p?.position === "DEF" ? id : null));
           const pts = m.players_points?.[id] != null ? Number(m.players_points[id]) : null;
@@ -247,7 +262,7 @@ export async function getGameDay(username, { week: weekParam, ticker = false } =
           if (g?.state === "post") final += pts ?? 0;
           else if (g?.state === "in") final += Math.max(pts ?? 0, projPts ?? 0);
           else final += projPts ?? 0;
-          return { id, pts, proj: projPts, name: p?.position === "DEF" ? `${p?.first_name || id} ${p?.last_name || "D/ST"}`.trim() : name(p, id), pos: p?.position || null, team: p?.team || (p?.position === "DEF" ? id : null), state: g?.state ?? null, kickoff: g?.kickoffMillis ?? null, kickoffLabel: g?.kickoffLabel ?? null, statusDetail: g?.statusDetail ?? null };
+          return { id, pts, proj: projPts, name: p?.position === "DEF" ? `${p?.first_name || id} ${p?.last_name || "D/ST"}`.trim() : name(p, id), pos: p?.position || null, team: p?.team || (p?.position === "DEF" ? id : null), state: g?.state ?? null, kickoff: g?.kickoffMillis ?? null, kickoffLabel: g?.kickoffLabel ?? null, statusDetail: g?.statusDetail ?? null, slot: slotNames[i] ?? null, slotOrder: i, stats: statsOf(id, p?.position, g) };
         });
         return { list, final, points: Number(m.points ?? 0) };
       };
@@ -257,7 +272,7 @@ export async function getGameDay(username, { week: weekParam, ticker = false } =
       const benchOf = (m) => (m.players || []).filter((id) => id && id !== "0" && !(m.starters || []).includes(id)).map((id) => {
         const p = players[id];
         const g = gameFor(p?.team || (p?.position === "DEF" ? id : null));
-        return { id, pts: m.players_points?.[id] != null ? Number(m.players_points[id]) : null, proj: proj ? hub.pick(proj, id).proj : null, name: p?.position === "DEF" ? `${p?.first_name || id} ${p?.last_name || "D/ST"}`.trim() : name(p, id), pos: p?.position || null, team: p?.team || (p?.position === "DEF" ? id : null), state: g?.state ?? null, statusDetail: g?.statusDetail ?? null };
+        return { id, pts: m.players_points?.[id] != null ? Number(m.players_points[id]) : null, proj: proj ? hub.pick(proj, id).proj : null, name: p?.position === "DEF" ? `${p?.first_name || id} ${p?.last_name || "D/ST"}`.trim() : name(p, id), pos: p?.position || null, team: p?.team || (p?.position === "DEF" ? id : null), state: g?.state ?? null, kickoff: g?.kickoffMillis ?? null, statusDetail: g?.statusDetail ?? null, slot: "BN", slotOrder: null, stats: statsOf(id, p?.position, g) };
       });
       if (ticker) summary.ticker = { myRosterId: mine.roster_id, oppRosterId: oppM.roster_id, my: me.list, opp: opp.list, myBench: benchOf(myM), oppBench: benchOf(oppM) };
       const close = closenessFactor(me.final, opp.final, settings);

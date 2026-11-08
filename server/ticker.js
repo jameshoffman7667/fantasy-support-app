@@ -71,7 +71,7 @@ export function buildFrame(raw) {
     if (!l?.ticker || l.include === false || l.myPoints == null) continue;
     const players = {};
     const put = (list, side, starter) => {
-      for (const p of list || []) players[`${side}:${p.id}`] = { playerId: String(p.id), name: p.name, pos: p.pos, nflTeam: p.team, side, starter, points: p.pts == null ? 0 : r2(p.pts), projected: p.proj == null ? null : r2(p.proj), state: p.state ?? null, statusDetail: p.statusDetail ?? null };
+      for (const p of list || []) players[`${side}:${p.id}`] = { playerId: String(p.id), name: p.name, pos: p.pos, nflTeam: p.team, side, starter, points: p.pts == null ? 0 : r2(p.pts), projected: p.proj == null ? null : r2(p.proj), state: p.state ?? null, statusDetail: p.statusDetail ?? null, slot: p.slot ?? null, slotOrder: p.slotOrder ?? null, kickoffAt: Number.isFinite(p.kickoff) ? new Date(p.kickoff).toISOString() : null, stats: p.stats ?? null };
     };
     put(l.ticker.my, "mine", true); put(l.ticker.opp, "opp", true);
     put(l.ticker.myBench, "mine", false); put(l.ticker.oppBench, "opp", false);
@@ -86,15 +86,17 @@ export function buildFrame(raw) {
   return { season: raw?.season ?? null, week: raw?.week ?? null, leagues };
 }
 
+// Stable order: your side first, then the opponent; starters by lineup slot, bench after, then by name.
+const byLineup = (a, b) => (a.side === b.side ? 0 : a.side === "mine" ? -1 : 1) || (a.starter === b.starter ? 0 : a.starter ? -1 : 1) || (a.slotOrder ?? 999) - (b.slotOrder ?? 999) || String(a.name).localeCompare(String(b.name));
 export function buildSummary(frame, { bench = false, now = Date.now() } = {}) {
   return {
     generatedAt: new Date(now).toISOString(), season: frame.season, week: frame.week,
     leagues: frame.leagues.map((l) => ({
       leagueId: l.leagueId, name: l.name, platform: "sleeper", status: l.status, colour: l.colour,
       colourBasis: l.basis, mine: l.mine, opp: l.opp,
-      players: Object.values(l.players).filter((p) => bench || p.starter).map((p) => ({
+      players: Object.values(l.players).filter((p) => bench || p.starter).sort(byLineup).map((p) => ({
         playerId: p.playerId, name: p.name, pos: p.pos, nflTeam: p.nflTeam, side: p.side, starter: p.starter, points: p.points, projected: p.projected,
-        gameStatus: gameStatus(p.state), gameClock: p.state === "in" || p.state === "post" ? p.statusDetail || null : null,
+        slot: p.slot, slotOrder: p.slotOrder, kickoffAt: p.kickoffAt, stats: p.stats, gameStatus: gameStatus(p.state), gameClock: p.state === "in" || p.state === "post" ? p.statusDetail || null : null,
       })),
     })),
   };

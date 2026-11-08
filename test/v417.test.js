@@ -169,3 +169,19 @@ test("planSignature changes with bids and drop ticks, not with order/edits; fres
   assert.deepEqual([f.edits, f.order, f.unselected], [{}, [], []]);
   assert.equal(f.custom.length, 1);
 });
+
+// ---------------- P-34 (v4.17.1) ----------------
+test("ticker summary carries slot, slotOrder, kickoffAt and stats in a stable order", () => {
+  const k = Date.parse("2026-11-08T18:00:00Z");
+  const l = league({ ticker: { myRosterId: 1, oppRosterId: 2,
+    my: [P("2", 5, "in", { slot: "WR", slotOrder: 2, kickoff: k, stats: { rec: 3, recYds: 40, recTd: 0 } }), P("1", 7, "in", { slot: "QB", slotOrder: 0, kickoff: k, stats: null })],
+    opp: [P("3", 0, "pre", { slot: "RB", slotOrder: 1, kickoff: null })], myBench: [P("4", 0, "pre", { slot: "BN", slotOrder: null })], oppBench: [] } });
+  const s = buildSummary(buildFrame(raw([l])), { bench: true });
+  const pl = s.leagues[0].players;
+  assert.deepEqual(pl.map((p) => p.playerId), ["1", "2", "4", "3"]); // mine by slot, mine bench, then opponent
+  assert.equal(pl[0].slot, "QB");
+  assert.equal(pl[1].kickoffAt, "2026-11-08T18:00:00.000Z");
+  assert.deepEqual(pl[1].stats, { rec: 3, recYds: 40, recTd: 0 });
+  assert.equal(pl[3].kickoffAt, null);
+  assert.equal(pl[2].slotOrder, null);
+});

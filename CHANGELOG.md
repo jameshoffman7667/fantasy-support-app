@@ -34,6 +34,15 @@ delivered zip.
 
 ---
 
+## v4.17.1 - 2026-11-08
+**Short:** v4.17.1 Ticker slot, kickoff and stats fields
+**Long:** v4.17.1: the Multiview ticker summary adds lineup slot and order, kickoff time and raw counting stats for each player, and returns players in a stable order.
+
+- **Ticker API (P-34):** each player in `GET /api/ticker/summary` now has `slot` (QB, RB, WR, TE, FLEX, SUPER_FLEX, K, DEF, or BN on the bench), `slotOrder` (position in the lineup), `kickoffAt` (ISO UTC, null with no game) and `stats`, a raw object of counting stats (passing, rushing, receiving, kicking or defence keys by position) that is null until his game is live or final. Players come back in a stable order: your side, then the opponent, starters by slot, then bench. Stats come from Sleeper's live week stats (about 90 s old at most) and the key names were read from the code, not seen live. The contract is updated in `docs/multiview-api-handoff.md`.
+**Manual step required:** none (no compose change beyond the image tag, no new env var). Set `IMAGE_TAG=4.17.1` in the stack `.env`.
+
+- **Not tested here:** nothing ran against live Sleeper or Multiview (unit tests, 74 in all, and a syntax check). Slot names come from the league's roster positions matched to Sleeper's starters order.
+
 ## v4.17.0 - 2026-11-08
 **Short:** v4.17.0 Claim compare, Multiview ticker API
 **Long:** v4.17.0: Claim Generator compares fresh claims with queued ones (duplicates greyed, update notes, Integrate claims, cancel then re-push) and a read-only ticker API with its own token for the IPTV Multiview app.
