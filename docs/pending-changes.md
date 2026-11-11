@@ -10,11 +10,12 @@ Type: patch (bug)        Status: Pending
 Notes / questions: Chris Godwin shows value 277 but a trend of down 1,729 (7 days) and down 5,253 (30 days), which is impossible for a 277 value. Code path: server/values.js `parseRaValues` (trend_7d / trend_30d), server/playerCard.js `valuePanel`, client/src/ui/playerCard.jsx (~line 383). Suspect a different unit or scale; cause not confirmed, needs a raw Roster Audit sample for Godwin.
 [stated 2026-11-08] Screenshots from James: app shows value 293 with trend down 614 (7d) and up 110 (30d); Roster Audit's own page shows SF value 290 with down 19 (7d) (1QB value 359, down 48 (7d)). So the value is close but the app's trend numbers are on another scale or from another field; cause still unconfirmed, needs the raw Roster Audit response for Godwin (list row and /players/<id>) to see which field holds the 19. Code: trend7/trend30 are read from trend_7d/trend_30d (server/values.js parseRaValues), detail first, then the list row (server/playerCard.js line 353).
 
-
-
-
-
-
+### P-35 - Player card: weekly cards cover the whole season; tap a card for projected vs actual stats
+Requested: 2026-11-11 (James)
+Type: minor        Status: Pending
+Notes / questions: James: the sideways-scrolling weekly cards on the player card (SUMMARY tab, `WeekScroller` in client/src/ui/playerCard.jsx) should include the entire current season, and tapping a game card should show the projected and actual stats for that game.
+Today: server/playerCard.js builds `projections` for only currentWeek-4 .. currentWeek+3 (`projWeeks`, line ~427); each card shows PROJ and FINAL points only. Plan: build all weeks 1-18 (byes shown as BYE, the current week still scrolled into view) and make each card a button that opens a detail panel (week, opponent, result, PROJ vs FINAL points, then a stat table: projected / actual per stat column for the player's position).
+Actual stats are already stored (`actual_stats`, same source as the GAME LOG tab, so the actual column is safe). What is NOT confirmed: projected stats. `proj_records` keeps projected fantasy points only (proj, adj_proj), not a per-stat line, so weeks the app never tracked have no stored projection and the early-season cards may show a dash for PROJ. A projected stat line would have to come from Sleeper's weekly projection pool (`getWeekProjections`, per-stat), which I have not verified returns past weeks. If it does not, past weeks show projected points only (no stat line) and say so in the panel. Decision for James if he cares: store the projected stat line from now on (small table/column change, additive migration) so future weeks have it.
 
 ### P-11 - More "Medium" API preset parameters
 Requested: 2026-10-08 (James, "coming later")
