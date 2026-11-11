@@ -32,6 +32,7 @@ Notes / questions: The server side looks right: `advanceWeek` in server/sleeper.
 3. Smaller: `getWeekSchedule` is cached 15 min; if ESPN lists a rescheduled/flexed game later in the week, "last kickoff" is that game (would delay the move, not skip it).
 Proposed fix (not built): the server decides the week (`sleeper.getState().week`, which already includes the +4 h rule). The client sends a week only when James picks a different one by hand in the app (week switcher), never the saved one on restore; the saved week is only used for the cached first paint. While the app is open, re-check the week every few minutes and after the last kickoff + 4 h (cheap `/api/state`-style call), and rebuild when it changes. Add a unit test for advanceWeek (none exists today) and for the restore path.
 Open: does the week switcher in the app let James choose another week by hand (so a manual pick must be kept for the session)? My reading: yes, keep a manual pick until the app is reopened or the real week moves past it.
+[stated 2026-11-11 09:39] Answer: yes, the week switcher exists and works by hand. Still my reading, unconfirmed: a manual pick is kept until the app is reopened or the real week moves past it.
 
 ### P-11 - More "Medium" API preset parameters
 Requested: 2026-10-08 (James, "coming later")
