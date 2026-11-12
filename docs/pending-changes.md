@@ -93,6 +93,14 @@ Where (found in code): the variance report pop-up, `VarianceReportModal` in clie
 Plan (not built): a checkbox at the left of every uncleared variance row, ticked by default (including variances that appear later while it is open); the group headers (league, page, rule) get a tri-state checkbox that ticks/unticks everything under them; "Clear minor variances (N)" counts and clears only the ticked minor rows, and P-42's "Clear major variances (N)" button (with its confirmation pop-up) only the ticked major rows; unticked rows stay as they are; N updates live and the button is disabled at 0; already-cleared rows (Show cleared) have no checkbox. The ticks live only while the pop-up is open (reset when reopened).
 Readings, unconfirmed: "the variance clear screen" = this report pop-up (the page-header "Clear variances" chip has no list, so it keeps clearing everything of that page); the existing per-row single clear stays; the P-42 confirmation lists only the ticked reds.
 
+### P-44 - Roster move recommendations: show "(Out)" / "(Bye)" in brackets beside a player's name
+Requested: 2026-11-12 (James)
+Type: minor        Status: Pending
+Notes / questions: James: if a player is out or on bye, put that status in brackets beside their name on the roster move recommendation cards.
+Where (found in code): Roster page move cards, client/src/pages/RosterPage.jsx: `changeText` builds the card titles for lineup moves ("from -> to"), adds from free agents / waivers, swaps and IR moves, and every player name goes through the small `Nm` component (~line 868). The move objects carry only ids and names (`fromId/fromName/toId/toName`, `nameA/nameB`, IR `name`), not statuses, so the status has to be looked up from the league's rosters by id.
+Plan (not built): `Nm` shows a bracketed tag after the name when the player is Out or on bye, e.g. "Rhamondre Stevenson (Out)", "Bucky Irving (Bye)". Status comes from the league data already in the page (starters / bench / IR / taxi and, for adds, the free-agent row): a bye = `onBye()` (status "Bye" or "On bye"), out = injury status Out. Tag colour: red for Out, yellow for Bye (same colours as elsewhere). Applies to every name on those cards, including the added free agent and the drop dropdown labels if cheap.
+Readings, unconfirmed (please correct): (1) "out" = injury status Out only; Doubtful, IR, Suspended, PUP, NA could also be shown in brackets the same way, but I would show only Out and Bye unless you say otherwise; (2) it applies to the Roster page's recommendation cards (Current and Proposed lineup suggestions, the push-review summary); other pages already have their own status badges; (3) the player-card pop-up behind the name link is unchanged.
+
 ### P-11 - More "Medium" API preset parameters
 Requested: 2026-10-08 (James, "coming later")
 Type: patch        Status: Dropped (James 2026-11-08: scrap for now)
