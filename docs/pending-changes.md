@@ -85,6 +85,14 @@ What exists for majors: a red variance can already be cleared one at a time in t
 Plan (not built): a red-outlined "Clear major variances (N)" button next to each yellow one, disabled at 0; tapping it opens a pop-up that states how many red variances in this scope will be cleared (page header = this page of this league, report pop-up = the scope it shows), lists them briefly (rule + player), says they stay hidden until they change or the week turns, and has Cancel / "Clear N major variances" (red). Nothing is cleared until the second tap.
 Readings, unconfirmed: scope = same as the yellow button beside it; locked or grey (non-clearable) items are not included; a cleared major that gets worse or changes comes back, as for single clears; the clear is saved per user on the server like the minor clears; the pop-up lists up to 8 and says "and N more".
 
+### P-43 - Variance report pop-up: checkboxes on the left, only ticked variances are cleared
+Requested: 2026-11-12 (James)
+Type: minor        Status: Pending
+Notes / questions: James: on the variance clear screen add checkboxes to the left, default checked; only the checked variances clear when pressing the respective "clear variances" button.
+Where (found in code): the variance report pop-up, `VarianceReportModal` in client/src/ui/modals.jsx: a tree League > Page > Rule > one row per variance, with "Clear minor variances (N)" at the top (`minorKeys` collects every uncleared minor in the pop-up) and a per-row "Clear it?" confirm for single variances. Today the top button clears ALL uncleared minors in the pop-up.
+Plan (not built): a checkbox at the left of every uncleared variance row, ticked by default (including variances that appear later while it is open); the group headers (league, page, rule) get a tri-state checkbox that ticks/unticks everything under them; "Clear minor variances (N)" counts and clears only the ticked minor rows, and P-42's "Clear major variances (N)" button (with its confirmation pop-up) only the ticked major rows; unticked rows stay as they are; N updates live and the button is disabled at 0; already-cleared rows (Show cleared) have no checkbox. The ticks live only while the pop-up is open (reset when reopened).
+Readings, unconfirmed: "the variance clear screen" = this report pop-up (the page-header "Clear variances" chip has no list, so it keeps clearing everything of that page); the existing per-row single clear stays; the P-42 confirmation lists only the ticked reds.
+
 ### P-11 - More "Medium" API preset parameters
 Requested: 2026-10-08 (James, "coming later")
 Type: patch        Status: Dropped (James 2026-11-08: scrap for now)
