@@ -331,7 +331,7 @@ jobs:
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
           [ -x "$APKSIGNER" ] || { echo "::error::apksigner not found"; exit 1; }
           "$APKSIGNER" verify --print-certs "$APP-$VERSION.apk" > "$RUNNER_TEMP/certs.txt"
-          APK_FP="$(awk -F': ' '/certificate SHA-256 digest/ {print $2; exit}' "$RUNNER_TEMP/certs.txt" | tr 'a-f' 'A-F')"
+          APK_FP="$(grep -i 'certificate SHA-256 digest' "$RUNNER_TEMP/certs.txt" | head -1 | awk -F': ' '{print $NF}' | tr 'a-f' 'A-F' | tr -d ' ')"
           WANT_FP="$(printf '%s' "$FP" | tr -d ':')"
           [ "$APK_FP" = "$WANT_FP" ] || { echo "::error::the APK is signed with $APK_FP, not the keystore certificate $WANT_FP"; exit 1; }
           pip install -q --break-system-packages androguard || pip install -q androguard
