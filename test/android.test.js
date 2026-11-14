@@ -133,6 +133,11 @@ test("release workflow: validate, images, release, android in order; manual rebu
   assert.ok(!fs.existsSync(path.join(root, ".github/workflows/android-apk.yml")), "the rolling android-latest workflow is retired");
 });
 
+test("job-level env uses only contexts GitHub allows there (runner.* is not one: it made the 4.19.0 run fail before any job started)", () => {
+  const jobEnv = workflow.slice(workflow.indexOf("\n  android:")).split("    steps:")[0];
+  assert.ok(!/runner\./.test(jobEnv));
+});
+
 test("the android job never prints a secret", () => {
   const job = workflow.slice(workflow.indexOf("\n  android:"));
   assert.ok(!/echo[^\n]*\$\{?(ANDROID_)?(KEYSTORE_B64|KEYSTORE_PASSWORD|KEY_PASSWORD)\b/.test(job), "no echo of a secret's value");

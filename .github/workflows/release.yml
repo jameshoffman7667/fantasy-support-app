@@ -218,7 +218,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       OVERWRITE: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || 'false' }}
-      KEYSTORE_FILE: ${{ runner.temp }}/android.keystore
     steps:
       - name: Work out the version and tag
         id: ver
@@ -303,6 +302,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          KEYSTORE_FILE="$RUNNER_TEMP/android.keystore"
           VERSION_CODE="$(node scripts/android-version.js "$VERSION")"
           echo "versionName=$VERSION versionCode=$VERSION_CODE"
           printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > "$KEYSTORE_FILE"
@@ -363,4 +363,4 @@ jobs:
 
       - name: Remove the keystore
         if: always()
-        run: rm -f "$KEYSTORE_FILE"
+        run: rm -f "$RUNNER_TEMP/android.keystore"
