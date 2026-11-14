@@ -34,6 +34,23 @@ delivered zip.
 
 ---
 
+## v4.19.0 - 2026-11-13
+**Short:** v4.19.0 Android app for F-Droid, Back button
+**Long:** v4.19.0: every release now builds and signs the Android app for your F-Droid repo (APK attached to the release). The Android Back button closes pop-ups and menus first instead of leaving the screen or closing the app.
+
+- **Android app in the release (P-46):** the release workflow has a new last job, `android`. It builds the existing Gradle project in `android/` (package `ca.hoffmanhouse.fantasymanager`, unchanged), signs it with the four `ANDROID_*` repository secrets (key alias `fantasy`) and attaches `fantasy-support-app-<version>.apk` to the `vX.Y.Z` release for the F-Droid updater. versionName is the release version; versionCode = MAJOR*100000000 + MINOR*10000 + PATCH (this release: 400190000). Without the secrets the job skips with a green notice naming the missing ones; it never makes a debug-signed APK. A failed android job leaves the images, release and tag alone.
+- **Checks before upload:** the signing certificate must be the one `/.well-known/assetlinks.json` lists (otherwise the app opens with an address bar), then `apksigner` and androguard read the APK back (package id, versionName, versionCode, signed, minSdk 24).
+- **Manual rebuild:** Actions → release → Run workflow (tag, overwrite) rebuilds only the APK of an existing tag, and refuses to replace an APK already on the release unless overwrite is on.
+- **Retired:** `.github/workflows/android-apk.yml`, the rolling `android-latest` release and the old secret name `ANDROID_KEYSTORE_BASE64`. `ANDROID_APK.md` is now a short pointer.
+- **Host fixed:** the app opens https://fantasy.hoffmanhouse.ca (the old default `fantasymanager.hoffmanhouse.ca` has no DNS record). Fixed in `android/`, `deploy/RELEASE.md` and the docs.
+- **Asset links:** `/.well-known/assetlinks.json` now has the signing key's fingerprint built in (`server/androidApp.js`), so no `ANDROID_APP_SHA256` setting is needed; the variable still overrides it.
+- **Android Back button:** pop-ups (Modal, player card, clear-variance confirm) and the two drop-down menus now take a history entry while open, so Back closes them first. Opening a new screen from an open menu no longer leaves a stale entry. Logging out no longer lets Back show the previous session.
+- **Tests:** `test/android.test.js` (versionCode rule, Gradle settings, assetlinks served with the real fingerprint, workflow checks) and `test/backlayer.test.js`.
+- **Not tested here:** the android job has never run (the authoring session has no Android SDK); the first APK is UNTESTED until James confirms it opens on his phone with no address bar. The Back behaviour was tested against a fake history, not on a phone.
+**Manual step required:** none (no compose or env change; Cloudflare Access is not involved, the app is public). Set `IMAGE_TAG=4.19.0` in the stack `.env`.
+
+---
+
 ## v4.18.0 - 2026-11-08
 **Short:** v4.18.0 Desktop layout, light mode, audit log
 **Long:** v4.18.0: desktop layout in columns for 16:10 screens, light mode that follows the device, an activity log in Account, a smaller first download (pages load on use) and safer, recorded database changes.

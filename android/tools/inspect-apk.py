@@ -40,7 +40,7 @@ def main() -> int:
         problems.append(f"versionName is {name}, expected {want_name}")
     if code != want_code:
         problems.append(f"versionCode is {code}, expected {want_code}")
-    if not (signed_v1 or signed_v2 or signed_v3):
+    if not (apk.is_signed() or signed_v1 or signed_v2 or signed_v3):
         problems.append("the APK is not signed")
     if not min_sdk or not str(min_sdk).isdigit():
         problems.append("minSdk could not be read")

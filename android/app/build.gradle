@@ -9,7 +9,7 @@
  * https://github.com/GoogleChromeLabs/bubblewrap, Apache License 2.0). Differences from the template:
  * the host, names and version come from gradle.properties / -P flags, the Digital Asset Links
  * statement is generated from the host, release signing reads the keystore from environment
- * variables (set by .github/workflows/android-apk.yml), and there are no launcher shortcuts.
+ * variables (set by the android job of .github/workflows/release.yml), and there are no launcher shortcuts.
  */
 
 plugins {
@@ -23,7 +23,7 @@ def aapt = { String s -> s.replace('\\', '\\\\').replace("'", "\\'").replace('"'
 
 def twaManifest = [
     applicationId: 'ca.hoffmanhouse.fantasymanager', // Never change this after installing: it is the app's identity.
-    hostName: prop('twaHost', 'fantasymanager.hoffmanhouse.ca'), // The domain opened in the TWA.
+    hostName: prop('twaHost', 'fantasy.hoffmanhouse.ca'), // The domain opened in the TWA.
     launchUrl: '/', // The start path, relative to the domain.
     name: prop('twaAppName', 'Fantasy Manager'), // The application name.
     launcherName: prop('twaLauncherName', 'Fantasy Mgr'), // The name under the launcher icon.
@@ -117,7 +117,7 @@ android {
     }
     buildTypes {
         release {
-            minifyEnabled true
+            minifyEnabled false // v4.19.0: off, the configuration the pilot app's working APK uses (shrinking was never the problem, but nothing here needs it)
             if (keystorePath) {
                 signingConfig signingConfigs.release
             }

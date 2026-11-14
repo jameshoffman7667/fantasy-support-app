@@ -1093,8 +1093,7 @@ not just restarts.
 
 ```
 .github/workflows/
-  release.yml           On a push to main that changes VERSION: builds + pushes both images to Docker Hub (X.Y.Z, X.Y, latest; linux/amd64), then creates the tag and GitHub release (a manual vX.Y.Z tag is only a fallback)
-  android-apk.yml       Builds the signed Android APK, publishes it on the "Android app" release (v4.0)
+  release.yml           On a push to main that changes VERSION (v4.19.0: its last job, android, also builds and signs the Android APK and attaches it to the release): builds + pushes both images to Docker Hub (X.Y.Z, X.Y, latest; linux/amd64), then creates the tag and GitHub release (a manual vX.Y.Z tag is only a fallback)
 docker-compose.yml      PRIMARY: pulls prebuilt Docker Hub images, no build context — Portainer just pulls. Requires an external `caddy_net` Docker network to already exist (see Caddy section).
 docker-compose.local-build.yml  Builds from source instead — local dev, or build-on-host if preferred
 .env.example           Template for local `docker compose up` (skip if using Portainer)

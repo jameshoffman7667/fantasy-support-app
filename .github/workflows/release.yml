@@ -10,8 +10,16 @@ name: release
 #                deploy/ files are wrong (RELEASE.md with "Update: now|later", compose.yaml pinned to X.Y.Z)
 #   images    -> fantasy-manager-server and fantasy-manager-client (linux/amd64), each pushed as
 #                X.Y.Z, X.Y, latest (+ a sha- tag, which is the same image and costs nothing)
-#   release   -> last job: gh release create vX.Y.Z --target $GITHUB_SHA (this also creates the tag), only
+#   release   -> gh release create vX.Y.Z --target $GITHUB_SHA (this also creates the tag), only
 #                after both images are pushed
+#   android   -> v4.19.0, last job: builds the Android app (android/, a Trusted Web Activity, Gradle), signs it
+#                with the four ANDROID_* secrets, checks the signing certificate is the one /.well-known/
+#                assetlinks.json lists, inspects the APK and attaches fantasy-support-app-X.Y.Z.apk to the
+#                vX.Y.Z release. It skips (green, naming the missing secrets) until the secrets exist, and a
+#                failed android job leaves the images, release and tag as they are.
+#                Manual rebuild of a failed or wrong APK nobody installed: Run workflow (inputs tag, overwrite),
+#                or gh api -X POST repos/jameshoffman7667/fantasy-support-app/actions/workflows/release.yml/dispatches
+#                -f ref=main -f 'inputs[tag]=vX.Y.Z' -f 'inputs[overwrite]=false'. The images are not rebuilt.
 #
 # The two triggers can't both release one version: all runs share one concurrency group (they queue, one at a
 # time), and validate fails when the tag or release already exists. A tag created by the workflow's own token
@@ -27,6 +35,16 @@ on:
     paths: ["VERSION"]
     # manual fallback only (path filters are not applied to tag pushes)
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  # v4.19.0: rebuild the APK of an existing release (android job only)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag whose APK to (re)build, e.g. v4.19.0"
+        required: true
+      overwrite:
+        description: "Replace an APK that is already attached to that release"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -37,6 +55,7 @@ concurrency:
 
 jobs:
   validate:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -98,6 +117,7 @@ jobs:
 
   images:
     needs: validate
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -169,6 +189,7 @@ jobs:
 
   release:
     needs: [validate, images]
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -180,3 +201,166 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           SHORT: ${{ needs.validate.outputs.short }}
         run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION - $SHORT" --notes-file <(awk -v v="## v$VERSION " 'index($0,v)==1{f=1;next} f&&/^## v/{exit} f' CHANGELOG.md)
+
+  # v4.19.0: Android app. Replaces the template's Bubblewrap steps (npm install of bubblewrap, its SDK folder
+  # workaround, the twa-manifest.json edit and its update and build commands) with the repo's own Gradle
+  # project: android/ already is a complete TWA project (the Bubblewrap 1.25 template, filled in), so generating
+  # another one from twa-manifest.json would only duplicate it. Everything else follows the template.
+  android:
+    needs: [validate, images, release]
+    # Normal release: after the release (so the tag exists) succeeded. Manual run: always (validate, images and
+    # release are skipped).
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      APP: fantasy-support-app
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      OVERWRITE: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || 'false' }}
+      KEYSTORE_FILE: ${{ runner.temp }}/android.keystore
+    steps:
+      - name: Work out the version and tag
+        id: ver
+        shell: bash
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$DISPATCH_TAG"
+            [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$TAG' is not vX.Y.Z"; exit 1; }
+            gh release view "$TAG" > /dev/null || { echo "::error::no GitHub release $TAG"; exit 1; }
+            VERSION="${TAG#v}"
+          else
+            VERSION="$RELEASE_VERSION"; TAG="v$VERSION"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"; echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+
+      # Skips (green, with a notice) until James has added the four ANDROID_* secrets, so a release never fails
+      # only because the key does not exist yet. The notice names every secret that is missing. A debug-signed
+      # APK is never produced.
+      - name: Check the Android build is set up
+        id: gate
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ ! -f android/gradlew ]; then echo "::notice::No android/ project in $GITHUB_SHA: Android build skipped"; echo "build=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          missing=""
+          for v in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [ -n "${!v}" ] || missing="$missing ANDROID_$v"
+          done
+          if [ -n "$missing" ]; then echo "::notice::Missing secrets:$missing. Android build skipped"; echo "build=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        if: steps.gate.outputs.build == 'true'
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+          cache-dependency-path: |
+            android/*.gradle
+            android/app/*.gradle
+            android/gradle/wrapper/gradle-wrapper.properties
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.build == 'true'
+        with:
+          node-version: "20"
+
+      - name: Android SDK packages
+        if: steps.gate.outputs.build == 'true'
+        shell: bash
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+            "$SDKM" --install "platforms;android-36" "build-tools;35.0.0" > /dev/null || echo "sdkmanager failed; the Android Gradle plugin will fetch what it needs"
+          else
+            echo "sdkmanager not found; the Android Gradle plugin will fetch what it needs"
+          fi
+
+      - name: Build and sign the APK
+        if: steps.gate.outputs.build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/android.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          VERSION_CODE="$(node scripts/android-version.js "$VERSION")"
+          echo "versionName=$VERSION versionCode=$VERSION_CODE"
+          printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > "$KEYSTORE_FILE"
+          # the signing certificate must be the one assetlinks.json names, or the TWA opens with an address bar
+          FP="$(keytool -list -v -keystore "$KEYSTORE_FILE" -alias "$ANDROID_KEY_ALIAS" -storepass:env ANDROID_KEYSTORE_PASSWORD | awk '/SHA256:/ {print $2; exit}')"
+          [ -n "$FP" ] || { echo "::error::could not read the signing certificate fingerprint (wrong ANDROID_KEYSTORE_PASSWORD or ANDROID_KEY_ALIAS?)"; exit 1; }
+          node android/tools/check-assetlinks.mjs "$FP" || { echo "::error::the signing certificate ($FP) is not listed in server/androidApp.js DEFAULT_SHA256, the source of /.well-known/assetlinks.json. Add the fingerprint (it is public) and release again."; exit 1; }
+          echo "FP=$FP" >> "$GITHUB_ENV"
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleRelease "-PappVersionCode=$VERSION_CODE" "-PappVersionName=$VERSION"
+          BUILT=app/build/outputs/apk/release/app-release.apk
+          [ -f "$BUILT" ] || { echo "::error::No signed APK was produced (app-release.apk is missing; an unsigned build is named app-release-unsigned.apk)"; ls -la app/build/outputs/apk/release || true; exit 1; }
+          mv "$BUILT" "$GITHUB_WORKSPACE/$APP-$VERSION.apk"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
+      # Reads the finished APK back before it is published: package id, versionName, versionCode, minSdk, signed,
+      # and the certificate it is signed with must be the one in assetlinks.
+      - name: Inspect the APK
+        if: steps.gate.outputs.build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
+          [ -x "$APKSIGNER" ] || { echo "::error::apksigner not found"; exit 1; }
+          "$APKSIGNER" verify --print-certs "$APP-$VERSION.apk" > "$RUNNER_TEMP/certs.txt"
+          APK_FP="$(awk -F': ' '/certificate SHA-256 digest/ {print $2; exit}' "$RUNNER_TEMP/certs.txt" | tr 'a-f' 'A-F')"
+          WANT_FP="$(printf '%s' "$FP" | tr -d ':')"
+          [ "$APK_FP" = "$WANT_FP" ] || { echo "::error::the APK is signed with $APK_FP, not the keystore certificate $WANT_FP"; exit 1; }
+          pip install -q --break-system-packages androguard || pip install -q androguard
+          PKG="$(sed -n "s/.*applicationId: '\([^']*\)'.*/\1/p" android/app/build.gradle | head -1)"
+          python3 android/tools/inspect-apk.py "$APP-$VERSION.apk" "$PKG" "$VERSION" "$VERSION_CODE"
+          {
+            echo "### Android app $VERSION"
+            echo "package \`$PKG\`, versionCode \`$VERSION_CODE\`, signing certificate SHA-256 \`$FP\` (matches assetlinks)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach the APK to the GitHub release
+        if: steps.gate.outputs.build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          APK="$APP-$VERSION.apk"
+          # overwrite guard: the F-Droid updater may already have downloaded an APK with this name
+          if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$APK"; then
+            if [ "$OVERWRITE" != "true" ]; then
+              echo "::error::$APK is already attached to $TAG. Re-run with overwrite=true only if the APK was never installed or downloaded (same versionCode)."
+              exit 1
+            fi
+            echo "::warning::Replacing $APK on $TAG (overwrite=true)"
+          fi
+          gh release upload "$TAG" "$APK" --clobber
+
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$KEYSTORE_FILE"

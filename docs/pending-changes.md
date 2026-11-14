@@ -294,3 +294,9 @@ Notes / questions: Migrations are ad hoc (`ALTER TABLE` guards in projectionStor
 Requested: 2026-10-22 (spec audit)
 Type: patch (checks)        Status: Built 4.18.0
 Notes / questions: Lighthouse was not run, and only the sign-in screen was checked at phone, tablet and desktop widths because the authoring session has no mock data for the signed-in pages. Run both from a session that has the app's fixtures or a live login.
+
+### P-46 - Android app (APK) for the F-Droid repo, release job and Back button
+Requested: 2026-11-13 (James, build message; spec v1.11 section 15)
+Type: minor        Status: Built 4.19.0
+Notes / questions: `android` job added to release.yml (Gradle instead of Bubblewrap), `workflow_dispatch` rebuild with overwrite guard, `android-apk.yml` retired, host fixed to fantasy.hoffmanhouse.ca, assetlinks served with the built-in fingerprint, Back button layers for pop-ups and menus, tests, docs. The android job had not run when this was written; the first APK is untested until James confirms it on his phone. Sub-tab switches do not get their own history entry (decision, reported).
+
