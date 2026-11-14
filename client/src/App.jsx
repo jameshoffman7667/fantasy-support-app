@@ -10,6 +10,7 @@ import { ClearVariancesButton, DvpDetailModal, VarianceButton, VarianceReportMod
 import { PlayerCardCtx, PlayerCardModal } from "./ui/playerCard.jsx";
 import { C } from "./ui/theme.js";
 import { MAX_DESKTOP_WIDTH, useDesktop } from "./ui/desktop.js"; // v4.18.0 (P-5)
+import { handlePop, navigateWithLayers } from "./ui/backLayer.js"; // v4.19.0
 
 // v4.18.0 (P-8): the heavy pages load on first use, so the first screen's script is much smaller.
 const named = (loader, name) => lazy(() => loader().then((m) => ({ default: m[name] })));
@@ -81,14 +82,29 @@ export default function App() {
   // Browser back/forward support: every real navigation pushes a history
   // entry carrying the view state; popstate restores it directly without
   // pushing again (that's what "going back" means — undoing the push).
+  // v4.19.0: with a pop-up or menu open, the new screen takes over that layer's history entry (backLayer.js).
   const navigate = useCallback((newView, opts = {}) => {
     setView(newView);
-    if (opts.replace) window.history.replaceState(newView, "");
-    else window.history.pushState(newView, "");
+    navigateWithLayers(newView, opts);
   }, []);
 
+  // v4.19.0: signed-out, Back must not reveal a screen of the previous session (logout pushes the login screen).
+  const authedRef = useRef(false);
   useEffect(() => {
-    const onPopState = (e) => setView(e.state || { screen: "dashboard" });
+    authedRef.current = Boolean(authUser);
+  }, [authUser]);
+
+  useEffect(() => {
+    const onPopState = (e) => {
+      if (handlePop(e)) return; // Back closed a pop-up or menu: the screen stays as it is
+      const next = e.state || { screen: "dashboard" };
+      if (!authedRef.current && next.screen !== "login" && next.screen !== "bootstrapping") {
+        window.history.replaceState({ screen: "login" }, "");
+        setView({ screen: "login" });
+        return;
+      }
+      setView(next);
+    };
     window.addEventListener("popstate", onPopState);
     window.history.replaceState({ screen: "bootstrapping" }, "");
     return () => window.removeEventListener("popstate", onPopState);

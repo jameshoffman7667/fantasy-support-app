@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Avatar, FootballPlayerIcon, UprightsIcon } from "./common.jsx";
 import { C, STATUS } from "./theme.js";
 import { useDesktop } from "./desktop.js"; // v4.18.0 (P-5)
+import { useBackLayer } from "./backLayer.js"; // v4.19.0
 
 function WeekPicker({ week, onChange, disabled }) {
   if (week == null) return null;
@@ -26,6 +27,7 @@ function WeekPicker({ week, onChange, disabled }) {
 // v3.9: a crumb with `options` (the league name, the page name) is a drop-down for quick navigation.
 function CrumbMenu({ c, current }) {
   const [open, setOpen] = useState(false);
+  useBackLayer(open, () => setOpen(false)); // v4.19.0: Android Back closes the menu first
   return (
     <div className="relative min-w-0 shrink" data-crumb-menu={c.menuKey || c.label}>
       <button type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} className="flex items-center gap-0.5 min-w-0 max-w-full">
@@ -84,6 +86,7 @@ function Breadcrumb({ crumbs }) {
 // v3.5: tapping your name or photo (top left) opens League management, alerts, Account settings and Log out.
 function UserMenu({ name, avatar, onEditLeagues, onOpenAccount, onLogout, onHome, compact = false }) {
   const [open, setOpen] = useState(false);
+  useBackLayer(open, () => setOpen(false)); // v4.19.0: Android Back closes the menu first
   const item = (Icon, label, onClick, sub) => (
     <button type="button" role="menuitem" onClick={() => { setOpen(false); onClick?.(); }} className="w-full text-left px-3 py-2 flex items-start gap-2.5" style={{ color: C.text }} data-menu-item={label}>
       <Icon size={15} className="mt-0.5 shrink-0" style={{ color: C.textMuted }} />

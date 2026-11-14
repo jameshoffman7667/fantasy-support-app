@@ -2,6 +2,7 @@ import * as api from "../api.js";
 import { fromDollars, toDollars } from "../waiverPlan.js";
 import { Cloud, CloudRain, CloudSnow, GripHorizontal, GripVertical, Loader2, Wind, X, XCircle } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useBackLayer } from "./backLayer.js"; // v4.19.0
 import { C, SOURCE_TAG, SRC_COLOR, STATUS, TIER_COLORS, TIER_LABELS, formatStatLine, initials, inputStyle, normTeam, ordinal } from "./theme.js";
 
 /* ------------------------------------------------------------------ */
@@ -189,6 +190,7 @@ export function StatLine({ player }) {
 }
 
 export function Modal({ title, onClose, children }) {
+  useBackLayer(true, onClose); // v4.19.0: Android Back closes the pop-up instead of leaving the screen
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);

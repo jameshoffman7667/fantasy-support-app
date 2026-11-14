@@ -1,6 +1,7 @@
 import * as api from "../api.js";
 import { ChevronRight, Loader2, X } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import { useBackLayer } from "./backLayer.js"; // v4.19.0
 import { Avatar, Headshot, MatchupChip, StatLine, WeatherChip } from "./common.jsx";
 import { ClaimSection } from "./claimForm.jsx"; // v4.6
 import { CopyEntries, applyCopiedBid, useCopyClaims } from "./copyClaims.jsx"; // v4.7, v4.8
@@ -119,6 +120,7 @@ function AdvancedStats({ adv }) {
 }
 
 export function PlayerCardModal({ target, onClose, league = null, onOpenAccount = null, onRefresh = null }) {
+  useBackLayer(true, onClose); // v4.19.0: Android Back closes the card instead of leaving the screen
   const [card, setCard] = useState(null);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("summary");

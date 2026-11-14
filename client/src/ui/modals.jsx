@@ -2,6 +2,7 @@ import * as api from "../api.js";
 import { ackKey, canClear, groupTree, minorKeys } from "../variances.js";
 import { CheckCircle2, ChevronRight, ListChecks, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useBackLayer } from "./backLayer.js"; // v4.19.0
 import { Modal, TeamLogo } from "./common.jsx";
 import { C, ON_MINOR, SAMPLE_LABEL, SEV_COLOR, STATUS, TIER_COLORS, TIER_LABELS, ordinal, worstSev } from "./theme.js";
 
@@ -210,6 +211,7 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
   const [showCleared, setShowCleared] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [confirm, setConfirm] = useState(null); // v4.6: the variance waiting for "Clear it?"
+  useBackLayer(Boolean(confirm), () => setConfirm(null)); // v4.19.0: Back closes the confirm first
   const [confirmBusy, setConfirmBusy] = useState(false);
   const shown = showCleared ? variances : variances.filter((v) => !v.cleared);
   const tree = useMemo(() => groupTree(shown), [shown]);

@@ -155,7 +155,7 @@ app.get("/api/health", (req, res) => {
 // nginx forwards /.well-known/assetlinks.json here (client/nginx.conf).
 app.get("/.well-known/assetlinks.json", (req, res) => {
   const statements = assetLinks();
-  if (!statements) return res.status(404).json({ error: "The Android app isn't set up on this server (ANDROID_APP_SHA256 is empty or invalid)." });
+  if (!statements) return res.status(404).json({ error: "The Android app isn't set up on this server (no valid fingerprint is configured)." });
   res.set("Cache-Control", "public, max-age=300");
   res.json(statements);
 });
