@@ -1,23 +1,24 @@
-# Release v4.19.0
-Update: later
-Image: mybadreligon/fantasy-manager-server:4.19.0 and mybadreligon/fantasy-manager-client:4.19.0   (built by the push-to-main release workflow; also 4.11, latest, sha-)
-Short: v4.19.0 Android app for F-Droid, Back button
-Long: v4.19.0: every release now builds and signs the Android app for your F-Droid repo (APK attached to the release). The Android Back button closes pop-ups and menus first instead of leaving the screen or closing the app.
+# Release v4.20.0
+Update: now
+Image: mybadreligon/fantasy-manager-server:4.20.0 and mybadreligon/fantasy-manager-client:4.20.0   (built by the push-to-main release workflow; also 4.11, latest, sha-)
+Short: v4.20.0 Projection colours, ticker user, TNF tab
+Long: v4.20.0: players and teams show an expected final with a colour, a sync-only ticker login for Multiview, a Game Day TNF tab with swaps you can push, whole-season weekly cards, IR drops in claims, and several roster-move fixes.
 Release commit: the main commit that contains this file (git log -1 -- deploy/RELEASE.md)        Tag pushed by hand: no (the release workflow creates the tag from the push to main)
-Type: minor (Android build in the release workflow, Back-button history layers; no schema change)
+Type: minor (expected-final projections, ticker user level, Game Day and waiver features; no schema change)
 Runs as: the entrypoint starts as root, chowns /app/data, then runs the server as uid 100; on the home server the data folder is owned 100:101.
 Port: client container 5000 -> host CLIENT_PORT (default 5000; image fixed; register plan says 8042, not moved yet). Server 4000 internal only.   Exception: container 5000 -> host CLIENT_PORT, image fixed
 Public hostname: fantasy.hoffmanhouse.ca        Needs Caddy route: no (unchanged)
-New or changed env vars: none. Start-up now exits if OWNER_USERNAME is missing, or OWNER_PASSWORD is missing before the owner account exists.
-Data: /app/data in the server container. On the server it is a bind mount: DATA_PATH in the stack .env points at appdata-ssd/fantasymanager. Back up with the stack stopped (SQLite WAL: .db, -wal and -shm together). Migration: schema_version and audit_log tables are created at first start (additive, nothing dropped)
+New or changed env vars: none (the ticker-user cap is set in Account → Admin, default 0 = off). Start-up now exits if OWNER_USERNAME is missing, or OWNER_PASSWORD is missing before the owner account exists.
+Data: /app/data in the server container. On the server it is a bind mount: DATA_PATH in the stack .env points at appdata-ssd/fantasymanager. Back up with the stack stopped (SQLite WAL: .db, -wal and -shm together). Migration: none new (ticker settings and tokens are stored as state rows; nothing dropped)
 Resources: unchanged
-Healthcheck: GET /healthz on $PORT -> 200 {"status":"ok","version":"4.19.0"}, public, local database only; image and deploy/compose.yaml: wget on 127.0.0.1, interval 30s, timeout 5s, start period 30s, 3 retries. The server stops cleanly on SIGTERM (tini + handler).
-Verify after deploy: both containers healthy (docker inspect shows the 30 s start period); `docker exec fantasy-manager-server wget -qO- http://127.0.0.1:4000/healthz` prints {"status":"ok","version":"4.19.0"}; the site loads and a league page shows real data; `docker stop fantasy-manager-server` exits 0 within a few seconds (not 137); Account shows Install app (or says it is installed)
+Healthcheck: GET /healthz on $PORT -> 200 {"status":"ok","version":"4.20.0"}, public, local database only; image and deploy/compose.yaml: wget on 127.0.0.1, interval 30s, timeout 5s, start period 30s, 3 retries. The server stops cleanly on SIGTERM (tini + handler).
+Verify after deploy: both containers healthy (docker inspect shows the 30 s start period); `docker exec fantasy-manager-server wget -qO- http://127.0.0.1:4000/healthz` prints {"status":"ok","version":"4.20.0"}; the site loads and a league page shows real data; `docker stop fantasy-manager-server` exits 0 within a few seconds (not 137); Account shows Install app (or says it is installed)
 PWA: offline page, update bar, Install button and manifest screenshots added; checked in Chromium on the sign-in screen only (320, 390, 540, 768, 1280, 1440 px: no sideways scroll; service worker active; offline page shown with the server stopped). Lighthouse not run. Cloudflare Access bypass for manifest, sw.js, offline.html and icons: needed if Access protects the hostname
 Docker build: not run (no Docker daemon in the authoring session); client bundled with esbuild in a browser harness, server files syntax-checked with node --check; the image build and its tag/label verify step are the release workflow run this push starts
-Rollback: set IMAGE_TAG back to 4.15.0 (the version running now; 4.16.0 and later were not deployed when this was written). Claude Code also records the pinned digests before updating. Data restore needed: no (the new schema_version and audit_log tables are additive and older versions ignore them; a database copy is written to the data folder's backups folder only if a migration has to drop data, which none does on this release)
-Known issues: the claim comparison, cancel-then-push and the ticker API were only unit-tested and built, not run against Sleeper or Multiview (Sleeper's cancel call has not been seen to work live); the nginx stream setting lives in the client image; no designed desktop layout (single phone column), dark only, no security baseline for external access (TOTP, step-up, CSP, audit log), one 500 kB+ JS bundle, ad-hoc data migrations; all logged in docs/pending-changes.md (P-5 to P-10); P-4 (dynasty value trend) still open
-Android: package ca.hoffmanhouse.fantasymanager, host fantasy.hoffmanhouse.ca, key alias fantasy, versionCode 400190000, APK fantasy-support-app-4.19.0.apk on this release; first F-Droid APK UNTESTED until James confirms it on his phone (opens with no address bar). assetlinks.json is served by the server with the signing fingerprint built in. Public app: no Cloudflare Access bypass needed. Do not add to the F-Droid apps.txt until James says the APK is confirmed.
+Rollback: set IMAGE_TAG back to the previous tag (4.19.0 if it was the one running; check the stack .env before the update). Claude Code also records the pinned digests before updating. Data restore needed: no (the new schema_version and audit_log tables are additive and older versions ignore them; a database copy is written to the data folder's backups folder only if a migration has to drop data, which none does on this release)
+Known issues: v4.20.0 was tested with made-up data and a spawned test server, not against live Sleeper, Multiview or a phone (the live projection blend, the ticker role, the TNF swap push, IR drops in claims and the player card stat lines are the least proven); P-41 and P-4 not built; the claim comparison, cancel-then-push and the ticker API were only unit-tested and built, not run against Sleeper or Multiview (Sleeper's cancel call has not been seen to work live); the nginx stream setting lives in the client image; no designed desktop layout (single phone column), dark only, no security baseline for external access (TOTP, step-up, CSP, audit log), one 500 kB+ JS bundle, ad-hoc data migrations; all logged in docs/pending-changes.md (P-5 to P-10); P-4 (dynasty value trend) still open
+Android: package ca.hoffmanhouse.fantasymanager, host fantasy.hoffmanhouse.ca, key alias fantasy, versionCode 400200000, APK fantasy-support-app-4.20.0.apk on this release; APK untested on a phone until James confirms it (opens with no address bar); versionCode 400200000 is higher than 4.19.0's. assetlinks.json is served by the server with the signing fingerprint built in. Public app: no Cloudflare Access bypass needed. Do not add to the F-Droid apps.txt until James says the APK is confirmed.
+AI: none (no new AI feature or provider; no change to the AI registry)
 Backup tier: small/critical (SQLite; stop the container during a copy)
 
 ## Update field
@@ -26,7 +27,7 @@ Backup tier: small/critical (SQLite; stop the container during a copy)
 - now: after the image exists, deploy it (plan first, approval first).
 
 ## Stack notes (how the server actually runs this)
-- The server stack is the repo's `docker-compose.yml` with `IMAGE_TAG` in the stack's `.env` (currently `4.15.0` after the last update). The version change is one `.env` line: `IMAGE_TAG=4.19.0`. `deploy/compose.yaml` is the reference with the same services; it is not a drop-in file.
+- The server stack is the repo's `docker-compose.yml` with `IMAGE_TAG` in the stack's `.env` (currently `4.15.0` after the last update). The version change is one `.env` line: `IMAGE_TAG=4.20.0`. `deploy/compose.yaml` is the reference with the same services; it is not a drop-in file.
 - Compose edits beyond the tag (show them as a diff, do not hide them in "change only the tag"):
   1. server `healthcheck`: `test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT}/healthz >/dev/null || exit 1"]`, `interval: 30s`, `timeout: 5s`, `start_period: 30s`, `retries: 3` (replaces the node fetch of `/api/health` on localhost).
   2. server `stop_grace_period: 15s`.

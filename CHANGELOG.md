@@ -34,6 +34,23 @@ delivered zip.
 
 ---
 
+## v4.20.0 - 2026-11-15
+**Short:** v4.20.0 Projection colours, ticker user, TNF tab
+**Long:** v4.20.0: players and teams show an expected final with a colour, a sync-only ticker login for Multiview, a Game Day TNF tab with swaps you can push, whole-season weekly cards, IR drops in claims, and several roster-move fixes.
+
+- **Expected final and colours (P-48):** a player has a pregame `projection` (fixed), a `liveProjection` while his game is on (actual + the rest of the game, the part still to play leaning on the projection early and on his pace late) and his actual points. A team's expected final is the sum of its starters' (not started: projection; live: live projection; finished: actual). Game Day, Cheer meter and the ticker use it; colours follow the 5% rule (a player against his own projection, a team against the opponent).
+- **Ticker login for Multiview (P-48):** a new user level `ticker` that can only open the "Ticker sync" page (link or pause its Sleeper account, choose leagues, make and revoke tokens). Tokens are scoped `ticker:read`, stored hashed, rate limited and audited. The owner sets how many ticker users are allowed in Account → Admin (0 = off). The ticker summary adds `projection`, `liveProjection` and `projectedColour`; `projected` now means the expected final.
+- **Game Day (P-40):** the TNF tab is first and Game Day opens on the tab for the time of week; red/green marks on the TNF lists; tap a TNF card to pick a swap, staged and sent with Push to Sleeper at the bottom (confirmation first).
+- **Roster moves:** unticking a suggested move still offers the flex-timing swap (P-47); the app week follows the server after the week's last game (P-37); a confirmed IR edit is kept up to 30 minutes and the refresh button re-reads Sleeper, with a "Read from Sleeper at" line on the roster card (P-39).
+- **Waivers (P-38, P-36):** IR players are drop candidates while a bench player can take the IR spot (you choose who); bye players are ranked by rest-of-season average; dynasty leagues by dynasty value.
+- **Variance report (P-42, P-43), Roster (P-44, P-45):** tick which variances to clear, clear major variances with a confirmation; Out/Bye tags; one note names every beaten player.
+- **Player card (P-35):** the weekly cards cover weeks 1-18; tap one for projected vs actual points and the stat lines that exist.
+- **Not built:** P-41 (open question) and P-4 (needs a Roster Audit sample).
+- **Not tested here:** nothing was run against live Sleeper, Multiview or a phone. The live projection, ticker role and swap push were tested with made-up data and a spawned test server; Sleeper's weekly projection not changing during a game is read from one snapshot; projected stat lines in the player card depend on Sleeper's weekly pool returning the player; the Roster page add flow still picks the IR replacement automatically.
+**Manual step required:** none (no compose or env change; the ticker settings are stored in the app's database). Set `IMAGE_TAG=4.20.0` in the stack `.env`.
+
+---
+
 ## v4.19.0 - 2026-11-13
 **Short:** v4.19.0 Android app for F-Droid, Back button
 **Long:** v4.19.0: every release now builds and signs the Android app for your F-Droid repo (APK attached to the release). The Android Back button closes pop-ups and menus first instead of leaving the screen or closing the app.

@@ -12,20 +12,22 @@ Notes / questions: Chris Godwin shows value 277 but a trend of down 1,729 (7 day
 
 ### P-35 - Player card: weekly cards cover the whole season; tap a card for projected vs actual stats
 Requested: 2026-11-11 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.20.0
 Notes / questions: James: the sideways-scrolling weekly cards on the player card (SUMMARY tab, `WeekScroller` in client/src/ui/playerCard.jsx) should include the entire current season, and tapping a game card should show the projected and actual stats for that game.
 Today: server/playerCard.js builds `projections` for only currentWeek-4 .. currentWeek+3 (`projWeeks`, line ~427); each card shows PROJ and FINAL points only. Plan: build all weeks 1-18 (byes shown as BYE, the current week still scrolled into view) and make each card a button that opens a detail panel (week, opponent, result, PROJ vs FINAL points, then a stat table: projected / actual per stat column for the player's position).
 Actual stats are already stored (`actual_stats`, same source as the GAME LOG tab, so the actual column is safe). What is NOT confirmed: projected stats. `proj_records` keeps projected fantasy points only (proj, adj_proj), not a per-stat line, so weeks the app never tracked have no stored projection and the early-season cards may show a dash for PROJ. A projected stat line would have to come from Sleeper's weekly projection pool (`getWeekProjections`, per-stat), which I have not verified returns past weeks. If it does not, past weeks show projected points only (no stat line) and say so in the panel. Decision for James if he cares: store the projected stat line from now on (small table/column change, additive migration) so future weeks have it.
 
+[Built 4.20.0] Player card weeks 1-18 and the tap detail are in; projected STAT lines appear only where Sleeper's weekly pool returns the player (not verified live), otherwise the panel says only points are stored.
+
 ### P-36 - Drop candidates: bye players use rest-of-season average, yellow text; dynasty leagues sort by dynasty value
 Requested: 2026-11-11 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.20.0
 Notes / questions: Waivers > Drop candidates (client/src/pages/DropCandidates.jsx; sort and `proj` come from the plan's candidate rows, line ~81 shows "Proj x.x"). James: (1) in redraft leagues a player on bye must not show 0 / sort as 0; show and sort by his rest-of-season average weekly projection instead; (2) the projection text and the BYE label for those players are yellow so it stands out; (3) in dynasty leagues sort by dynasty value instead of projected points.
 Readings, unconfirmed: "rest of season average" = mean of the remaining non-bye weeks' projected points in the league's scoring (weeks after the current one); the yellow is the app's existing amber/minor colour (`C.minor`), applied to both the "Proj" figure and the "Bye" status; in dynasty leagues the line shows dynasty value in place of Proj, sorted high to low within bench first, then starters (the v4.9 grouping stays); keeper counts as redraft. Open: what a bye player shows if he has no future projections (my default: "No projection", sorted last).
 
 ### P-37 - BUG: the app week does not move on after the week's last game
 Requested: 2026-11-11 (James: "the app week still isn't updating after the last game of the week is complete"; it was also meant to be fixed by the v4.9 rule "last kickoff + 4 h")
-Type: patch (bug)        Status: Pending
+Type: patch (bug)        Status: Built 4.20.0
 Notes / questions: The server side looks right: `advanceWeek` in server/sleeper.js returns week N+1 once now >= the week's latest ESPN kickoff + 4 h (fallback: the first Tuesday 10:00 Toronto at least a day after the app first saw week N). I could not run it against live data, so this is a reading of the code, not a confirmed cause. Likely cause found: the week is pinned by the client and the session.
 1. Restore on open: client/src/App.jsx (~line 176) calls `buildAll(sessionId, restoredIds, last?.week ?? undefined)`, i.e. it sends the SAVED week from the cached leagues, and POST /api/leagues/build (server/server.js ~line 462) does `session.week = week` for any integer 1-22. So every app open re-builds the old week and the server's advanced week is never used.
 2. `/api/connect` stores `week: state.week` in the session once (line ~417); a session that stays open never moves on, and the client has no timer that asks again after the last game.
@@ -36,15 +38,17 @@ Open: does the week switcher in the app let James choose another week by hand (s
 
 ### P-38 - Waivers Drop candidates / Claim Generator: IR players as drops, user picks the bench player who takes the IR spot
 Requested: 2026-11-11 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.20.0
 Notes / questions: James: if a team's IR spots are full but it has IR-eligible players on the bench, the IR players are drop candidates. Choosing an IR player to drop makes the user pick WHICH bench player moves into IR (so the roster stays compliant). The claim then first swaps the IR players, then processes the claim. When pending claims have used up all the bench-to-IR swaps, the remaining IR players are removed from the drop candidates.
 What exists (found in code, not run live): P-26 (v4.16.0) already does this for the Roster page's add flow only (client/src/rosterChanges.js `dropOptions` / `irSwapCandidate`, push order IR out, IR in, drop, add in RosterPage.jsx). There the replacement is picked automatically (the highest-ranked IR-eligible bench player, not already used by another add's swap) and IR players are listed only while such a player exists. The Waivers > Drop candidates page (client/src/pages/DropCandidates.jsx) and the Claim Generator (WaiverPage.jsx) do not list IR players and do not carry an `irSwap`, so this is new work there.
 Plan (not built): list IR players on Drop candidates when at least one IR-eligible bench player is still free; ticking one asks which free bench player takes the IR spot (dropdown of IR-eligible bench players not locked and not already chosen by another ticked drop or claim, highest-ranked first as the default); each bench player can be used once across all ticked drops and claims, and once all are used the remaining IR players disappear from the list (and untick if they were ticked); the claim carries the `irSwap`, and the push does IR out, IR in, then the claim with its drop, as on the Roster page. Also reuse the same chooser on the Roster page add flow so both behave the same (replaces P-26's automatic pick).
 Readings, unconfirmed: "IR spots full" = no open IR slot, but IR players stay offered whenever a free IR-eligible bench player exists (as P-26); the swap is IR player to bench, chosen bench player to IR, then the drop is the benched IR player; the push is all-or-nothing per claim, using the same three Sleeper calls as the Roster page (IR calls not seen failing live); locked bench players are not eligible.
 
+[Built 4.20.0] Drop candidates and the Claim Generator offer IR players with a bench-player chooser; the push does IR out, IR in, then the claim. NOT done: reusing the chooser on the Roster page add flow (it still picks the replacement automatically, P-26).
+
 ### P-39 - BUG: after an IR swap the app says the roster is over the limit
 Requested: 2026-11-11 (James: "after making an IR swap in the app, it is telling me I'm over the roster limit, possibly related to the bench having an extra player?")
-Type: patch (bug)        Status: Pending (cause narrowed down: stale read between the two IR steps; fix not built)
+Type: patch (bug)        Status: Built 4.20.0
 Notes / questions: The same symptom was reported on 2026-11-04 (P-22: eligibility card still 1 over after an IR move) and the v4.15.0 changes (every starting slot counts, post-push read-back overlay) did not cover every case, or this is a different case.
 How the check works (client/src/ui/compute.js `rosterCompliance`, server/buildLeague.js): limit = starting slots + the league's BN count; players = filled starters + bench (bench = roster players that are not starters, not in `reserve` and not on taxi). IR and taxi players do not count. A swap that moves X out of IR to the bench and Y from the bench into IR leaves the count unchanged, so a correct read after the swap should not be over unless the roster was already full and only one half of the swap happened (IR out done, IR in not), or the player read is stale.
 Candidate causes (read from code, none confirmed): (1) Half a swap: IR out went through and IR in did not (or failed to verify), so X sits on the bench and Y is still there too: the bench has the extra player, as James suspects. (2) Stale read: the confirmed-edit overlay (`sleeper.effectiveRoster`, 5 min) only replaces `reserve`, `taxi` and drops; if Sleeper's public roster lags on the order of seconds to minutes and the overlay was not recorded for a step (read-back not confirmed), the app builds the old IR list against the new bench or the other way round. (3) Only the Roster page's "IR swap with a drop" path (P-26) records `irSwap`; a manual swap from the compliance card or elsewhere may not note both steps in the overlay. (4) Roster limit taken from `roster_positions` BN count: a league whose real limit differs (extra or fewer bench spots in its settings) would show over/under after any move.
@@ -56,9 +60,11 @@ What the code shows (server/server.js ~455, server/sleeper.js getRosters/liveWin
 Fix additions (not built): the refresh button also forces a fresh roster read for the open leagues (cheap, once per press); when the card shows an over-limit or IR issue right after a push, show "Read from Sleeper at HH:MM" and the counts it used (spots, players, IR x of y) so a stale read is obvious; log the raw reserve / players counts the first time a half-swap state is seen, so the next occurrence can be traced.
 Needed from James to find it (now mostly answered): which league, the roster counts shown ("over by N", spots, players), which two players were swapped and from which screen, and whether Sleeper itself shows the roster as legal. Then I compare the app's bench/IR lists with Sleeper's raw roster for that league. Not built.
 
+[Built 4.20.0] Cause not proven (no live data): the confirmed-edit overlay now lasts 30 minutes, the refresh button re-reads rosters, the roster card shows when it was read from Sleeper, and an over-limit read is logged with its counts. Not run against the NextFL 14 vs 15 case.
+
 ### P-40 - Game Day: TNF tab first, time-based default tab, red/green TNF comparisons, tap a TNF card to swap
 Requested: 2026-11-12 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.20.0
 Notes / questions: James, four parts for Game Day (client/src/pages/GameDay.jsx, client/src/tnf.js):
 1. Tab order: TNF all the way to the left (today Cheer meter, Primetime, TNF; becomes TNF, Cheer meter, Primetime).
 2. Default tab on open, by time (Toronto = Eastern): TNF from Tuesday 3:00 am until Friday 3:00 am; then Cheer meter until Sunday after the last 4 pm games are done; then Primetime until Tuesday 3:00 am. Today the default is always Cheer meter (`useState("cheer")`). He can still tap any tab.
@@ -78,7 +84,7 @@ Open question for James: is it the compared roster player (on bye or Out) or the
 
 ### P-42 - "Clear major variances" button wherever "Clear minor variances" exists, behind a confirmation pop-up
 Requested: 2026-11-12 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.20.0
 Notes / questions: James: add a clear-major-variances button to every place that has a clear-minor-variances button; clearing majors needs a confirmation pop-up.
 Where the minor button exists today (found in code): (1) the page header on every league page, `ClearVariancesButton` in client/src/ui/modals.jsx, used once at client/src/App.jsx ~642 with the page's variances; (2) inside the variance report pop-up, "Clear minor variances (N)" in the same file (~line 272). The League page change log also has a "Clear N changes" button (client/src/pages/LeaguePage.jsx ~56); it clears settings-change entries, not variances, so my reading is that it gets no red button.
 What exists for majors: a red variance can already be cleared one at a time in the report (v4.6, key = rule + player + `|RED`, comes back next week for week-keyed items, `canClear`/`ackKey` in client/src/variances.js); there is no clear-all for reds. `minorKeys` collects the yellow keys; a matching `majorKeys` (severity major, not cleared, via `ackKey`) would feed the same clear call.
@@ -87,7 +93,7 @@ Readings, unconfirmed: scope = same as the yellow button beside it; locked or gr
 
 ### P-43 - Variance report pop-up: checkboxes on the left, only ticked variances are cleared
 Requested: 2026-11-12 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.20.0
 Notes / questions: James: on the variance clear screen add checkboxes to the left, default checked; only the checked variances clear when pressing the respective "clear variances" button.
 Where (found in code): the variance report pop-up, `VarianceReportModal` in client/src/ui/modals.jsx: a tree League > Page > Rule > one row per variance, with "Clear minor variances (N)" at the top (`minorKeys` collects every uncleared minor in the pop-up) and a per-row "Clear it?" confirm for single variances. Today the top button clears ALL uncleared minors in the pop-up.
 Plan (not built): a checkbox at the left of every uncleared variance row, ticked by default (including variances that appear later while it is open); the group headers (league, page, rule) get a tri-state checkbox that ticks/unticks everything under them; "Clear minor variances (N)" counts and clears only the ticked minor rows, and P-42's "Clear major variances (N)" button (with its confirmation pop-up) only the ticked major rows; unticked rows stay as they are; N updates live and the button is disabled at 0; already-cleared rows (Show cleared) have no checkbox. The ticks live only while the pop-up is open (reset when reopened).
@@ -95,7 +101,7 @@ Readings, unconfirmed: "the variance clear screen" = this report pop-up (the pag
 
 ### P-44 - Roster move recommendations: show "(Out)" / "(Bye)" in brackets beside a player's name
 Requested: 2026-11-12 (James)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.20.0
 Notes / questions: James: if a player is out or on bye, put that status in brackets beside their name on the roster move recommendation cards.
 Where (found in code): Roster page move cards, client/src/pages/RosterPage.jsx: `changeText` builds the card titles for lineup moves ("from -> to"), adds from free agents / waivers, swaps and IR moves, and every player name goes through the small `Nm` component (~line 868). The move objects carry only ids and names (`fromId/fromName/toId/toName`, `nameA/nameB`, IR `name`), not statuses, so the status has to be looked up from the league's rosters by id.
 Plan (not built): `Nm` shows a bracketed tag after the name when the player is Out or on bye, e.g. "Rhamondre Stevenson (Out)", "Bucky Irving (Bye)". Status comes from the league data already in the page (starters / bench / IR / taxi and, for adds, the free-agent row): a bye = `onBye()` (status "Bye" or "On bye"), out = injury status Out. Tag colour: red for both Out and Bye (James, 2026-11-12 18:43: "Bye should also be red"). Applies to every name on those cards, including the added free agent and the drop dropdown labels if cheap.
@@ -103,7 +109,7 @@ Readings, unconfirmed (please correct): (1) "out" = injury status Out only; Doub
 
 ### P-45 - "Free agent outprojects a starter / bench player": name every player beaten in one variance
 Requested: 2026-11-12 (James: consolidate the variance by combining player names; if a waiver player outprojects multiple starters, show the multiple players in one variance instead of one each; same for bench players)
-Type: minor        Status: Pending
+Type: minor        Status: Built 4.20.0
 Notes / questions: How it works now (found in code): `compareToRoster` (client/src/ui/compute.js) picks only the WEAKEST eligible starter (or, if no starter is beaten, the weakest bench player at his position) and writes a note naming that one player: "projected 12.1 vs Smith 8.0 at WR2". The variance is one per free agent (`collectVariances` in client/src/variances.js, subject = the free agent's name, rule "Free agent outprojects a starter" or "... a bench player"), shown on the waiver card as "Beats a starter: ...".
 Plan (not built): the same single variance per free agent, but the note lists EVERY player he beats, weakest first and joined with commas, e.g. "projected 12.1 vs Smith 8.0 at WR2, Jones 9.5 at FLEX, Lee 11.0 at WR1"; for the bench rule "projected 9.0 vs bench Cole 4.2, Park 6.1, Diaz 8.4" (every bench player at his position whom he beats; dynasty leagues list the bench players with lower dynasty value, values shown as now). Severity, the variance key (league, week, page, rule, free agent name), clearing and "beats a starter outranks beats a bench player" stay exactly as they are, so cleared variances stay cleared. The waiver page card note and the variance report show the same text.
 Readings, unconfirmed: (1) I read the request as ONE free agent beating several of YOUR players; if you instead mean several free agents that all beat the same starter of yours, tell me and I will group by your player ("Smith is outprojected by A, B, C") instead; (2) when a free agent beats a starter, the bench list is still not added to the same variance (red outranks yellow, as today); (3) your players on bye or locked stay out of the list, exactly as now (P-41 may change the bye part).
@@ -303,12 +309,12 @@ Notes / questions: `android` job added to release.yml (Gradle instead of Bubblew
 
 ### P-47 - Unticking a suggested move must not hide the other suggestions (flex timing)
 Requested: 2026-11-15 08:03 (James)
-Type: patch        Status: Pending (logged only, build on "build")
+Type: patch        Status: Built 4.20.0
 Notes / questions: when a default suggested move is unticked (example: flex player swapped with a bench player), the app must still recalculate and offer the other applicable moves, e.g. the flex player kicks off earlier than a positional starter, so swap them. Found in code (not run live): `dependents()` in client/src/rosterChanges.js adds every slot of an unticked lineup/add move to `skip`, and the layer-0 pass skips slots any lineup change touches, so `flexTimingPairs` (client/src/lineup.js) never sees the flex slot. Plan: re-check on the roster as it stands without the unticked move; mark the resulting swap `conflicts` with it so ticking one unticks the other; add a test with the flex/bench example. Reading unconfirmed: same-league only, locked players excluded as today.
 
 ### P-48 - Multiview "Handoff 2": projection colours in the ticker summary, sync-only "ticker" user role, NFL stats question
 Requested: 2026-11-15 17:06 (James, handoff file from the Multiview chat)
-Type: minor (Part 1 additive, Part 2 new role, page and routes)        Status: Pending (logged only, build on "build")
+Type: minor (Part 1 additive, Part 2 new role, page and routes)        Status: Built 4.20.0
 Notes / questions: Part 1: add to each league `mine` and `opp` the fields `paceProjected` and `projectedColour` ("green|amber|red|" empty = no colour) and the same two to each players[] entry; 1 decimal; keep every existing field. Part 2: new role "ticker" (admin gives it): a small "Ticker sync" page only (link/unlink Sleeper, includeInTicker per league, sync status, own tokens: name, last 4, revocable); tokens carry scope `ticker:read` only (summary, health, stream, headshot, own leagues only); every other route and page 403; sync like a full user (same cache and cadence); admin list/last sync/token use/disable/cap (default off, small limit); tokens hashed, shown once, per-token rate limit, audit lines for create, revoke and 403s. Part 3: asked whether the app already stores broader NFL box scores and could serve them read-only.
 Found in code (not run live): (1) the league `colour` is `matchupOutlook` in server/gameday.js (my expected final vs the opponent's, threshold 5% of the remaining points), not "points vs own projection", so "the same rule" cannot be applied to a team's own colour without a decision; the player rule is client-side only (client/src/livePace.js: points / (projection x game progress) >= 0.95 green, >= 0.6 amber, else red, no colour under 10% progress or without a projection). (2) The summary's team `projected` is an expected final (finished games count actual points, live games the larger of points and projection, not-started games the projection), not the full-game projection the handoff wants. (3) Ticker tokens today: one per owner account (server/ticker.js, /api/ticker-token, owner only); no roles exist beyond owner/user. (4) Part 3: the app stores no all-player box scores; only rostered players' weekly actual stat lines (actual_stats) and nflverse files for the player card, plus ESPN scoreboard game state; Multiview should use the public feed.
 Readings to confirm before building: team colour = league colour for `mine` and the mirror for `opp` (or each team's pace-based tone); player colour = livePace rule; before kickoff and after final colour = "" (the app stops colouring a finished game); paceProjected for a team = sum of its players' pace values; projected stays as sent today unless James wants the full-game number.
