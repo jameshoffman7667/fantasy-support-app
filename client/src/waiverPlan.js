@@ -214,7 +214,7 @@ export function resetClaims(plan) {
  *                    with no future projection he has no number ("No projection") and sorts last.
  */
 const onByeP = (p) => Boolean(p) && (p.status === "Bye" || p.kickoffLabel === "On bye");
-export function dropMetric(p, league) {
+export function dropRankMetric(p, league) {
   if (league?.leagueType === "dynasty") return p?.value != null ? { value: Number(p.value), kind: "dynasty" } : { value: null, kind: "dynasty" };
   if (onByeP(p)) {
     const from = league?.ros?.from, to = league?.ros?.to;
@@ -230,7 +230,7 @@ export function dropMetric(p, league) {
 /** The number the list sorts by: lowest first; a player without a number goes last if he is on bye or has no dynasty value, else counts as 0 as before. */
 const sortKey = (m, p) => (m.value != null ? m.value : m.kind === "ros" || m.kind === "dynasty" ? Number.POSITIVE_INFINITY : 0);
 export function dropPool(league, isLockedFn = () => false) {
-  const withMetric = (p) => { const m = dropMetric(p, league); return { ...p, dropValue: m.value, dropKind: m.kind, dropSort: sortKey(m, p) }; };
+  const withMetric = (p) => { const m = dropRankMetric(p, league); return { ...p, dropValue: m.value, dropKind: m.kind, dropSort: sortKey(m, p) }; };
   const bench = (league?.bench || []).filter((p) => p && !isLockedFn(p, league)).map((p) => withMetric({ ...p, where: "bench" }));
   const starters = (league?.starters || []).filter((s) => s?.player && !isLockedFn(s.player, league)).map((s) => withMetric({ ...s.player, where: "starter", slot: s.slot }));
   const byKey = (x, y) => (x.p.dropSort === y.p.dropSort ? 0 : x.p.dropSort - y.p.dropSort) || x.i - y.i;

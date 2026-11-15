@@ -208,7 +208,7 @@ test("P-42 / P-43: major keys carry the red suffix; only ticked variances are cl
   assert.deepEqual(tickedItems(all, "minor", new Set()).map(ackKey), ["d", "e"]); // default: everything ticked
 });
 
-import { dropMetric, dropPool, orderDrops } from "../client/src/waiverPlan.js";
+import { dropRankMetric as dropMetric, dropPool, orderDrops } from "../client/src/waiverPlan.js";
 test("P-36: drop candidates rank by projection, a bye player's rest-of-season average, or dynasty value", () => {
   const league = { leagueType: "redraft", ros: { from: 10, to: 17, loaded: 8 }, starters: [{ slot: "WR", player: { id: "s1", name: "Start", proj: 15 } }],
     bench: [{ id: "b1", name: "Bye guy", proj: 0, status: "Bye", ros: 70, bye: 10 }, { id: "b2", name: "Low", proj: 3 }, { id: "b3", name: "Bye none", proj: 0, kickoffLabel: "On bye", bye: 10 }, { id: "b4", name: "Mid", proj: 6 }] };
@@ -220,4 +220,36 @@ test("P-36: drop candidates rank by projection, a bye player's rest-of-season av
   const dyn = { leagueType: "dynasty", starters: [], bench: [{ id: "a", name: "A", value: 900, proj: 1 }, { id: "b", name: "B", value: 120, proj: 20 }, { id: "c", name: "C", proj: 5 }] };
   assert.deepEqual(dropPool(dyn).map((p) => p.id), ["b", "a", "c"]); // lowest dynasty value first, no value last
   assert.equal(dropPool(dyn)[0].dropKind, "dynasty");
+});
+
+import { layerChanges, toggle } from "../client/src/rosterChanges.js";
+test("P-47: unticking the flex/bench move still offers the flex-timing swap, and the two conflict", () => {
+  const future = (h) => Date.now() + h * 3600 * 1000;
+  const pl = (id, name, pos, proj, kickoff) => ({ id, name, pos, proj, kickoff, kickoffLabel: `in ${kickoff}` });
+  const flexP = pl("f", "Flex Early", "WR", 8, future(2)); // kicks off earlier than the positional starter
+  const wrP = pl("w", "WR Late", "WR", 14, future(30));
+  const benchB = pl("b", "Bench Better", "RB", 12, future(26));
+  const league = {
+    id: "L", starters: [{ slot: "WR", player: wrP }, { slot: "FLEX", player: flexP }], bench: [benchB], ir: [], taxi: [],
+  };
+  const move = { key: "L:1:b", type: "lineup", slotIndex: 1, slot: "FLEX", fromId: "f", fromName: "Flex Early", toId: "b", toName: "Bench Better", delta: 4, blocked: null };
+  // ticked: the swap is not offered at the first layer (the flex player is replaced)
+  const on = layerChanges(league, [move], new Set([move.key]));
+  assert.equal(on.changes.filter((c) => c.type === "swap").length, 0);
+  // unticked: the flex player is still there, so the swap with the later positional starter is suggested
+  const off = layerChanges(league, [move], new Set());
+  const swap = off.changes.find((c) => c.type === "swap");
+  assert.ok(swap, "the flex-timing swap is offered");
+  assert.deepEqual([swap.nameA, swap.nameB, swap.slot, swap.slotB_label], ["Flex Early", "WR Late", "FLEX", "WR"]);
+  assert.deepEqual(swap.conflicts, [move.key]); assert.equal(swap.parent, undefined);
+  // ticking the swap leaves the move unticked; ticking the move unticks the swap
+  const withSwap = toggle(off.changes, off.checked, swap.key, true);
+  assert.ok(withSwap.has(swap.key) && !withSwap.has(move.key));
+  const back = toggle(off.changes, withSwap, move.key, true);
+  assert.ok(back.has(move.key) && !back.has(swap.key));
+  // and once the move is ticked again the alternative is gone
+  assert.equal(layerChanges(league, [move], back).changes.filter((c) => c.type === "swap").length, 0);
+  // the swap stays when it is ticked (it must not vanish the moment it is chosen)
+  const kept = layerChanges(league, [move], withSwap);
+  assert.ok(kept.changes.some((c) => c.key === swap.key) && kept.checked.has(swap.key));
 });

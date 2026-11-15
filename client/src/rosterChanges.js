@@ -523,6 +523,44 @@ function dependents(league, all, ticked) {
       depth: (parent.depth || 0) + 1,
     });
   }
+  // v4.20.0 (P-47): an UNticked lineup / add move no longer hides the other suggestions. The slots it wanted stay as they are on
+  // the roster, so the flex-timing rule is re-run there too: a flex starter who kicks off before a positional starter gets his
+  // swap, offered as its own suggestion that `conflicts` with the unticked move(s) it overlaps (ticking one unticks the other).
+  const unticked = new Map(); // slot index -> keys of the unticked moves that want it
+  for (const c of all) {
+    if (c.blocked || ticked.has(c.key) || (c.type !== "lineup" && c.type !== "add")) continue;
+    for (const slot of touchedSlots(c)) unticked.set(slot, [...(unticked.get(slot) || []), c.key]);
+  }
+  if (unticked.size) {
+    const skipAdding = new Set();
+    arr.starters.forEach((s, i) => s.adding && skipAdding.add(i));
+    const have = new Set([...all, ...out].filter((c) => c.type === "swap" && !c.why).map((c) => `${c.slotA}:${c.slotB}`));
+    for (const { flexIdx: i, posIdx: j } of flexTimingPairs(lg, skipAdding)) {
+      if (!unticked.has(i) && !unticked.has(j)) continue; // not held back by an unticked move: the pass above covers it
+      if (have.has(`${i}:${j}`)) continue;
+      const fp = lg.starters[i].player;
+      const sp = lg.starters[j].player;
+      if (fp?.id == null || sp?.id == null) continue;
+      out.push({
+        key: `A:S:${i}:${j}:${fp.id}:${sp.id}`,
+        type: "swap",
+        slotA: i,
+        slotB: j,
+        slot: lg.starters[i].slot,
+        slotB_label: lg.starters[j].slot,
+        idA: String(fp.id),
+        nameA: fp.name,
+        kickA: fp.kickoffLabel || null,
+        idB: String(sp.id),
+        nameB: sp.name,
+        kickB: sp.kickoffLabel || null,
+        delta: 0,
+        blocked: null,
+        conflicts: [...new Set([...(unticked.get(i) || []), ...(unticked.get(j) || [])])],
+        alt: true,
+      });
+    }
+  }
   return out;
 }
 
