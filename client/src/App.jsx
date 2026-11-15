@@ -6,7 +6,7 @@ import { Dashboard, LeagueOverview, SelectLeaguesScreen } from "./pages/Dashboar
 import { LeagueTabs, STATUS_BADGE_TABS, TAB_META, TabBar, TopBar, sourceStatusLabel } from "./ui/chrome.jsx";
 import { BootstrapScreen, CardCtx, ErrorScreen } from "./ui/common.jsx";
 import { computeInjury, computeLineup, computeRoster, computeTrade, computeWaiver } from "./ui/compute.js";
-import { ClearVariancesButton, DvpDetailModal, VarianceButton, VarianceReportModal, WeatherModal } from "./ui/modals.jsx";
+import { ClearMajorVariancesButton, ClearVariancesButton, DvpDetailModal, VarianceButton, VarianceReportModal, WeatherModal } from "./ui/modals.jsx";
 import { PlayerCardCtx, PlayerCardModal } from "./ui/playerCard.jsx";
 import { C } from "./ui/theme.js";
 import { MAX_DESKTOP_WIDTH, useDesktop } from "./ui/desktop.js"; // v4.18.0 (P-5)
@@ -662,6 +662,7 @@ export default function App() {
             {STATUS_BADGE_TABS.includes(tabKey) && (
               <div className="flex justify-end items-center gap-2 px-4 pt-3 -mb-1">
                 <ClearVariancesButton variances={pageVariances} onClear={clearVariances} />
+                <ClearMajorVariancesButton variances={pageVariances} onClear={clearVariances} />
                 <VarianceButton variances={pageVariances} onOpen={() => openVariances({ leagueId: activeLeague.id, page: tabKey })} label="Variance report — this page" />
               </div>
             )}

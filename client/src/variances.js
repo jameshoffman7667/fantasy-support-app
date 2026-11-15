@@ -277,6 +277,15 @@ export function autoClearKeys(variances, { leagueId, page } = {}) {
 export function minorKeys(variances) {
   return [...new Set(variances.filter((v) => v.severity === "minor" && !v.cleared).map((v) => v.key))];
 }
+/** v4.20.0 (P-42): the uncleared red variances of a scope (what "Clear major variances" would clear). */
+export function majorItems(variances) {
+  const seen = new Set();
+  return variances.filter((v) => v.severity === "major" && !v.cleared && !seen.has(ackKey(v)) && seen.add(ackKey(v)));
+}
+/** v4.20.0 (P-42): the acknowledgement keys (with the red suffix) for those reds. */
+export const majorKeys = (variances) => majorItems(variances).map(ackKey);
+/** v4.20.0 (P-43): the uncleared variances of a severity whose checkbox is ticked ("unticked" holds the ack keys he unticked). */
+export const tickedItems = (variances, severity, unticked) => variances.filter((v) => v.severity === severity && !v.cleared && !unticked.has(ackKey(v)));
 
 
 /* ---------------- v3.1: what a push clears ---------------- */

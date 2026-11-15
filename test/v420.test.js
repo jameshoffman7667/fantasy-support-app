@@ -194,3 +194,16 @@ test("P-45: one variance names every starter (or bench player) the free agent be
   assert.equal(dyn.note, "dynasty value 310 vs bench Cole 120, Park 200");
   assert.equal(compareToRoster(league, pl("9", "Low", "WR", 1)).rule, null);
 });
+
+import { majorItems, majorKeys, minorKeys, tickedItems, ackKey } from "../client/src/variances.js";
+test("P-42 / P-43: major keys carry the red suffix; only ticked variances are cleared; cleared and grey ones are never included", () => {
+  const v = (key, severity, cleared = false) => ({ key, severity, cleared, rule: "R", subject: key, league: "L" });
+  const all = [v("a", "major"), v("b", "major"), v("b", "major"), v("c", "major", true), v("d", "minor"), v("e", "minor"), v("f", "info")];
+  assert.deepEqual(majorKeys(all), ["a|RED", "b|RED"]); // duplicates collapse, cleared reds are left out
+  assert.equal(majorItems(all).length, 2);
+  assert.deepEqual(minorKeys(all), ["d", "e"]);
+  const unticked = new Set(["a|RED", "e"]);
+  assert.deepEqual(tickedItems(all, "major", unticked).map(ackKey), ["b|RED", "b|RED"].slice(0, 2));
+  assert.deepEqual(tickedItems(all, "minor", unticked).map(ackKey), ["d"]);
+  assert.deepEqual(tickedItems(all, "minor", new Set()).map(ackKey), ["d", "e"]); // default: everything ticked
+});

@@ -1,5 +1,5 @@
 import * as api from "../api.js";
-import { ackKey, canClear, groupTree, minorKeys } from "../variances.js";
+import { ackKey, canClear, groupTree, majorItems, minorKeys, tickedItems } from "../variances.js";
 import { CheckCircle2, ChevronRight, ListChecks, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useBackLayer } from "./backLayer.js"; // v4.19.0
@@ -204,6 +204,54 @@ export function ClearVariancesButton({ variances, onClear }) {
   );
 }
 
+// v4.20.0 (P-42): "Clear major variances" always asks first: it says how many reds will be cleared and lists them (up to 8).
+export function ClearMajorsDialog({ items, onCancel, onConfirm }) {
+  const [busy, setBusy] = useState(false);
+  useBackLayer(true, onCancel);
+  const shownItems = items.slice(0, 8);
+  return (
+    <div role="alertdialog" aria-modal="true" aria-label="Clear major variances?" className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => !busy && onCancel()} data-clear-majors-dialog>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="w-full max-w-sm rounded-xl p-4 space-y-3">
+        <div style={{ color: C.text, fontFamily: "Oswald, sans-serif", fontWeight: 600 }} className="text-base">Clear {items.length} major variance{items.length === 1 ? "" : "s"}?</div>
+        <ul className="text-xs space-y-0.5" style={{ color: C.major }}>
+          {shownItems.map((v) => <li key={ackKey(v)}>{v.league ? `${v.league} · ` : ""}{v.rule}{v.subject ? `: ${v.subject}` : ""}</li>)}
+          {items.length > shownItems.length && <li style={{ color: C.textMuted }}>and {items.length - shownItems.length} more</li>}
+        </ul>
+        <div style={{ color: C.textMuted }} className="text-[11px]">They stay hidden until they change or the week turns. Nothing is changed in your lineup or in Sleeper.</div>
+        <div className="flex gap-2 justify-end">
+          <button type="button" disabled={busy} onClick={onCancel} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-sm" data-clear-majors-no>Cancel</button>
+          <button type="button" disabled={busy} onClick={async () => { setBusy(true); try { await onConfirm(); } finally { setBusy(false); } }} style={{ background: C.major, color: "#fff" }} className="rounded-md px-3 py-1.5 text-sm font-medium" data-clear-majors-yes>
+            {busy ? "Clearing…" : `Clear ${items.length} major variance${items.length === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// v4.20.0 (P-42): the red twin of the yellow "Clear variances" chip. It asks before it clears anything.
+export function ClearMajorVariancesButton({ variances, onClear }) {
+  const items = majorItems(variances);
+  const [asking, setAsking] = useState(false);
+  const none = items.length === 0;
+  return (
+    <>
+      <button
+        type="button"
+        disabled={none}
+        onClick={(e) => { e.stopPropagation(); setAsking(true); }}
+        style={{ color: none ? C.textFaint : C.major, background: "transparent", border: `1px solid ${none ? C.border : C.major}` }}
+        className="text-xs px-2.5 py-1.5 rounded-full font-medium shrink-0"
+        aria-label={`Clear major variances: ${items.length} clearable`}
+        data-clear-major-variances={items.length}
+      >
+        {`Clear major variances${items.length ? ` · ${items.length}` : ""}`}
+      </button>
+      {asking && <ClearMajorsDialog items={items} onCancel={() => setAsking(false)} onConfirm={async () => { await onClear(items.map(ackKey)); setAsking(false); }} />}
+    </>
+  );
+}
+
 export function VarianceReportModal({ title, variances, onClear, onClose }) {
   // v2.9: opens fully expanded (collapse is still one tap away). Groups that
   // appear later (a new league/page/rule) also open, unless the user collapsed them.
@@ -216,7 +264,12 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
   const shown = showCleared ? variances : variances.filter((v) => !v.cleared);
   const tree = useMemo(() => groupTree(shown), [shown]);
   const clearedCount = variances.filter((v) => v.cleared).length;
-  const toClear = minorKeys(variances);
+  // v4.20.0 (P-43): a checkbox on every uncleared variance, ticked by default; only the ticked ones clear.
+  const [unticked, setUnticked] = useState(() => new Set());
+  const [askMajors, setAskMajors] = useState(false);
+  const toClear = [...new Set(tickedItems(variances, "minor", unticked).map((v) => v.key))];
+  const majorsTicked = tickedItems(variances, "major", unticked);
+  const setTicks = (items, on) => setUnticked((prev) => { const n = new Set(prev); for (const v of items) { if (on) n.delete(ackKey(v)); else n.add(ackKey(v)); } return n; });
   const allIds = [];
   tree.forEach((l) => {
     allIds.push(`L:${l.id}`);
@@ -233,22 +286,37 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
       else n.add(id);
       return n;
     });
-  const Head = ({ id, level, sev, label, count }) => {
+  const Head = ({ id, level, sev, label, count, items = [] }) => {
     const isOpen = open.has(id);
     const color = SEV_COLOR(sev, sev === "ok");
+    const live = items.filter(canClear);
+    const on = live.filter((v) => !unticked.has(ackKey(v))).length;
     return (
-      <button
-        type="button"
-        onClick={() => toggle(id)}
-        aria-expanded={isOpen}
-        data-variance-group={id}
-        style={{ color, paddingLeft: level * 14 }}
-        className={`w-full flex items-center gap-1.5 text-left py-1.5 ${level === 0 ? "text-sm font-semibold" : level === 1 ? "text-[13px] font-medium" : "text-xs"}`}
-      >
-        <ChevronRight size={13} style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 120ms" }} className="shrink-0" />
-        <span className="truncate">{label}</span>
-        <span style={{ color: C.textFaint }} className="text-[11px] font-normal shrink-0">({count})</span>
-      </button>
+      <div className="flex items-center" style={{ paddingLeft: level * 14 }}>
+        {live.length > 0 && (
+          <input
+            type="checkbox"
+            className="mr-1.5 shrink-0"
+            checked={on === live.length}
+            ref={(el) => { if (el) el.indeterminate = on > 0 && on < live.length; }}
+            onChange={() => setTicks(live, on !== live.length)}
+            aria-label={`Select the variances under ${label}`}
+            data-variance-group-check={id}
+          />
+        )}
+        <button
+          type="button"
+          onClick={() => toggle(id)}
+          aria-expanded={isOpen}
+          data-variance-group={id}
+          style={{ color }}
+          className={`flex-1 min-w-0 flex items-center gap-1.5 text-left py-1.5 ${level === 0 ? "text-sm font-semibold" : level === 1 ? "text-[13px] font-medium" : "text-xs"}`}
+        >
+          <ChevronRight size={13} style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 120ms" }} className="shrink-0" />
+          <span className="truncate">{label}</span>
+          <span style={{ color: C.textFaint }} className="text-[11px] font-normal shrink-0">({count})</span>
+        </button>
+      </div>
     );
   };
   const count = (items) => items.filter((v) => !v.cleared).length + (showCleared ? items.filter((v) => v.cleared).length : 0);
@@ -276,7 +344,17 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
         >
           {clearing ? "Clearing…" : `Clear minor variances${toClear.length ? ` (${toClear.length})` : ""}`}
         </button>
+        <button
+          disabled={!majorsTicked.length || clearing}
+          onClick={() => setAskMajors(true)}
+          style={{ color: majorsTicked.length ? C.major : C.textFaint, border: `1px solid ${majorsTicked.length ? C.major : C.border}66` }}
+          className="text-[11px] rounded-md px-2 py-1"
+          data-clear-major-report
+        >
+          {`Clear major variances${majorsTicked.length ? ` (${majorsTicked.length})` : ""}`}
+        </button>
       </div>
+      {askMajors && <ClearMajorsDialog items={majorsTicked} onCancel={() => setAskMajors(false)} onConfirm={async () => { await onClear(majorsTicked.map(ackKey)); setAskMajors(false); }} />}
       {clearedCount > 0 && (
         <button onClick={() => setShowCleared((v) => !v)} style={{ color: C.textMuted }} className="text-[11px] mb-1 underline">
           {showCleared ? "Hide" : "Show"} {clearedCount} cleared variance(s)
@@ -290,27 +368,28 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
         <div>
           {tree.map((l) => (
             <div key={l.id} style={{ borderTop: `1px solid ${C.border}` }}>
-              <Head id={`L:${l.id}`} level={0} sev={l.severity} label={l.name} count={count(l.pages.flatMap((p) => p.rules.flatMap((r) => r.items)))} />
+              <Head id={`L:${l.id}`} level={0} sev={l.severity} label={l.name} items={l.pages.flatMap((p) => p.rules.flatMap((r) => r.items))} count={count(l.pages.flatMap((p) => p.rules.flatMap((r) => r.items)))} />
               {open.has(`L:${l.id}`) &&
                 l.pages.map((p) => (
                   <div key={p.page}>
-                    <Head id={`P:${l.id}:${p.page}`} level={1} sev={p.severity} label={p.label} count={count(p.rules.flatMap((r) => r.items))} />
+                    <Head id={`P:${l.id}:${p.page}`} level={1} sev={p.severity} label={p.label} items={p.rules.flatMap((r) => r.items)} count={count(p.rules.flatMap((r) => r.items))} />
                     {open.has(`P:${l.id}:${p.page}`) &&
                       p.rules.map((r) => (
                         <div key={r.rule}>
-                          <Head id={`R:${l.id}:${p.page}:${r.rule}`} level={2} sev={r.severity} label={r.rule} count={count(r.items)} />
+                          <Head id={`R:${l.id}:${p.page}:${r.rule}`} level={2} sev={r.severity} label={r.rule} items={r.items} count={count(r.items)} />
                           {open.has(`R:${l.id}:${p.page}:${r.rule}`) && (
                             <ul style={{ paddingLeft: 48 }} className="pb-1 space-y-0.5">
                               {r.items.map((v) => (
-                                <li key={v.key} style={{ color: SEV_COLOR(v.severity, v.cleared) }} className="text-xs" data-variance={v.severity}>
-                                  {canClear(v) ? (
+                                <li key={v.key} style={{ color: SEV_COLOR(v.severity, v.cleared), listStyle: "none", marginLeft: -22 }} className="text-xs flex items-start gap-1.5" data-variance={v.severity}>
+                                  {canClear(v) ? <input type="checkbox" className="mt-0.5 shrink-0" checked={!unticked.has(ackKey(v))} onChange={(e) => setTicks([v], e.target.checked)} aria-label={`Select: ${v.text}`} data-variance-check={v.severity} /> : <span className="shrink-0" style={{ width: 13 }} />}
+                                  <span className="min-w-0">{canClear(v) ? (
                                     <button type="button" onClick={() => setConfirm(v)} style={{ color: "inherit" }} className="text-left underline decoration-dotted underline-offset-2" data-clear-one={v.severity} aria-label={`Clear this ${v.severity === "major" ? "red" : "yellow"} variance`}>
                                       {v.text}
                                     </button>
                                   ) : (
                                     v.text
                                   )}
-                                  {v.cleared ? " (cleared)" : ""}
+                                  {v.cleared ? " (cleared)" : ""}</span>
                                 </li>
                               ))}
                             </ul>
@@ -324,7 +403,7 @@ export function VarianceReportModal({ title, variances, onClear, onClose }) {
         </div>
       )}
       <div style={{ color: C.textFaint }} className="text-[10px] mt-3">
-        Tap a red or yellow item to clear it (you're asked to confirm). Clearing hides it until a new one appears. The yellow "Clear" buttons clear every yellow item at once; red items are only cleared one at a time, here. Grey items can't be cleared.
+        Tap a red or yellow item to clear it (you're asked to confirm). Clearing hides it until a new one appears. Tick the boxes on the left (all are ticked to start) and the "Clear minor / major variances" buttons clear only the ticked items; clearing reds asks first. Grey items can't be cleared.
       </div>
       {confirm && (
         <div role="alertdialog" aria-modal="true" aria-label="Clear this variance?" className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => !confirmBusy && setConfirm(null)} data-clear-confirm>
