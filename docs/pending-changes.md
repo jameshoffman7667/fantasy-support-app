@@ -300,3 +300,8 @@ Requested: 2026-11-13 (James, build message; spec v1.11 section 15)
 Type: minor        Status: Built 4.19.0
 Notes / questions: `android` job added to release.yml (Gradle instead of Bubblewrap), `workflow_dispatch` rebuild with overwrite guard, `android-apk.yml` retired, host fixed to fantasy.hoffmanhouse.ca, assetlinks served with the built-in fingerprint, Back button layers for pop-ups and menus, tests, docs. The android job had not run when this was written; the first APK is untested until James confirms it on his phone. Sub-tab switches do not get their own history entry (decision, reported).
 
+
+### P-47 - Unticking a suggested move must not hide the other suggestions (flex timing)
+Requested: 2026-11-15 08:03 (James)
+Type: patch        Status: Pending (logged only, build on "build")
+Notes / questions: when a default suggested move is unticked (example: flex player swapped with a bench player), the app must still recalculate and offer the other applicable moves, e.g. the flex player kicks off earlier than a positional starter, so swap them. Found in code (not run live): `dependents()` in client/src/rosterChanges.js adds every slot of an unticked lineup/add move to `skip`, and the layer-0 pass skips slots any lineup change touches, so `flexTimingPairs` (client/src/lineup.js) never sees the flex slot. Plan: re-check on the roster as it stands without the unticked move; mark the resulting swap `conflicts` with it so ticking one unticks the other; add a test with the flex/bench example. Reading unconfirmed: same-league only, locked players excluded as today.
