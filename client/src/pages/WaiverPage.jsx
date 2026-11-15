@@ -16,6 +16,7 @@ import { PlayerLink } from "../ui/playerCard.jsx";
 import { SourceSummary } from "../ui/sourceNotes.jsx"; // v4.16.0 (P-28)
 import { AutoView } from "../ui/autoMode.jsx"; // v4.10
 import { DropCandidatesPage } from "./DropCandidates.jsx"; // v4.8
+import { STAGE_PAUSE_MS } from "../ui/rosterCompliance.jsx"; // v4.20.0 (P-38)
 import { forgetSent, isSent, markSent } from "../sentClaims.js"; // v4.8
 import { BidDistributionModal } from "../ui/bidChart.jsx"; // v4.4.2
 import { C, POS_COLOR, STATUS, fmtInt, fmtMoney, fmtPct, fmtWhen, inputStyle } from "../ui/theme.js";
@@ -777,7 +778,7 @@ function ClaimRow({ c, result, sim, mode, budget, isFaab, bench, handle, groupHa
             aria-label={`Player to drop for ${c.addName}`}
           >
             <option value="">None</option>
-            {bench.map((b) => (
+            {bench.filter((b) => b.where !== "ir" || String(b.id) === String(c.dropId)).map((b) => (
               <option key={b.id} value={String(b.id)}>{b.name} ({b.pos}{b.proj != null ? ` · ${b.proj.toFixed(1)}` : ""})</option>
             ))}
           </select>
@@ -1235,8 +1236,28 @@ function ClaimsPush({ league, ordered, cancelList = [], resendAll = false, integ
       onRefresh?.();
       return;
     }
+    let reserve = (league.reserveIds || []).map(String); // v4.20.0 (P-38): the injured-reserve list as the IR steps change it
+    const irDone = new Set();
     for (const c of (cancelList.length ? ordered : batch)) {
       try {
+        // v4.20.0 (P-38): a claim that drops an IR player first moves him to the bench and the chosen bench player into the IR spot
+        // (IR out, IR in), then the claim goes. Done once per IR player; if either IR step isn't confirmed the claim is not sent.
+        if (c.irSwap && c.dropId && !irDone.has(String(c.dropId))) {
+          const dropId = String(c.dropId), inId = String(c.irSwap.inId);
+          if (!reserve.includes(dropId)) { out.push({ label: `IR out: ${c.dropName || dropId}`, ok: false, detail: "he is no longer on injured reserve — refresh and check the claim." }); break; }
+          const outReserve = reserve.filter((x) => x !== dropId);
+          const inReserve = [...outReserve, inId];
+          const o = await api.pushReserve(league.id, outReserve);
+          out.push({ label: `IR out: ${c.dropName || dropId}`, ok: o.ok, verified: o.verified, detail: o.detail });
+          if (!o.ok) break;
+          await new Promise((res) => setTimeout(res, STAGE_PAUSE_MS));
+          const i = await api.pushReserve(league.id, inReserve);
+          out.push({ label: `IR in: ${c.irSwap.inName || inId}`, ok: i.ok, verified: i.verified, detail: i.detail });
+          if (!i.ok) break;
+          reserve = inReserve;
+          irDone.add(dropId);
+          await new Promise((res) => setTimeout(res, STAGE_PAUSE_MS));
+        }
         const r = await api.pushClaim(league.id, { addId: c.addId, dropId: c.dropId, bid: c.bid }, { keys: pushKeys(league, "waiver"), baseline: waiverBaselineKeys(league) });
         out.push({ label: label(c), ok: r.ok, verified: r.verified, detail: r.detail });
         if (r.ok || r.duplicate) { markSent(league.id, c); okClaims.push(c); }

@@ -327,3 +327,27 @@ test("P-40: TNF red/green comparisons, locked players excluded", () => {
   assert.deepEqual(t.lowStarters.map((r) => r.tone), ["red", null, null]); // 6 < 9 red; 15 not; locked never
   assert.deepEqual(t.highReserve.map((r) => r.tone), ["green", null]); // 14 > 12 green; 8 not
 });
+
+import { dropPool as dp38, freeIrReplacements, reconcileIr, generateClaims as gen38, syncDrops as sd38 } from "../client/src/waiverPlan.js";
+test("P-38: IR players are drop candidates while a bench player can take the IR spot; claims carry the IR swap", () => {
+  const b = (id, proj, extra = {}) => ({ id, name: `B${id}`, pos: "WR", proj, irEligible: true, ...extra });
+  const league = { leagueType: "redraft", starters: [], bench: [b("1", 5), b("2", 9), b("3", 2, { irEligible: false })], ir: [{ id: "ir1", name: "Hurt One", pos: "RB", proj: 0 }, { id: "ir2", name: "Hurt Two", pos: "RB", proj: 0 }], reserveIds: ["ir1", "ir2"] };
+  const pool = dp38(league);
+  assert.deepEqual(pool.filter((p) => p.where === "ir").map((p) => p.id), ["ir1", "ir2"]);
+  // no IR-eligible bench player: IR players are not offered
+  assert.equal(dp38({ ...league, bench: [b("3", 2, { irEligible: false })] }).some((p) => p.where === "ir"), false);
+  let drops = sd38([], pool).map((d) => (d.id === "ir1" || d.id === "ir2" ? { ...d, willing: true } : d));
+  drops = reconcileIr(drops, league);
+  const [a1, a2] = drops.filter((d) => d.isIr);
+  assert.equal(a1.irIn, "2"); // best free bench player first
+  assert.equal(a2.irIn, "1"); // each bench player is used once
+  // a third IR drop has nobody left: it is un-ticked
+  const three = reconcileIr([...drops, { id: "ir3", name: "H3", pos: "RB", isIr: true, willing: true }], { ...league, ir: [...league.ir, { id: "ir3", name: "H3", pos: "RB" }] });
+  assert.equal(three.find((d) => d.id === "ir3").willing, false);
+  assert.deepEqual(freeIrReplacements(league, drops, () => false, "ir1").map((p) => p.id), ["2"]); // for ir1, "1" is held by ir2
+  const { claims } = gen38({ bids: [{ id: "fa", name: "FA", pos: "RB", bid: 5 }], drops, openSpots: 0 });
+  assert.deepEqual(claims[0].irSwap, { inId: "2", inName: "B2" });
+  assert.equal(claims[0].dropId, "ir1");
+  // an IR drop without a chosen replacement makes no claim
+  assert.equal(gen38({ bids: [{ id: "fa", name: "FA", pos: "RB", bid: 5 }], drops: [{ ...a1, irIn: null }], openSpots: 0 }).claims.length, 0);
+});

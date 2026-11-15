@@ -28,7 +28,9 @@ export const claimKey = (addId, dropId) => `${addId}|${dropId || "-"}`;
  * is exactly: A/drop 1; B/drop 1, B/drop 2; C/drop 1, C/drop 2, C/drop 3.
  */
 export function generateClaims({ bids = [], drops = [], openSpots = 0 }) {
-  const willing = drops.filter((d) => d.willing);
+  // v4.20.0 (P-38): an IR player can be dropped only with a bench player chosen to take his IR spot (`irIn`)
+  const willing = drops.filter((d) => d.willing && (!d.isIr || d.irIn));
+  const swapOf = (d) => (d.isIr ? { irSwap: { inId: String(d.irIn), inName: d.irInName || null } } : {});
   const sorted = bids.map((b, i) => ({ ...b, _i: i })).sort((a, b) => b.bid - a.bid || a._i - b._i);
   const claims = [];
   const warnings = [];
@@ -38,7 +40,7 @@ export function generateClaims({ bids = [], drops = [], openSpots = 0 }) {
     const need = Math.max(0, k - openSpots);
     const n = Math.min(willing.length, need);
     for (let j = 0; j < n; j++) {
-      claims.push({ key: claimKey(b.id, willing[j].id), addId: b.id, addName: b.name, pos: b.pos, bid: b.bid, dropId: willing[j].id, dropName: willing[j].name, source: "plan", dropPriority: j, entryIdx: b._i });
+      claims.push({ key: claimKey(b.id, willing[j].id), addId: b.id, addName: b.name, pos: b.pos, bid: b.bid, dropId: willing[j].id, dropName: willing[j].name, ...swapOf(willing[j]), source: "plan", dropPriority: j, entryIdx: b._i });
     }
     if (need > willing.length) {
       warnings.push(`${b.name} (bid #${k}) needs ${need} willing drop(s) to be covered if every earlier claim wins, but only ${willing.length} ${willing.length === 1 ? "is" : "are"} marked willing.`);
@@ -66,7 +68,7 @@ export function effectiveClaims(plan, { openSpots = 0 } = {}) {
       return out;
     });
   for (const c of plan.custom || []) {
-    list.push({ key: c.key, addId: c.addId, addName: c.addName, pos: c.pos, bid: c.bid, dropId: c.dropId, dropName: c.dropName, source: "custom", dropPriority: 1000 });
+    list.push({ key: c.key, addId: c.addId, addName: c.addName, pos: c.pos, bid: c.bid, dropId: c.dropId, dropName: c.dropName, ...(c.irSwap ? { irSwap: c.irSwap } : {}), source: "custom", dropPriority: 1000 });
   }
   return { claims: list, warnings };
 }
@@ -184,9 +186,9 @@ export function setBid(bids, player, dollars) {
  */
 export function syncDrops(saved = [], bench = []) {
   const byId = new Map(bench.filter(Boolean).map((p) => [String(p.id), p]));
-  const kept = saved.filter((d) => byId.has(String(d.id))).map((d) => ({ ...d, name: byId.get(String(d.id)).name, pos: byId.get(String(d.id)).pos }));
+  const kept = saved.filter((d) => byId.has(String(d.id))).map((d) => ({ ...d, name: byId.get(String(d.id)).name, pos: byId.get(String(d.id)).pos, ...(byId.get(String(d.id)).where === "ir" ? { isIr: true } : {}) }));
   const have = new Set(kept.map((d) => String(d.id)));
-  const added = [...byId.values()].filter((p) => !have.has(String(p.id))).map((p) => ({ id: String(p.id), name: p.name, pos: p.pos, willing: false }));
+  const added = [...byId.values()].filter((p) => !have.has(String(p.id))).map((p) => ({ id: String(p.id), name: p.name, pos: p.pos, willing: false, ...(p.where === "ir" ? { isIr: true } : {}) }));
   return [...kept, ...added];
 }
 
@@ -235,7 +237,41 @@ export function dropPool(league, isLockedFn = () => false) {
   const starters = (league?.starters || []).filter((s) => s?.player && !isLockedFn(s.player, league)).map((s) => withMetric({ ...s.player, where: "starter", slot: s.slot }));
   const byKey = (x, y) => (x.p.dropSort === y.p.dropSort ? 0 : x.p.dropSort - y.p.dropSort) || x.i - y.i;
   const sorted = (rows) => rows.map((p, i) => ({ p, i })).sort(byKey).map((x) => x.p);
-  return [...sorted(bench), ...sorted(starters)];
+  // v4.20.0 (P-38): IR players are drop candidates while at least one IR-eligible bench player is free to take the IR spot.
+  const ir = irSwapPool(league, isLockedFn).length ? sorted((league?.ir || []).filter((p) => p && !isLockedFn(p, league)).map((p) => withMetric({ ...p, where: "ir", slot: "IR" }))) : [];
+  return [...sorted(bench), ...sorted(starters), ...ir];
+}
+/** v4.20.0 (P-38): bench players who could move into an IR spot (IR-eligible, not locked). */
+export const irSwapPool = (league, isLockedFn = () => false) => (league?.bench || []).filter((p) => p && p.irEligible && !isLockedFn(p, league));
+/** Bench players still free to take an IR spot: not chosen by another ticked IR drop (`exceptId` = the drop being edited). Best first. */
+export function freeIrReplacements(league, drops = [], isLockedFn = () => false, exceptId = null) {
+  const used = new Set(drops.filter((d) => d.willing && d.isIr && d.irIn && String(d.id) !== String(exceptId)).map((d) => String(d.irIn)));
+  const rank = (p) => (league?.leagueType === "dynasty" ? p?.value : p?.proj) ?? -1;
+  return irSwapPool(league, isLockedFn).filter((p) => !used.has(String(p.id))).sort((a, b) => rank(b) - rank(a) || String(a.name).localeCompare(String(b.name)));
+}
+/**
+ * Keeps the IR drops consistent: an IR drop's replacement must still be a free bench player and no two ticked IR drops share
+ * one. A ticked IR drop with no replacement left is un-ticked; an IR drop with no free replacement is removed from the list.
+ */
+export function reconcileIr(drops = [], league, isLockedFn = () => false) {
+  const pool = new Map(irSwapPool(league, isLockedFn).map((p) => [String(p.id), p]));
+  const taken = new Set();
+  const out = [];
+  for (const d of drops) {
+    if (!d.isIr) { out.push(d); continue; }
+    let { irIn, irInName } = d;
+    if (d.willing) {
+      if (!irIn || !pool.has(String(irIn)) || taken.has(String(irIn))) {
+        const next = freeIrReplacements(league, [...out, { ...d, willing: false }], isLockedFn, d.id).find((p) => !taken.has(String(p.id)));
+        irIn = next ? String(next.id) : null;
+        irInName = next?.name ?? null;
+      }
+      if (!irIn) { out.push({ ...d, willing: false, irIn: null, irInName: null }); continue; }
+      taken.add(String(irIn));
+      out.push({ ...d, irIn, irInName: pool.get(String(irIn))?.name ?? irInName });
+    } else out.push({ ...d, irIn: null, irInName: null });
+  }
+  return out;
 }
 
 /**
@@ -245,7 +281,7 @@ export function dropPool(league, isLockedFn = () => false) {
 export function orderDrops(drops = [], pool = [], arranged = false) {
   if (arranged) return drops;
   const byId = new Map(pool.filter(Boolean).map((p) => [String(p.id), p]));
-  const grp = (d) => (byId.get(String(d.id))?.where === "starter" ? 1 : 0);
+  const grp = (d) => { const w = byId.get(String(d.id))?.where; return w === "ir" ? 2 : w === "starter" ? 1 : 0; };
   const pr = (d) => { const p = byId.get(String(d.id)); return p?.dropSort ?? p?.proj ?? 0; };
   return drops
     .map((d, i) => ({ d, i }))
