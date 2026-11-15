@@ -17,6 +17,7 @@ const named = (loader, name) => lazy(() => loader().then((m) => ({ default: m[na
 const AnalyticsScreen = named(() => import("./pages/Analytics.jsx"), "AnalyticsScreen");
 const CommishScreen = named(() => import("./pages/Commish.jsx"), "CommishScreen"); // v3.8
 const GameDayScreen = named(() => import("./pages/GameDay.jsx"), "GameDayScreen");
+const TickerSyncScreen = named(() => import("./pages/TickerSync.jsx"), "TickerSyncScreen"); // v4.20.0 (P-48)
 const PickemScreen = named(() => import("./pages/Pickem.jsx"), "PickemScreen");
 const TAB_COMPONENTS = {
   roster: named(() => import("./pages/RosterPage.jsx"), "RosterPage"),
@@ -213,6 +214,11 @@ export default function App() {
       setAuthUser(status.user);
       if (status.user.mustChangePassword) {
         navigate({ screen: "forceChange" }, { replace: true });
+        return;
+      }
+      if (status.user.role === "ticker") {
+        // v4.20.0 (P-48): a ticker account sees only the Ticker sync page (the server refuses every other route for it).
+        navigate({ screen: "ticker" }, { replace: true });
         return;
       }
       let showedCache = false;
@@ -451,7 +457,7 @@ export default function App() {
 
   // v2.7: keep the Pick'em tab's red dot current even when the tab isn't open.
   useEffect(() => {
-    if (!authUser || authUser.mustChangePassword) return undefined;
+    if (!authUser || authUser.mustChangePassword || authUser.role === "ticker") return undefined;
     const check = () => api.getPickem().then((d) => setPickemChanged(d.changedCount || 0)).catch(() => {});
     check();
     const id = setInterval(check, 15 * 60 * 1000);
@@ -464,7 +470,7 @@ export default function App() {
     api.getCommishSummary().then((r) => setCommishSummary(r.byLeague || {})).catch(() => {});
   }, []);
   useEffect(() => {
-    if (!authUser || authUser.mustChangePassword) return undefined;
+    if (!authUser || authUser.mustChangePassword || authUser.role === "ticker") return undefined;
     loadCommishSummary();
     const id = setInterval(loadCommishSummary, 60 * 60 * 1000);
     return () => clearInterval(id);
@@ -476,7 +482,7 @@ export default function App() {
   // v2.8.1: load cleared variances; after each build, drop clears for issues
   // that have gone away (so if one comes back it's new again).
   useEffect(() => {
-    if (!authUser || authUser.mustChangePassword) return;
+    if (!authUser || authUser.mustChangePassword || authUser.role === "ticker") return;
     api.getVarianceAcks().then((r) => setAcks(new Set(r.keys || []))).catch(() => {});
   }, [authUser]);
   // v2.9: clears for issues that have gone away are only dropped after a
@@ -487,7 +493,7 @@ export default function App() {
   // prune response from overwriting a clear the person made in the meantime.
   const ackEpoch = useRef(0);
   useEffect(() => {
-    if (!authUser || authUser.mustChangePassword || refreshing) return;
+    if (!authUser || authUser.mustChangePassword || authUser.role === "ticker" || refreshing) return;
     if (!rawComputed.length) return;
     const complete = rawComputed.every((lg) => !lg.error && !lg.stale && !lg.fromCache);
     const sameWeek = new Set(rawComputed.map((lg) => lg.week)).size === 1;
@@ -540,7 +546,7 @@ export default function App() {
   const profileKeys = useMemo(() => [...new Set(liveLeagues.map((l) => l.scoringProfile).filter(Boolean))].sort(), [liveLeagues]);
   const profileSig = JSON.stringify(profileKeys); // profile keys contain "|", so no string joining
   useEffect(() => {
-    if (!authUser || authUser.mustChangePassword) return;
+    if (!authUser || authUser.mustChangePassword || authUser.role === "ticker") return;
     for (const p of JSON.parse(profileSig)) {
       api.getDvp({ profile: p }).then((t) => setDvpTables((prev) => ({ ...prev, [p]: t }))).catch(() => {});
     }
@@ -685,7 +691,7 @@ export default function App() {
         onWeekChange={handleWeekChange}
         showWeek={showWeek}
         userMenu={
-          authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange"].includes(view.screen)
+          authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange", "ticker"].includes(view.screen)
             ? {
                 name: sleeperUser?.display_name || authUser.username,
                 avatar: sleeperUser?.avatar || null,
@@ -697,7 +703,7 @@ export default function App() {
             : null
         }
       />
-      {authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange"].includes(view.screen) && (
+      {authUser && !authUser.mustChangePassword && !["login", "bootstrapping", "forceChange", "ticker"].includes(view.screen) && (
         <TabBar
           active={["gameday", "analytics", "pickem", "commish"].includes(view.screen) ? view.screen : "leagues"}
           dots={{ pickem: pickemChanged > 0, commish: Object.values(commishSummary).some((x) => x.status === "red") }}
@@ -731,6 +737,7 @@ export default function App() {
       {view.screen === "forceChange" && boxed("max-w-lg mx-auto", <ForcePasswordScreen authUser={authUser} onDone={handlePasswordChanged} onLogout={handleLogout} />)}
       <Suspense fallback={<PageLoading />}>
       {view.screen === "analytics" && boxed("max-w-[900px] mx-auto", <AnalyticsScreen authUser={authUser} leagues={computed} onDvpChange={() => setDvpVersion((v) => v + 1)} />)}
+      {view.screen === "ticker" && authUser?.role === "ticker" && boxed("max-w-lg mx-auto", <TickerSyncScreen authUser={authUser} onLogout={handleLogout} />)}
       {view.screen === "gameday" && <GameDayScreen leagues={computed} />}
       {view.screen === "pickem" && boxed("max-w-[1100px] mx-auto", <PickemScreen onChangedCount={setPickemChanged} />)}
       {view.screen === "commish" && boxed("max-w-[900px] mx-auto", <CommishScreen key={view.commishLeagueId || "all"} initialLeagueId={view.commishLeagueId || null} onSummaryChange={loadCommishSummary} />)}

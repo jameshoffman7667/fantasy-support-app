@@ -3,6 +3,7 @@ import * as schedule from "./schedule.js";
 import * as hub from "./projectionHub.js";
 import * as store from "./projectionStore.js";
 import { getUserState } from "./db.js";
+import { playerView } from "./projection.js"; // v4.20.0 (P-48)
 
 /**
  * v2.6 Game Day: across all of a user's tracked leagues this week, who to
@@ -181,9 +182,9 @@ export function primetimeCard({ my = [], opp = [], myPoints = 0, oppPoints = 0, 
   return { stage, leader, gap, earlierPending: earlier, my: { points: r2(myPoints), remProj: sum(a.remaining), remaining: a.remaining }, opp: { points: r2(oppPoints), remProj: sum(b.remaining), remaining: b.remaining }, need };
 }
 
-export async function getGameDay(username, { week: weekParam, ticker = false } = {}) {
+export async function getGameDay(username, { week: weekParam, ticker = false, leagueIds: leagueOverride = null } = {}) {
   const state = getUserState(username);
-  const leagueIds = state?.leagueIds || [];
+  const leagueIds = Array.isArray(leagueOverride) ? leagueOverride : state?.leagueIds || []; // v4.20.0: ticker-role users have no saved session, so the ticker passes their chosen leagues
   const settings = getSettings(username);
   const nfl = await sleeper.getState();
   const season = nfl.season;
@@ -247,24 +248,23 @@ export async function getGameDay(username, { week: weekParam, ticker = false } =
       if (!myM || !oppM) continue;
 
       const proj = await hub.getWeek({ season, week, settings: league.scoring_settings, sleeperPlayers: players }).catch(() => null);
-      // Expected final score for one side: finished games count their actual
-      // points, games in progress the larger of points so far and the
-      // projection (a rough live estimate), games not started the projection.
+      // Expected final score for one side (v4.20.0, P-48: server/projection.js): finished games count their actual points,
+      // games in progress the live projection (pace blended with the projection), games not started the projection.
       const sideInfo = (m) => {
         const slotNames = (league.roster_positions || []).filter((x) => x !== "BN" && x !== "IR" && x !== "TAXI");
         const starters = (m.starters || []).map((id, i) => ({ id, i })).filter((x) => x.id && x.id !== "0");
         let final = 0;
+        let pre = 0;
         const list = starters.map(({ id, i }) => {
           const p = players[id];
           const g = gameFor(p?.team || (p?.position === "DEF" ? id : null));
           const pts = m.players_points?.[id] != null ? Number(m.players_points[id]) : null;
           const projPts = proj ? hub.pick(proj, id).proj : null;
-          if (g?.state === "post") final += pts ?? 0;
-          else if (g?.state === "in") final += Math.max(pts ?? 0, projPts ?? 0);
-          else final += projPts ?? 0;
+          final += playerView({ state: g?.state, points: pts, proj: projPts, statusDetail: g?.statusDetail }).expected;
+          pre += projPts ?? 0;
           return { id, pts, proj: projPts, name: p?.position === "DEF" ? `${p?.first_name || id} ${p?.last_name || "D/ST"}`.trim() : name(p, id), pos: p?.position || null, team: p?.team || (p?.position === "DEF" ? id : null), state: g?.state ?? null, kickoff: g?.kickoffMillis ?? null, kickoffLabel: g?.kickoffLabel ?? null, statusDetail: g?.statusDetail ?? null, slot: slotNames[i] ?? null, slotOrder: i, stats: statsOf(id, p?.position, g) };
         });
-        return { list, final, points: Number(m.points ?? 0) };
+        return { list, final, pre, points: Number(m.points ?? 0) };
       };
       const me = sideInfo(myM);
       const opp = sideInfo(oppM);
@@ -281,6 +281,8 @@ export async function getGameDay(username, { week: weekParam, ticker = false } =
         oppPoints: r2(opp.points),
         myProjected: r2(me.final),
         oppProjected: r2(opp.final),
+        myProjection: r2(me.pre), // v4.20.0: the sum of the starters' pregame projections
+        oppProjection: r2(opp.pre),
         marginPct: r2(close.marginPct),
         closeFactor: r2(close.factor),
         ...matchupOutlook({ myPoints: me.points, oppPoints: opp.points, myProjected: me.final, oppProjected: opp.final }),

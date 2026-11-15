@@ -163,6 +163,18 @@ app.get("/.well-known/assetlinks.json", (req, res) => {
 /* ---------------- Login / logout / auth status (per-user, v2.1) ---------------- */
 // v4.18.0 (P-7): audit log of pushes, setting/credential changes and user admin (login and logout are recorded in their routes).
 app.use(audit.auditMiddleware(resolveUser));
+
+// v4.20.0 (P-48): a "ticker" account may use ONLY its own Ticker sync routes (plus sign-in, sign-out and its password).
+// Everything else under /api answers 403 for it, whichever route it is, and every refusal is audit-logged (path only, no query).
+app.use("/api", (req, res, next) => {
+  const pathname = req.originalUrl.split("?")[0];
+  if (ticker.tickerRoleAllows(pathname)) return next();
+  let user = null;
+  try { user = resolveUser(req); } catch { /* not signed in: the route's own check answers */ }
+  if (user?.role !== "ticker") return next();
+  audit.record({ username: user.username, kind: "ticker", action: "Blocked (ticker account)", ok: false, detail: `${req.method} ${pathname}`.slice(0, 120), ip: audit.clientIp(req) });
+  res.status(403).json({ error: "This account can only use Ticker sync.", code: "ticker_only" });
+});
 app.post("/api/login", async (req, res) => {
   try {
     if (!envOwnerUsername()) {
@@ -297,7 +309,8 @@ app.get("/api/admin/users", requireOwner, (req, res) => {
 app.post("/api/admin/users", requireOwner, async (req, res) => {
   try {
     const username = normalizeUsername(req.body?.username);
-    const role = req.body?.role === "owner" ? "owner" : "guest";
+    const role = req.body?.role === "owner" ? "owner" : req.body?.role === "ticker" ? "ticker" : "guest";
+    if (role === "ticker" && ticker.tickerUserCount() >= ticker.tickerCap()) return res.status(400).json({ error: ticker.tickerCap() === 0 ? "Ticker users are switched off (limit 0). Set a limit first." : `The ticker-user limit (${ticker.tickerCap()}) is reached.` });
     if (!isValidUsername(username)) {
       return res.status(400).json({ error: "Enter a valid Sleeper username (letters, numbers, _ . - only)." });
     }
@@ -349,8 +362,11 @@ app.post("/api/admin/users/:username/role", requireOwner, (req, res) => {
   const target = adminTarget(req, res);
   if (!target) return;
   const role = req.body?.role;
-  if (role !== "owner" && role !== "guest") return res.status(400).json({ error: 'Role must be "owner" or "guest".' });
+  if (role !== "owner" && role !== "guest" && role !== "ticker") return res.status(400).json({ error: 'Role must be "owner", "guest" or "ticker".' });
+  if (role === "ticker" && target.role !== "ticker" && ticker.tickerUserCount() >= ticker.tickerCap()) return res.status(400).json({ error: ticker.tickerCap() === 0 ? "Ticker users are switched off (limit 0). Set a limit first." : `The ticker-user limit (${ticker.tickerCap()}) is reached.` });
   setUserRole(target.username, role);
+  if (role === "ticker" || target.role === "ticker") deleteSessionsForUser(target.username); // a role change ends their sessions
+  audit.record({ username: req.user.username, kind: "user", action: `Set role ${role} for ${target.username}`, ok: true, ip: audit.clientIp(req) });
   res.json({ user: adminView(getUser(target.username)) });
 });
 
@@ -364,6 +380,7 @@ app.post("/api/admin/users/:username/access", requireOwner, (req, res) => {
     deleteSessionsForUser(target.username);
     deletePushSubscriptionsForUser(target.username);
     dropConnectSessionsFor(target.username);
+    ticker.dropUser(target.username); // v4.20.0: closes its ticker streams; its tokens stop working while it is disabled
   }
   res.json({ user: adminView(getUser(target.username)) });
 });
@@ -372,6 +389,7 @@ app.delete("/api/admin/users/:username", requireOwner, (req, res) => {
   const target = adminTarget(req, res);
   if (!target) return;
   deleteUser(target.username);
+  ticker.revokeToken(target.username); // v4.20.0: a removed account's ticker tokens die with it
   dropConnectSessionsFor(target.username);
   res.json({ ok: true });
 });
@@ -1436,18 +1454,82 @@ app.get("/api/img/:kind/:id", async (req, res) => {
 
 /* ---------------- Ticker API for IPTV Multiview (v4.17.0, P-33; read-only, bearer token) ---------------- */
 app.get("/api/ticker-token", requireOwner, (req, res) => res.json(ticker.tokenStatus(req.user.username)));
-app.post("/api/ticker-token", requireOwner, (req, res) => res.json(ticker.createToken(req.user.username))); // the token is shown once
+app.post("/api/ticker-token", requireOwner, (req, res) => {
+  const t = ticker.createToken(req.user.username); // the token is shown once
+  audit.record({ username: req.user.username, kind: "ticker", action: "Ticker token created", ok: true, detail: `${t.name} …${t.last4}`, ip: audit.clientIp(req) });
+  res.json(t);
+});
 app.delete("/api/ticker-token", requireOwner, (req, res) => {
   ticker.revokeToken(req.user.username);
+  audit.record({ username: req.user.username, kind: "ticker", action: "Ticker tokens revoked", ok: true, ip: audit.clientIp(req) });
   res.json({ ok: true });
 });
+// v4.20.0 (P-48): the "Ticker sync" page's routes. Sign-in is required; a ticker account can use only these.
+app.use("/api/ticker-sync", requireAuth);
+async function tickerSyncStatus(username) {
+  const sync = ticker.getSync(username);
+  return {
+    username, linked: sync.linked, leaguesSyncedAt: sync.leaguesSyncedAt, lastSnapshotAt: ticker.lastUpdate(username),
+    leagues: sync.leagueList.map((l) => ({ id: l.id, name: l.name, includeInTicker: sync.chosen[l.id] !== false })),
+    tokens: ticker.listTokens(username), maxTokens: ticker.MAX_TOKENS_PER_USER, rateLimitPerMin: ticker.RATE_LIMIT_PER_MIN, scope: ticker.SCOPE,
+  };
+}
+app.get("/api/ticker-sync", async (req, res) => res.json(await tickerSyncStatus(req.user.username)));
+app.post("/api/ticker-sync/link", async (req, res) => {
+  try {
+    const r = await ticker.syncLeagues(req.user.username);
+    audit.record({ username: req.user.username, kind: "ticker", action: "Sleeper account linked / leagues synced", ok: true, detail: `${r.leagueCount} leagues`, ip: audit.clientIp(req) });
+    res.json({ ...(await tickerSyncStatus(req.user.username)), sleeperUser: r.sleeperUser });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't reach Sleeper." });
+  }
+});
+app.post("/api/ticker-sync/unlink", async (req, res) => {
+  ticker.setLinked(req.user.username, false);
+  audit.record({ username: req.user.username, kind: "ticker", action: "Sleeper account unlinked from the ticker", ok: true, ip: audit.clientIp(req) });
+  res.json(await tickerSyncStatus(req.user.username));
+});
+app.post("/api/ticker-sync/leagues", async (req, res) => {
+  ticker.setLeagueChoices(req.user.username, req.body?.choices);
+  res.json(await tickerSyncStatus(req.user.username));
+});
+app.post("/api/ticker-sync/tokens", async (req, res) => {
+  try {
+    const name = String(req.body?.name ?? "").trim();
+    if (!name) return res.status(400).json({ error: "Give the token a name." });
+    const t = ticker.createToken(req.user.username, { name });
+    audit.record({ username: req.user.username, kind: "ticker", action: "Ticker token created", ok: true, detail: `${t.name} …${t.last4}`, ip: audit.clientIp(req) });
+    res.json({ created: t, status: await tickerSyncStatus(req.user.username) }); // the plain token is in `created`, shown once
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.delete("/api/ticker-sync/tokens/:id", async (req, res) => {
+  const n = ticker.revokeToken(req.user.username, String(req.params.id));
+  if (!n) return res.status(404).json({ error: "No such token." });
+  audit.record({ username: req.user.username, kind: "ticker", action: "Ticker token revoked", ok: true, detail: String(req.params.id).slice(0, 16), ip: audit.clientIp(req) });
+  res.json(await tickerSyncStatus(req.user.username));
+});
+// Owner: ticker users, their last sync and token use, and the cap (default 0 = ticker users are off).
+app.get("/api/admin/ticker", requireOwner, (req, res) => res.json(ticker.adminView()));
+app.post("/api/admin/ticker/cap", requireOwner, (req, res) => {
+  const cap = ticker.setTickerCap(req.body?.cap);
+  audit.record({ username: req.user.username, kind: "setting", action: `Ticker-user limit set to ${cap}`, ok: true, ip: audit.clientIp(req) });
+  res.json(ticker.adminView());
+});
 function tickerAuth(req, res, next) {
-  const username = ticker.verifyBearer(req.headers.authorization);
-  if (!username) return res.status(401).set("WWW-Authenticate", "Bearer").json({ error: "A valid ticker token is required." });
-  req.tickerUser = username;
+  const auth = ticker.authenticate(req.headers.authorization);
+  if (!auth) return res.status(401).set("WWW-Authenticate", "Bearer").json({ error: "A valid ticker token is required." });
+  if (auth.scope !== ticker.SCOPE) {
+    audit.record({ username: auth.username, kind: "ticker", action: "Token refused (wrong scope)", ok: false, detail: `${req.method} ${req.originalUrl.split("?")[0]}`.slice(0, 120), ip: audit.clientIp(req) });
+    return res.status(403).json({ error: "This token cannot read the ticker." });
+  }
+  const rl = ticker.rateLimit(auth.hash);
+  if (!rl.ok) return res.status(429).set("Retry-After", String(rl.retryAfter)).json({ error: "Too many requests for this token — slow down." });
+  req.tickerUser = auth.username;
   next();
 }
-app.get("/api/audit-log", requireAuth, requireOwner, (req, res) => res.json({ keepDays: 90, entries: audit.list({ limit: req.query.limit, kind: ["auth", "push", "setting", "user"].includes(String(req.query.kind)) ? String(req.query.kind) : null }) }));
+app.get("/api/audit-log", requireAuth, requireOwner, (req, res) => res.json({ keepDays: 90, entries: audit.list({ limit: req.query.limit, kind: ["auth", "push", "setting", "user", "ticker"].includes(String(req.query.kind)) ? String(req.query.kind) : null }) }));
 app.get("/api/ticker/health", tickerAuth, (req, res) => res.json({ status: "ok", version: APP_VERSION, lastProviderUpdate: ticker.lastUpdate(req.tickerUser) }));
 app.get("/api/ticker/summary", tickerAuth, async (req, res) => {
   try {

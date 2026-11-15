@@ -623,6 +623,40 @@ export function AccountScreen({ authUser, onOpenAdmin, onLogout }) {
   );
 }
 
+// v4.20.0 (P-48): ticker-only users: the cap (default 0 = off), each user's last sync and token use.
+function TickerUsersPanel() {
+  const [v, setV] = useState(null);
+  const [error, setError] = useState(null);
+  const load = useCallback(() => api.adminTicker().then(setV).catch((e) => setError(e.message)), []);
+  useEffect(() => { load(); }, [load]);
+  const setCap = async (cap) => { try { setV(await api.adminTickerCap(cap)); setError(null); } catch (e) { setError(e.message); } };
+  const when = (iso) => (iso ? new Date(iso).toLocaleString() : "never");
+  if (!v) return error ? <div style={{ color: C.major }} className="text-xs px-1">{error}</div> : null;
+  return (
+    <div>
+      <SectionLabel>Ticker-only users</SectionLabel>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-3.5 py-3 space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span style={{ color: C.text }} className="text-xs">Limit</span>
+          <button onClick={() => setCap(Math.max(0, v.cap - 1))} disabled={v.cap <= 0} style={{ border: `1px solid ${C.border}`, color: C.textMuted }} className="text-xs rounded-full w-6 h-6">−</button>
+          <span style={{ color: C.text }} className="text-sm w-6 text-center">{v.cap}</span>
+          <button onClick={() => setCap(Math.min(v.maxCap, v.cap + 1))} disabled={v.cap >= v.maxCap} style={{ border: `1px solid ${C.border}`, color: C.textMuted }} className="text-xs rounded-full w-6 h-6">+</button>
+          <span style={{ color: C.textFaint }} className="text-[11px]">{v.cap === 0 ? "off: no ticker-only users can be added" : `${v.users.length} of ${v.cap} used`}</span>
+        </div>
+        {error && <div style={{ color: C.major }} className="text-xs">{error}</div>}
+        {v.users.map((u) => (
+          <div key={u.username} style={{ borderTop: `1px solid ${C.border}`, opacity: u.active ? 1 : 0.6 }} className="pt-2 text-[11px]">
+            <div style={{ color: C.text }} className="text-xs">{u.username} {!u.active && <Chip color={C.major}>disabled</Chip>} {!u.linked && <Chip color={C.textFaint}>unlinked</Chip>}</div>
+            <div style={{ color: C.textFaint }}>{u.leagueCount} leagues · leagues read {when(u.leaguesSyncedAt)} · scores updated {when(u.lastSnapshotAt)} · last login {when(u.lastLoginAt)}</div>
+            <div style={{ color: C.textFaint }}>{u.tokens.length ? u.tokens.map((t) => `${t.name} …${t.last4} (used ${when(t.lastUsedAt)})`).join(" · ") : "no tokens"}</div>
+          </div>
+        ))}
+        <div style={{ color: C.textFaint }} className="text-[11px]">Use "Revoke access" on the user above to disable one: its sessions end and its tokens stop working.</div>
+      </div>
+    </div>
+  );
+}
+
 export function AdminScreen({ authUser }) {
   const [users, setUsers] = useState(null);
   const [error, setError] = useState(null);
@@ -747,6 +781,11 @@ export function AdminScreen({ authUser }) {
                       <button onClick={() => setRole(u, u.role === "owner" ? "guest" : "owner")} disabled={busyKey === `role:${u.username}`} style={small} className="text-[11px] rounded-full px-2.5 py-1">
                         {u.role === "owner" ? "Make guest" : "Make owner"}
                       </button>
+                      {u.role !== "owner" && (
+                        <button onClick={() => setRole(u, u.role === "ticker" ? "guest" : "ticker")} disabled={busyKey === `role:${u.username}`} style={small} className="text-[11px] rounded-full px-2.5 py-1">
+                          {u.role === "ticker" ? "Make full guest" : "Make ticker-only"}
+                        </button>
+                      )}
                       <button onClick={() => setAccess(u, !u.active)} disabled={busyKey === `access:${u.username}`} style={{ ...small, color: u.active ? C.major : C.ok }} className="text-[11px] rounded-full px-2.5 py-1">
                         {u.active ? "Revoke access" : "Restore access"}
                       </button>
@@ -767,13 +806,15 @@ export function AdminScreen({ authUser }) {
         </div>
       </div>
 
+      <TickerUsersPanel />
+
       <div>
         <SectionLabel>Add a user</SectionLabel>
         <div className="space-y-2.5 pt-1.5">
           <TextField value={newName} onChange={setNewName} placeholder="Their Sleeper username" />
           <TextField value={newPassword} onChange={setNewPassword} placeholder="Temporary password (blank = generate one)" autoComplete="off" />
           <div className="flex items-center gap-2">
-            {["guest", "owner"].map((r) => (
+            {["guest", "owner", "ticker"].map((r) => (
               <button key={r} onClick={() => setNewRole(r)} style={{ border: `1px solid ${newRole === r ? C.brand : C.border}`, color: newRole === r ? C.brand : C.textMuted }} className="text-xs rounded-full px-3 py-1 capitalize">{r}</button>
             ))}
           </div>

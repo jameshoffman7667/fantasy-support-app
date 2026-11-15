@@ -1,6 +1,6 @@
 import { scopeCheer, slotLabelsChronological } from "../gameDayCheer.js"; // v4.8, v4.16.0
 import { primetimeNeed } from "../primetimeNeed.js"; // v4.13
-import { gameProgress, livePaceTone, paceColor } from "../livePace.js"; // v4.13
+import { playerView, paceToneOf, paceColor } from "../livePace.js"; // v4.13, v4.20.0 (P-48)
 import { fmtProj, listText, tnfView } from "../tnf.js"; // v4.11
 import { PosBox } from "../ui/posBox.jsx";
 import * as api from "../api.js";
@@ -97,7 +97,8 @@ function CheerRow({ p, ratio }) {
   const x = Math.min(94, Math.max(6, (1 - p.lean) * 100));
   const forEdge = (1 / (Number(ratio) + 1)) * 100; // lean ≥ ratio/(ratio+1) => x ≤ 1/(ratio+1)
   const live = p.state === "in";
-  const paceTone = live ? livePaceTone(p.points, p.proj, gameProgress(p.statusDetail)) : null;
+  const view = playerView({ state: p.state, points: p.points, proj: p.proj, statusDetail: p.statusDetail });
+  const paceTone = paceToneOf(view); // v4.20.0: live and finished players, against their own projection (the 5 % rule)
   return (
     <div className="py-2" style={{ borderTop: `1px solid ${C.border}` }}>
       <div className="relative h-7 rounded" style={{ background: C.surface }}>
@@ -132,7 +133,7 @@ function CheerRow({ p, ratio }) {
             <span style={{ color: C.textFaint }} className="text-[11px]">{p.pos}{p.team ? ` · ${p.team}` : ""}{p.opponent ? ` vs ${p.opponent}` : ""}</span>
             <span style={{ color: paceTone ? paceColor(paceTone, C) : C.text, fontVariantNumeric: "tabular-nums" }} className="text-[13px] font-medium" data-cheer-pts>
               {p.points != null ? `${p.points.toFixed(1)} pts` : p.proj != null ? `proj ${p.proj.toFixed(1)}` : ""}
-              {p.points != null && p.proj != null && <span style={{ color: C.textFaint }} className="text-[10px] font-normal"> / proj {p.proj.toFixed(1)}</span>}
+              {p.points != null && p.proj != null && <span style={{ color: C.textFaint }} className="text-[10px] font-normal"> / proj {p.proj.toFixed(1)}{view.liveProjection != null ? ` · on pace for ${view.liveProjection.toFixed(1)}` : ""}</span>}
             </span>
           </div>
         </div>

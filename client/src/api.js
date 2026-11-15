@@ -103,6 +103,16 @@ export function saveRanking(leagueId, order) {
   return jsonPost(`/api/rankings`, { leagueId, order });
 }
 
+// v4.20.0 (P-48): the "Ticker sync" page (the only thing a ticker account can use) and the owner's ticker-user admin.
+export const getTickerSync = () => request(`/api/ticker-sync`);
+export const tickerSyncLink = () => jsonPost(`/api/ticker-sync/link`, {});
+export const tickerSyncUnlink = () => jsonPost(`/api/ticker-sync/unlink`, {});
+export const tickerSyncLeagues = (choices) => jsonPost(`/api/ticker-sync/leagues`, { choices });
+export const tickerSyncCreateToken = (name) => jsonPost(`/api/ticker-sync/tokens`, { name });
+export const tickerSyncRevokeToken = (id) => request(`/api/ticker-sync/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const adminTicker = () => request(`/api/admin/ticker`);
+export const adminTickerCap = (cap) => jsonPost(`/api/admin/ticker/cap`, { cap });
+
 /* ---------------- Owner administration ---------------- */
 export function adminListUsers() {
   return request(`/api/admin/users`);

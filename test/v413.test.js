@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { primetimeNeed } from "../client/src/primetimeNeed.js";
-import { gameProgress, livePaceTone } from "../client/src/livePace.js";
+import { gameProgress, playerView, paceToneOf } from "../client/src/livePace.js";
 import { arrangement, buildPush, customChange, defaultChecked, leagueAfter, proposeChanges } from "../client/src/rosterChanges.js";
 
 const txt = (n) => n.segments.map((s) => s.t).join("");
@@ -44,11 +44,11 @@ test("live pace: progress from ESPN text and the colour bands", () => {
   assert.equal(gameProgress("End of 3rd"), 0.75);
   assert.ok(Math.abs(gameProgress("7:30 - 2nd") - 0.375) < 1e-9);
   assert.equal(gameProgress("Sun 1:00 PM"), null);
-  assert.equal(livePaceTone(10, 20, 0.5), "ok"); // exactly on pace
-  assert.equal(livePaceTone(7, 20, 0.5), "minor");
-  assert.equal(livePaceTone(2, 20, 0.5), "major");
-  assert.equal(livePaceTone(5, 20, 0.05), null); // too early to judge
-  assert.equal(livePaceTone(5, 0, 0.5), null);
+  // v4.20.0 (P-48): the colour is the 5 % rule against the player's own projection (details in test/v420.test.js)
+  const tone = (state, points, proj, statusDetail) => paceToneOf(playerView({ state, points, proj, statusDetail }));
+  assert.equal(tone("in", 16, 20, "Halftime"), "ok"); // far ahead of the projection
+  assert.equal(tone("in", 0, 20, "End of 3rd"), "major"); // nothing at the end of the third quarter
+  assert.equal(tone("pre", 0, 20, ""), null); // no colour before kickoff
 });
 
 // ---- locked-in manual swap ----
