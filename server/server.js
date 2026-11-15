@@ -421,6 +421,16 @@ app.use("/api/bestball", requireAuth); // v3.8
 // Step 1: the logged-in user's Sleeper account -> their leagues for the
 // current season. (v2.1: the username comes from the login, not from a form
 // field — everyone can only ever connect to their own Sleeper account.)
+// v4.20.0 (P-37): the current week as the server sees it (Sleeper's week, moved on once the last game of it is over).
+app.get("/api/week", requireAuth, async (req, res) => {
+  try {
+    const st = await sleeper.getState();
+    res.set("Cache-Control", "no-store");
+    res.json({ week: Number(st.week), season: st.season, sleeperWeek: Number(st.sleeperWeek ?? st.week), advanced: Boolean(st.weekAdvanced) });
+  } catch (err) {
+    res.status(502).json({ error: err.message || "Couldn't read the week." });
+  }
+});
 app.get("/api/connect", async (req, res) => {
   const username = req.user.username;
   try {

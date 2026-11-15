@@ -1,3 +1,4 @@
+import { weekDecision, manualPick } from "./weekSync.js"; // v4.20.0 (P-37)
 import * as api from "./api.js";
 import { PAGE_LABEL, applyAcks, autoClearKeys, collectVariances, presentKeys, worstLive } from "./variances.js";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -72,6 +73,8 @@ export default function App() {
   const [loadingLeagues, setLoadingLeagues] = useState(false);
   const [liveLeagues, setLiveLeagues] = useState([]);
   const [week, setWeek] = useState(null);
+  const realWeekRef = useRef(null); // v4.20.0 (P-37): the server's current week as last read
+  const manualWeekRef = useRef(null); // a week he picked by hand ({ realAt }), kept until the real week moves on
   // v2.9: per-week copies of the last build, so switching weeks shows something instantly.
   const weekCache = useRef(new Map());
   const buildSeq = useRef(0);
@@ -190,7 +193,10 @@ export default function App() {
         }
         if (!showedCache) setLoadingLeagues(true);
         setRefreshing(true);
-        const { week: builtWeek } = await buildAll(sessionId, restoredIds, last?.week ?? undefined, { opened: true });
+        realWeekRef.current = currentWeek;
+        manualWeekRef.current = null;
+        // v4.20.0 (P-37): never send the SAVED week here — the server's current week (which moves on after the last game) decides
+        const { week: builtWeek } = await buildAll(sessionId, restoredIds, undefined, { opened: true });
         setWeek(builtWeek ?? currentWeek);
         setSyncedAt("just now");
         if (!showedCache) navigate({ screen: "dashboard" }, { replace: true });
@@ -367,7 +373,8 @@ export default function App() {
   }, [sessionId, selectedIds, week, handleRefresh]);
 
   const handleWeekChange = useCallback(
-    async (newWeek) => {
+    async (newWeek, { auto = false } = {}) => {
+      if (!auto) manualWeekRef.current = manualPick(newWeek, realWeekRef.current);
       if (!sessionId || selectedIds.length === 0) {
         setWeek(newWeek);
         return;
@@ -389,6 +396,31 @@ export default function App() {
     },
     [sessionId, selectedIds, buildAll]
   );
+
+  // v4.20.0 (P-37): while the app is open, ask the server for the current week every 5 minutes (and when the tab comes back);
+  // when it moves on (after the week's last game) load the new week. A week picked by hand stays until the real week changes.
+  const weekRef = useRef(week);
+  weekRef.current = week;
+  const weekChangeRef = useRef(handleWeekChange);
+  weekChangeRef.current = handleWeekChange;
+  useEffect(() => {
+    if (!sessionId || selectedIds.length === 0) return undefined;
+    let stop = false;
+    const check = async () => {
+      try {
+        const r = await api.getCurrentWeek();
+        if (stop) return;
+        const d = weekDecision({ real: r.week, known: realWeekRef.current, shown: weekRef.current, manual: manualWeekRef.current });
+        realWeekRef.current = d.known;
+        manualWeekRef.current = d.manual;
+        if (d.move != null) weekChangeRef.current(d.move, { auto: true });
+      } catch { /* offline: try again next time */ }
+    };
+    const id = setInterval(check, 5 * 60 * 1000);
+    const onVis = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stop = true; clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+  }, [sessionId, selectedIds.length]);
 
   const refreshRef = useRef(handleRefresh);
   refreshRef.current = handleRefresh;
@@ -440,7 +472,8 @@ export default function App() {
     setConnectError(null);
     setConnecting(true);
     try {
-      const { sessionId: freshSessionId, user, leagues } = await api.connect();
+      const { sessionId: freshSessionId, user, leagues, week: connectWeek } = await api.connect();
+      if (Number.isInteger(connectWeek)) realWeekRef.current = connectWeek;
       setSessionId(freshSessionId);
       setSleeperUser(user);
       setAvailableLeagues(leagues);

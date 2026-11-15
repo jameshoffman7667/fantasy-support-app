@@ -20,6 +20,11 @@ async function request(path, options) {
 const jsonPost = (path, payload) =>
   request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload ?? {}) });
 
+// v4.20.0 (P-37): the server's current NFL week (it moves on after the week's last game); polled while the app is open.
+export function getCurrentWeek() {
+  return request(`/api/week`);
+}
+
 // The logged-in user's own Sleeper account — the server knows who they are.
 export function connect() {
   return request(`/api/connect`);

@@ -253,3 +253,27 @@ test("P-47: unticking the flex/bench move still offers the flex-timing swap, and
   const kept = layerChanges(league, [move], withSwap);
   assert.ok(kept.changes.some((c) => c.key === swap.key) && kept.checked.has(swap.key));
 });
+
+import { weekDecision, manualPick } from "../client/src/weekSync.js";
+import { advanceWeek, GAME_OVER_MS } from "../server/sleeper.js";
+test("P-37: the real week moves the app on after the last game; a hand-picked week stays until the real week changes", () => {
+  assert.deepEqual(weekDecision({ real: 11, known: null, shown: 10, manual: null }), { move: null, known: 11, manual: null }); // first reading never moves anything
+  assert.equal(weekDecision({ real: 10, known: 10, shown: 10, manual: null }).move, null);
+  const moved = weekDecision({ real: 11, known: 10, shown: 10, manual: null });
+  assert.deepEqual([moved.move, moved.known, moved.manual], [11, 11, null]); // week 10 ended: load week 11
+  const pick = manualPick(8, 10); // he looked back at week 8 by hand
+  assert.deepEqual(pick, { realAt: 10 });
+  assert.equal(weekDecision({ real: 10, known: 10, shown: 8, manual: pick }).move, null); // kept while the real week is the same
+  assert.deepEqual(weekDecision({ real: 11, known: 10, shown: 8, manual: pick }), { move: 11, known: 11, manual: null }); // real week moved: he follows it
+  assert.equal(manualPick(10, 10), null); // picking the real week is automatic again
+  assert.equal(weekDecision({ real: 11, known: 10, shown: 11, manual: null }).move, null); // already showing it
+});
+test("P-37: the server's week moves to N+1 once the week's last kickoff + 4 h has passed", () => {
+  const st = { season: "2026", season_type: "regular", week: 10 };
+  const last = Date.UTC(2026, 10, 17, 1, 15); // Monday night kickoff
+  assert.equal(advanceWeek(st, 1, last + GAME_OVER_MS - 1, last).week, 10);
+  const after = advanceWeek(st, 1, last + GAME_OVER_MS, last);
+  assert.deepEqual([after.week, after.sleeperWeek, after.weekAdvanced], [11, 10, true]);
+  assert.equal(advanceWeek({ ...st, week: 18 }, 1, last + GAME_OVER_MS, last).week, 18); // never past 18
+  assert.equal(advanceWeek({ ...st, season_type: "post" }, 1, last + GAME_OVER_MS, last).week, 10); // regular season only
+});
