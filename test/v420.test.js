@@ -207,3 +207,17 @@ test("P-42 / P-43: major keys carry the red suffix; only ticked variances are cl
   assert.deepEqual(tickedItems(all, "minor", unticked).map(ackKey), ["d"]);
   assert.deepEqual(tickedItems(all, "minor", new Set()).map(ackKey), ["d", "e"]); // default: everything ticked
 });
+
+import { dropMetric, dropPool, orderDrops } from "../client/src/waiverPlan.js";
+test("P-36: drop candidates rank by projection, a bye player's rest-of-season average, or dynasty value", () => {
+  const league = { leagueType: "redraft", ros: { from: 10, to: 17, loaded: 8 }, starters: [{ slot: "WR", player: { id: "s1", name: "Start", proj: 15 } }],
+    bench: [{ id: "b1", name: "Bye guy", proj: 0, status: "Bye", ros: 70, bye: 10 }, { id: "b2", name: "Low", proj: 3 }, { id: "b3", name: "Bye none", proj: 0, kickoffLabel: "On bye", bye: 10 }, { id: "b4", name: "Mid", proj: 6 }] };
+  assert.deepEqual(dropMetric(league.bench[0], league), { value: 10, kind: "ros" }); // 70 over the 7 weeks that are not the bye
+  assert.deepEqual(dropMetric(league.bench[2], league), { value: null, kind: "ros" });
+  const pool = dropPool(league);
+  assert.deepEqual(pool.map((p) => p.id), ["b2", "b4", "b1", "b3", "s1"]); // bench by number (bye with no number last in the bench), then starters
+  assert.deepEqual(orderDrops([{ id: "b3" }, { id: "b1" }, { id: "b2" }], pool).map((d) => d.id), ["b2", "b1", "b3"]);
+  const dyn = { leagueType: "dynasty", starters: [], bench: [{ id: "a", name: "A", value: 900, proj: 1 }, { id: "b", name: "B", value: 120, proj: 20 }, { id: "c", name: "C", proj: 5 }] };
+  assert.deepEqual(dropPool(dyn).map((p) => p.id), ["b", "a", "c"]); // lowest dynasty value first, no value last
+  assert.equal(dropPool(dyn)[0].dropKind, "dynasty");
+});

@@ -10,7 +10,7 @@ import { C } from "../ui/theme.js";
 export const STAGE_PAUSE_MS = PAUSE;
 
 export function useDropState(league, plan, setPlan) {
-  // v4.9: every roster player can be a drop — bench first (lowest projection first), then starters the same way.
+  // v4.9: every roster player can be a drop — bench first (lowest number first: projection, a bye player's rest-of-season average, or dynasty value), then starters the same way.
   const bench = useMemo(() => dropPool(league, isLocked), [league]);
   const syncedDrops = useMemo(() => orderDrops(syncDrops(plan.drops, bench), bench, plan.dropsArranged), [plan.drops, plan.dropsArranged, bench]);
   useEffect(() => {
@@ -78,9 +78,15 @@ export function DropCandidatesPage({ league, plan, setPlan, onRefresh, onOpenAcc
                   </PlayerLink>
                   <div style={{ color: C.textMuted }} className="text-[11px] flex items-center gap-1.5 flex-wrap mt-0.5" data-drop-info>
                     <span data-drop-rostered>{p.rostered != null ? `${p.rostered}% rostered` : "rostered % n/a"}</span>
-                    <span>· {p.proj != null ? `Proj ${p.proj.toFixed(1)}` : "No projection"}</span>
+                    {p.dropKind === "dynasty" ? (
+                      <span data-drop-metric="dynasty">· {p.dropValue != null ? `Value ${Math.round(p.dropValue)}` : "No value"}</span>
+                    ) : p.dropKind === "ros" ? (
+                      <span style={{ color: C.minor }} data-drop-metric="ros">· {p.dropValue != null ? `Rest-of-season avg ${p.dropValue.toFixed(1)}` : "No projection"}</span>
+                    ) : (
+                      <span data-drop-metric="proj">· {p.proj != null ? `Proj ${p.proj.toFixed(1)}` : "No projection"}</span>
+                    )}
                     <span data-drop-where>· {p.where === "starter" ? `Starter${p.slot ? ` (${p.slot})` : ""}` : "Bench"}</span>
-                    {st && <span style={{ color: st === "Bye" ? C.textMuted : C.minor }} data-drop-status>· {st}</span>}
+                    {st && <span style={{ color: C.minor }} data-drop-status>· {st}</span>}
                     {p.matchup && <MatchupChip player={p} profile={league.scoringProfile} />}
                   </div>
                 </div>

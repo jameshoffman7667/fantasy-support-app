@@ -206,27 +206,50 @@ export function resetClaims(plan) {
  * below, sorted the same. Locked (already kicked off) players can't be dropped. Rows carry `where` ("bench" |
  * "starter") and, for a starter, `slot`.
  */
+/**
+ * v4.20.0 (P-36): what a drop candidate is ranked by.
+ *  dynasty league -> his dynasty value (kind "dynasty"; none when he has no value)
+ *  redraft/keeper -> this week's projection (kind "proj"); a player on BYE shows and sorts by his rest-of-season average
+ *                    weekly projection instead (kind "ros": the league's rest-of-season total over his remaining weeks), never 0;
+ *                    with no future projection he has no number ("No projection") and sorts last.
+ */
+const onByeP = (p) => Boolean(p) && (p.status === "Bye" || p.kickoffLabel === "On bye");
+export function dropMetric(p, league) {
+  if (league?.leagueType === "dynasty") return p?.value != null ? { value: Number(p.value), kind: "dynasty" } : { value: null, kind: "dynasty" };
+  if (onByeP(p)) {
+    const from = league?.ros?.from, to = league?.ros?.to;
+    if (p?.ros != null && Number.isFinite(from) && Number.isFinite(to)) {
+      const bye = Number(p.bye);
+      const weeks = to - from + 1 - (Number.isFinite(bye) && bye >= from && bye <= to ? 1 : 0);
+      if (weeks > 0) return { value: Math.round((Number(p.ros) / weeks) * 10) / 10, kind: "ros" };
+    }
+    return { value: null, kind: "ros" };
+  }
+  return { value: p?.proj ?? null, kind: "proj" };
+}
+/** The number the list sorts by: lowest first; a player without a number goes last if he is on bye or has no dynasty value, else counts as 0 as before. */
+const sortKey = (m, p) => (m.value != null ? m.value : m.kind === "ros" || m.kind === "dynasty" ? Number.POSITIVE_INFINITY : 0);
 export function dropPool(league, isLockedFn = () => false) {
-  const proj = (p) => p.proj ?? 0;
-  const bench = (league?.bench || []).filter((p) => p && !isLockedFn(p, league)).map((p) => ({ ...p, where: "bench" }));
-  const starters = (league?.starters || []).filter((s) => s?.player && !isLockedFn(s.player, league)).map((s) => ({ ...s.player, where: "starter", slot: s.slot }));
-  const byProj = (x, y) => proj(x.p) - proj(y.p) || x.i - y.i;
-  const sorted = (rows) => rows.map((p, i) => ({ p, i })).sort(byProj).map((x) => x.p);
+  const withMetric = (p) => { const m = dropMetric(p, league); return { ...p, dropValue: m.value, dropKind: m.kind, dropSort: sortKey(m, p) }; };
+  const bench = (league?.bench || []).filter((p) => p && !isLockedFn(p, league)).map((p) => withMetric({ ...p, where: "bench" }));
+  const starters = (league?.starters || []).filter((s) => s?.player && !isLockedFn(s.player, league)).map((s) => withMetric({ ...s.player, where: "starter", slot: s.slot }));
+  const byKey = (x, y) => (x.p.dropSort === y.p.dropSort ? 0 : x.p.dropSort - y.p.dropSort) || x.i - y.i;
+  const sorted = (rows) => rows.map((p, i) => ({ p, i })).sort(byKey).map((x) => x.p);
   return [...sorted(bench), ...sorted(starters)];
 }
 
 /**
- * The Drop candidates list's DEFAULT order (v4.9): the pool's own order — bench by lowest projection, then starters by
- * lowest projection. Once the user drags the list (`arranged`), his order is kept as it is.
+ * The Drop candidates list's DEFAULT order (v4.9): the pool's own order — bench by lowest number, then starters by
+ * lowest number (v4.20.0: the number is the projection, the bye player's rest-of-season average, or the dynasty value). Once the user drags the list (`arranged`), his order is kept as it is.
  */
 export function orderDrops(drops = [], pool = [], arranged = false) {
   if (arranged) return drops;
   const byId = new Map(pool.filter(Boolean).map((p) => [String(p.id), p]));
   const grp = (d) => (byId.get(String(d.id))?.where === "starter" ? 1 : 0);
-  const pr = (d) => byId.get(String(d.id))?.proj ?? 0;
+  const pr = (d) => { const p = byId.get(String(d.id)); return p?.dropSort ?? p?.proj ?? 0; };
   return drops
     .map((d, i) => ({ d, i }))
-    .sort((a, b) => grp(a.d) - grp(b.d) || pr(a.d) - pr(b.d) || a.i - b.i)
+    .sort((a, b) => grp(a.d) - grp(b.d) || (pr(a.d) === pr(b.d) ? 0 : pr(a.d) - pr(b.d)) || a.i - b.i)
     .map((x) => x.d);
 }
 
