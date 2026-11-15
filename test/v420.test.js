@@ -277,3 +277,22 @@ test("P-37: the server's week moves to N+1 once the week's last kickoff + 4 h ha
   assert.equal(advanceWeek({ ...st, week: 18 }, 1, last + GAME_OVER_MS, last).week, 18); // never past 18
   assert.equal(advanceWeek({ ...st, season_type: "post" }, 1, last + GAME_OVER_MS, last).week, 10); // regular season only
 });
+
+import * as sl from "../server/sleeper.js";
+test("P-39: a confirmed IR edit is kept up to 30 minutes while Sleeper's public roster lags, and dropped when it agrees", () => {
+  let t = 1_000_000;
+  sl._setNowForTests(() => t);
+  const pub = { roster_id: 1, players: ["a", "b", "c"], starters: ["a"], reserve: ["x"], taxi: [] }; // stale: still shows the old IR list
+  sl.noteRosterWritten("LG", 1, { reserve: ["x", "b"] });
+  assert.deepEqual(sl.effectiveRoster("LG", pub).reserve, ["x", "b"]);
+  t += 20 * 60 * 1000; // 20 minutes later the public roster still lags: the confirmed edit still holds (it used to lapse after 5)
+  assert.deepEqual(sl.effectiveRoster("LG", pub).reserve, ["x", "b"]);
+  t += 11 * 60 * 1000; // past 30 minutes it is forgotten
+  assert.deepEqual(sl.effectiveRoster("LG", pub).reserve, ["x"]);
+  sl.noteRosterWritten("LG", 1, { reserve: ["x", "b"] });
+  const agreed = { ...pub, reserve: ["b", "x"] };
+  assert.deepEqual(sl.effectiveRoster("LG", agreed).reserve, ["b", "x"]); // public agrees: the overlay is forgotten
+  assert.deepEqual(sl.effectiveRoster("LG", pub).reserve, ["x"]); // so a later change made in Sleeper itself is not hidden
+  assert.equal(sl.ROSTER_EDIT_TTL_MS, 30 * 60 * 1000);
+  sl._setNowForTests(null);
+});

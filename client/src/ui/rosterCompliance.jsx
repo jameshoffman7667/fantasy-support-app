@@ -129,6 +129,11 @@ export function ComplianceFixes({ league, comp, onRefresh, onOpenAccount, showPu
       ) : (
         <>
           <ul className="text-xs mt-1" style={{ color: C.text }}>{base.issues.map((t) => <li key={t}>• {t}</li>)}</ul>
+          {league.readAt && (
+            <div style={{ color: C.textFaint }} className="text-[11px] mt-0.5" data-compliance-read>
+              Read from Sleeper at {new Date(league.readAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {base.rawPlayers ?? base.players} players, {base.spots} spots, IR {(league.ir || []).filter(Boolean).length} of {base.irSlots}. Just changed something? Tap Refresh — it re-reads Sleeper.
+            </div>
+          )}
           {blockedNote && comp.blocking && (
             <div style={{ color: comp.valid ? C.ok : C.minor }} className="text-[11px] mt-1" data-compliance-gate>
               {comp.valid ? "These moves make the roster valid — the other suggested moves are back below. Everything can be pushed together; these moves go first." : "Sleeper blocks roster moves until this is fixed, so the other suggested moves are hidden until the ticked moves below make the roster valid."}

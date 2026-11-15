@@ -495,6 +495,7 @@ app.post("/api/leagues/build", async (req, res) => {
 
   try {
     const chosen = session.leaguesRaw.filter((l) => leagueIds.includes(l.league_id));
+    if (manual === true) for (const l of chosen) sleeper.markFreshOnce(l.league_id); // v4.20.0 (P-39): the refresh button also re-reads the rosters (not the 5-minute copy), so a half-applied IR swap can't linger
     // v4.4.1 (Medium preset): the app was just opened — read rosters, matchups and trending live (once a minute per league at most).
     if (opened === true) {
       let any = false;

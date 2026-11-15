@@ -985,9 +985,26 @@ export async function buildFullLeague(userId, leagueSummary, week, trending, pre
     console.warn(`[buildLeague] Ownership lookup skipped: ${err.message}`);
   }
 
+  // v4.20.0 (P-39): when the roster Sleeper handed us holds more players than it has spots, record the raw counts once per
+  // league per 10 minutes so a half-applied IR swap (IR out done, IR in not yet read) can be traced next time.
+  try {
+    const startersN = (myRoster.starters || []).filter((x) => x && x !== "0").length;
+    const reserveN = (myRoster.reserve || []).length;
+    const taxiN = (myRoster.taxi || []).length;
+    const benchN = (myRoster.players || []).length - startersN - reserveN - taxiN;
+    const spotsN = (myRoster.starters || []).length + benchSlots;
+    if (startersN + benchN > spotsN) {
+      const k = `over:${leagueId}`;
+      if (!(globalThis.__overLogged ||= new Map()).has(k) || Date.now() - globalThis.__overLogged.get(k) > 10 * 60 * 1000) {
+        globalThis.__overLogged.set(k, Date.now());
+        console.warn(`[buildLeague] roster over the limit in ${leagueId}: players=${(myRoster.players || []).length} starters=${startersN} bench=${benchN} reserve=${reserveN}/${irSlots} taxi=${taxiN} spots=${spotsN} (possible half-applied IR swap, or a stale roster read)`);
+      }
+    }
+  } catch { /* logging only */ }
   const built = {
     id: leagueId,
     name: league.name,
+    readAt: Date.now(), // v4.20.0 (P-39): when this roster was read from Sleeper (shown on the roster card)
     teamName,
     week,
     season,

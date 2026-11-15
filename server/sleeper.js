@@ -32,14 +32,17 @@ export function effectiveStarters(leagueId, rosterId, publicStarters) {
   return w.starters;
 }
 // v4.15.0 (P-22): the same idea for the other roster edits. When the private API's read-back confirms an IR, taxi or
-// drop change, the confirmed lists are remembered for 5 minutes and used while Sleeper's public roster still shows the
+// drop change, the confirmed lists are remembered for 30 minutes (ROSTER_EDIT_TTL_MS) and used while Sleeper's public roster still shows the
 // old ones, so the rebuild after a push shows what the read-back confirmed (not a stale roster). As soon as the public
 // read agrees (or the 5 minutes pass) the overlay is forgotten, so a change made in Sleeper itself is never hidden.
+// v4.20.0 (P-39): James saw a half-applied IR swap for "a few minutes to well under an hour", longer than the old 5 minutes, so a
+// confirmed edit is now kept up to 30 minutes — still dropped the moment Sleeper's public roster agrees with it.
+export const ROSTER_EDIT_TTL_MS = 30 * MIN;
 const rosterEdits = new Map();
 export function noteRosterWritten(leagueId, rosterId, patch) {
   const k = `${leagueId}:${rosterId}`;
   const prev = rosterEdits.get(k);
-  const fresh = prev && nowFn() - prev.at <= 5 * MIN ? prev : { dropped: new Set() };
+  const fresh = prev && nowFn() - prev.at <= ROSTER_EDIT_TTL_MS ? prev : { dropped: new Set() };
   const next = { ...fresh, at: nowFn() };
   if (Array.isArray(patch.reserve)) next.reserve = patch.reserve.map(String);
   if (Array.isArray(patch.taxi)) next.taxi = patch.taxi.map(String);
@@ -52,7 +55,7 @@ export function effectiveRoster(leagueId, roster) {
   const k = `${leagueId}:${roster.roster_id}`;
   const w = rosterEdits.get(k);
   if (!w) return roster;
-  if (nowFn() - w.at > 5 * MIN) { rosterEdits.delete(k); return roster; }
+  if (nowFn() - w.at > ROSTER_EDIT_TTL_MS) { rosterEdits.delete(k); return roster; }
   const pubPlayers = (roster.players || []).map(String);
   const pubReserve = (roster.reserve || []).map(String);
   const pubTaxi = (roster.taxi || []).map(String);
