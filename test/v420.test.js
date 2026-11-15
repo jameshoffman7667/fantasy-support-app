@@ -164,3 +164,33 @@ test("ticker role end to end: cap, 403 everywhere else, own tokens (hashed, scop
     child.kill("SIGKILL");
   }
 });
+
+import { statusTags } from "../client/src/ui/compute.js";
+test("P-44: Out and Bye tags by player id (Bye wins, Doubtful/healthy get none)", () => {
+  const tags = statusTags({
+    starters: [{ player: { id: "1", name: "A", status: "Out" } }, { player: { id: "2", name: "B", status: "Questionable" } }],
+    bench: [{ id: "3", name: "C", status: "Bye" }, { id: "4", name: "D", kickoffLabel: "On bye" }, { id: "5", name: "E", status: "Doubtful" }],
+    ir: [{ id: "6", name: "F", status: "Out" }], taxi: [], freeAgents: [{ id: "7", name: "G", status: "Out" }],
+  });
+  assert.deepEqual([...tags.entries()].sort(), [["1", "Out"], ["3", "Bye"], ["4", "Bye"], ["6", "Out"], ["7", "Out"]]);
+});
+
+import { compareToRoster } from "../client/src/ui/compute.js";
+test("P-45: one variance names every starter (or bench player) the free agent beats, weakest first", () => {
+  const pl = (id, name, pos, proj, extra = {}) => ({ id, name, pos, proj, ...extra });
+  const league = {
+    id: "L", roster_positions: [], leagueType: "redraft",
+    starters: [{ slot: "WR", player: pl("1", "Lee", "WR", 11) }, { slot: "WR", player: pl("2", "Smith", "WR", 8) }, { slot: "FLEX", player: pl("3", "Jones", "WR", 9.5) }, { slot: "RB", player: pl("4", "Back", "RB", 20) }, { slot: "WR", player: pl("8", "Gone", "WR", 1, { kickoffLabel: "On bye" }) }],
+    bench: [pl("5", "Cole", "WR", 4.2), pl("6", "Park", "WR", 6.1), pl("7", "Diaz", "WR", 13)],
+  };
+  const fa = pl("9", "New", "WR", 12.1);
+  const r = compareToRoster(league, fa);
+  assert.equal(r.rule, "Free agent outprojects a starter"); assert.equal(r.severity, "major");
+  assert.equal(r.note, "projected 12.1 vs Smith 8.0 at WR, Jones 9.5 at FLEX, Lee 11.0 at WR"); // the bye starter and the stronger RB are left out
+  const bench = compareToRoster({ ...league, starters: [{ slot: "WR", player: pl("1", "Lee", "WR", 30) }] }, pl("9", "New", "WR", 9));
+  assert.equal(bench.rule, "Free agent outprojects a bench player"); assert.equal(bench.severity, "minor");
+  assert.equal(bench.note, "projected 9.0 vs bench Cole 4.2, Park 6.1"); // Diaz (13) is not beaten
+  const dyn = compareToRoster({ ...league, leagueType: "dynasty", starters: [], bench: [pl("5", "Cole", "WR", 1, { value: 120 }), pl("6", "Park", "WR", 1, { value: 200 }), pl("7", "Diaz", "WR", 1, { value: 900 })] }, pl("9", "New", "WR", 5, { value: 310 }));
+  assert.equal(dyn.note, "dynasty value 310 vs bench Cole 120, Park 200");
+  assert.equal(compareToRoster(league, pl("9", "Low", "WR", 1)).rule, null);
+});

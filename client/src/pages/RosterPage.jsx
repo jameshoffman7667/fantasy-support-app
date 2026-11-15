@@ -1,7 +1,7 @@
 import * as api from "../api.js";
 import { FLEX_ELIGIBLE, GROUP_LABEL, benchOrder, effectiveLineup, hasStarted, isZeroProjection, lockedNames } from "../lineup.js";
 import { acceptAllKeys, arrangement, buildPush, changeNotes, changeTouchesPlayers, customChange, defaultChecked, dropOptions, heldPlayerIds, layerChanges, leagueAfter, openSpotsForAdd, proposeChanges, remainingSlots, swapOptions, toggle as toggleChange } from "../rosterChanges.js";
-import { computeProposedRoster } from "../ui/compute.js"; // v4.9
+import { computeProposedRoster, statusTags } from "../ui/compute.js"; // v4.9
 import { lineupGap, pushKeys } from "../variances.js";
 import { ArrowLeft, GripVertical, ListOrdered } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -865,26 +865,33 @@ function TotalsCard({ t }) {
 }
 
 // v4.13: a player's name on a suggestion card opens that player's card.
-function Nm({ id, name, leagueId, bold = false }) {
+// v4.20.0 (P-44): a player who is Out or on bye gets "(Out)" / "(Bye)" in red beside the name.
+function Nm({ id, name, leagueId, bold = false, tags = null }) {
   const t = bold ? <b>{name}</b> : name;
   if (id == null || id === "") return t;
-  return <PlayerLink player={{ id: String(id), name }} leagueId={leagueId} className="inline underline decoration-dotted underline-offset-2">{t}</PlayerLink>;
+  const tag = tags?.get(String(id));
+  return (
+    <>
+      <PlayerLink player={{ id: String(id), name }} leagueId={leagueId} className="inline underline decoration-dotted underline-offset-2">{t}</PlayerLink>
+      {tag && <span style={{ color: C.major }} className="text-[11px] ml-1 whitespace-nowrap" data-status-tag={tag}>({tag})</span>}
+    </>
+  );
 }
 
-function changeText(c, leagueId) {
-  if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName != null ? <Nm id={c.fromId} name={c.fromName} leagueId={leagueId} /> : "(empty)"} → <Nm id={c.toId} name={c.toName} leagueId={leagueId} bold /></span></>, sub: [c.delta > 0.04 ? `+${c.delta.toFixed(1)} projected points` : c.delta < -0.04 ? `${c.delta.toFixed(1)} projected points` : null, c.altNote || null].filter(Boolean).join(" · ") || null };
-  if (c.type === "add") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName != null ? <Nm id={c.fromId} name={c.fromName} leagueId={leagueId} /> : "(empty)"} → <Nm id={c.toId} name={c.toName} leagueId={leagueId} bold /></span> <span style={{ color: C.minor, border: `1px solid ${C.minor}66` }} className="ml-2 rounded px-1.5 text-[10px]">add from FA / waivers</span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, c.conflicts?.length ? "Instead of the move above it for this slot." : null, "Ticking asks who to drop (and the bid on waivers); he is added, then started once he is on your roster."].filter(Boolean).join(" · ") };
+function changeText(c, leagueId, tags = null) {
+  if (c.type === "lineup") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName != null ? <Nm id={c.fromId} name={c.fromName} leagueId={leagueId} tags={tags} /> : "(empty)"} → <Nm id={c.toId} name={c.toName} leagueId={leagueId} tags={tags} bold /></span></>, sub: [c.delta > 0.04 ? `+${c.delta.toFixed(1)} projected points` : c.delta < -0.04 ? `${c.delta.toFixed(1)} projected points` : null, c.altNote || null].filter(Boolean).join(" · ") || null };
+  if (c.type === "add") return { title: <><PosBox label={c.slot} small /> <span className="ml-1">{c.fromName != null ? <Nm id={c.fromId} name={c.fromName} leagueId={leagueId} tags={tags} /> : "(empty)"} → <Nm id={c.toId} name={c.toName} leagueId={leagueId} tags={tags} bold /></span> <span style={{ color: C.minor, border: `1px solid ${C.minor}66` }} className="ml-2 rounded px-1.5 text-[10px]">add from FA / waivers</span></>, sub: [c.delta > 0 ? `+${c.delta.toFixed(1)} projected points` : null, c.conflicts?.length ? "Instead of the move above it for this slot." : null, "Ticking asks who to drop (and the bid on waivers); he is added, then started once he is on your roster."].filter(Boolean).join(" · ") };
   if (c.type === "swap" && c.why === "slots")
     return {
-      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><Nm id={c.idB} name={c.nameB} leagueId={leagueId} bold /> to {c.slot}, <Nm id={c.idA} name={c.nameA} leagueId={leagueId} /> to {c.slotB_label}</span></>,
+      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><Nm id={c.idB} name={c.nameB} leagueId={leagueId} tags={tags} bold /> to {c.slot}, <Nm id={c.idA} name={c.nameA} leagueId={leagueId} tags={tags} /> to {c.slotB_label}</span></>,
       sub: "Both stay in your lineup — 0 points on its own; it makes room for the move below.",
     };
   if (c.type === "swap")
     return {
-      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><Nm id={c.idB} name={c.nameB} leagueId={leagueId} bold /> to {c.slot}, <Nm id={c.idA} name={c.nameA} leagueId={leagueId} /> to {c.slotB_label}</span></>,
+      title: <><PosBox label={c.slot} small /> <span className="mx-1">↔</span> <PosBox label={c.slotB_label} small /> <span className="ml-1"><Nm id={c.idB} name={c.nameB} leagueId={leagueId} tags={tags} bold /> to {c.slot}, <Nm id={c.idA} name={c.nameA} leagueId={leagueId} tags={tags} /> to {c.slotB_label}</span></>,
       sub: `Timing: ${c.nameA} plays ${c.kickA || "earlier"}, ${c.nameB} ${c.kickB || "later"} — the flex keeps the later game, so you can still change it if someone is ruled out.`,
     };
-  return { title: <span>Move <Nm id={c.id} name={c.name} leagueId={leagueId} bold /> to injured reserve</span>, sub: null };
+  return { title: <span>Move <Nm id={c.id} name={c.name} leagueId={leagueId} tags={tags} bold /> to injured reserve</span>, sub: null };
 }
 
 function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onReset = null, isDefault = true, onSaveRanking = null, onGoProposed = null, proposedTab = false }) {
@@ -894,8 +901,9 @@ function SuggestedChanges({ league, changes, checked, onToggle, onAcceptAll, onR
   const kidsOf = (key) => changes.filter((c) => c.parent === key);
   // v4.9: a dependent suggestion (one that only exists because the move above it is ticked) sits inside its parent's card,
   // indented under a ↳, and goes away when the parent is unticked.
+  const tags = statusTags(league);
   const row = (c, depth) => {
-    const t = changeText(c, league?.id);
+    const t = changeText(c, league?.id, tags);
     const on = checked.has(c.key);
     return (
       <label key={c.key} className="flex items-start gap-3" style={{ marginLeft: depth ? 14 : 0, paddingTop: depth ? 8 : 0 }} data-change={c.key} data-change-type={c.type} data-change-depth={depth}>

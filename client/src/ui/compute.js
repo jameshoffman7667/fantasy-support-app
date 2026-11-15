@@ -104,6 +104,16 @@ export function faCanCount(fa, league) {
 }
 // v4.8: one of YOUR players on bye (projected 0) is never the player a free agent "beats".
 export const onBye = (p) => Boolean(p) && (p.status === "Bye" || p.kickoffLabel === "On bye");
+/** v4.20.0 (P-44): id -> "Bye" | "Out" for every player on the league's roster (and free-agent rows) who is on bye or Out. */
+export function statusTags(league) {
+  const m = new Map();
+  [...(league?.starters || []).map((s) => s.player), ...(league?.bench || []), ...(league?.ir || []), ...(league?.taxi || []), ...(league?.freeAgents || [])].forEach((p) => {
+    if (!p || p.id == null) return;
+    const tag = onBye(p) ? "Bye" : p.status === "Out" ? "Out" : null;
+    if (tag) m.set(String(p.id), tag);
+  });
+  return m;
+}
 export function compareToRoster(league, fa) {
   const eligible = slotEligible;
   const projOf = (p) => (p && p.proj != null ? p.proj : 0);
@@ -117,7 +127,9 @@ export function compareToRoster(league, fa) {
     if (weakest && fa.proj > projOf(weakest.player)) {
       rule = "Free agent outprojects a starter";
       severity = "major";
-      note = `projected ${fa.proj.toFixed(1)} vs ${weakest.player ? weakest.player.name : "(empty)"} ${projOf(weakest.player).toFixed(1)} at ${weakest.slot}`;
+      // v4.20.0 (P-45): one variance names EVERY starter he beats, weakest first
+      const beaten = slots.filter((s) => fa.proj > projOf(s.player)).sort((a, b) => projOf(a.player) - projOf(b.player));
+      note = `projected ${fa.proj.toFixed(1)} vs ${beaten.map((s) => `${s.player ? s.player.name : "(empty)"} ${projOf(s.player).toFixed(1)} at ${s.slot}`).join(", ")}`;
     } else {
       const bench = (league.bench || []).filter((p) => p && p.pos === fa.pos && !isLocked(p, league) && !onBye(p)); // v3.4, v4.8: nor can a locked bench player be dropped
       // v4.6: dynasty leagues compare a free agent with the bench by dynasty (trade) value, not points. When the free agent
@@ -125,18 +137,18 @@ export function compareToRoster(league, fa) {
       const byValue = league.leagueType === "dynasty" && fa.value != null && bench.some((p) => p.value != null);
       if (byValue) {
         const valued = bench.filter((p) => p.value != null);
-        const weakBench = valued.reduce((m, p) => (p.value < m.value ? p : m));
-        if (fa.value > weakBench.value) {
+        const beaten = valued.filter((p) => fa.value > p.value).sort((a, b) => a.value - b.value);
+        if (beaten.length) {
           rule = "Free agent outprojects a bench player";
           severity = "minor";
-          note = `dynasty value ${Math.round(fa.value)} vs bench ${weakBench.name} ${Math.round(weakBench.value)}`;
+          note = `dynasty value ${Math.round(fa.value)} vs bench ${beaten.map((p) => `${p.name} ${Math.round(p.value)}`).join(", ")}`;
         }
       } else {
-        const weakBench = bench.length ? bench.reduce((m, p) => (projOf(p) < projOf(m) ? p : m)) : null;
-        if (weakBench && fa.proj > projOf(weakBench)) {
+        const beaten = bench.filter((p) => fa.proj > projOf(p)).sort((a, b) => projOf(a) - projOf(b));
+        if (beaten.length) {
           rule = "Free agent outprojects a bench player";
           severity = "minor";
-          note = `projected ${fa.proj.toFixed(1)} vs bench ${weakBench.name} ${projOf(weakBench).toFixed(1)}`;
+          note = `projected ${fa.proj.toFixed(1)} vs bench ${beaten.map((p) => `${p.name} ${projOf(p).toFixed(1)}`).join(", ")}`;
         }
       }
     }
