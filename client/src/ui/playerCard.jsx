@@ -354,7 +354,7 @@ function CardSummary({ card, preview }) {
 
       {s.projections?.length > 0 && (
         <CardSection title="Projections">
-          <WeekScroller weeks={s.projections} current={card.asOf?.week} />
+          <WeekScroller weeks={s.projections} current={card.asOf?.week} columns={card.projectionColumns || s.projectionColumns || []} />
         </CardSection>
       )}
 
@@ -398,18 +398,21 @@ function CardSummary({ card, preview }) {
   );
 }
 
-// v4.13: the weekly cards scroll sideways (earlier and later weeks); the current week starts in view.
-function WeekScroller({ weeks, current }) {
+// v4.13: the weekly cards scroll sideways; v4.20.0 (P-35): the whole season (weeks 1-18), and tapping a card opens its detail.
+function WeekScroller({ weeks, current, columns = [] }) {
   const ref = React.useRef(null);
+  const [open, setOpen] = React.useState(null); // the week number whose detail is showing
   React.useEffect(() => {
     const el = ref.current;
     const at = el?.querySelector?.("[data-week-current]");
     if (el && at && el.scrollTo) el.scrollTo({ left: Math.max(0, at.offsetLeft - 8), behavior: "auto" });
   }, [current, weeks.length]);
+  const sel = weeks.find((w) => w.week === open) || null;
   return (
+    <div>
     <div ref={ref} className="flex gap-1.5 overflow-x-auto pb-1" style={{ scrollSnapType: "x proximity", WebkitOverflowScrolling: "touch" }} data-card-projections>
       {weeks.map((pr) => (
-        <div key={pr.week} className="rounded-md px-1.5 py-1.5 text-center shrink-0" style={{ background: C.surface, border: `1px solid ${pr.week === current ? C.brand : C.border}`, minWidth: 92, scrollSnapAlign: "start" }} data-week-card={pr.week} {...(pr.week === current ? { "data-week-current": "1" } : {})}>
+        <button type="button" key={pr.week} onClick={() => setOpen(open === pr.week ? null : pr.week)} aria-pressed={open === pr.week} data-week-card={pr.week} className="rounded-md px-1.5 py-1.5 text-center shrink-0" style={{ background: C.surface, border: `1px solid ${open === pr.week || pr.week === current ? C.brand : C.border}`, minWidth: 92, scrollSnapAlign: "start" }} {...(pr.week === current ? { "data-week-current": "1" } : {})}>
           <div style={{ color: C.textFaint }} className="text-[10px]">WK {pr.week}{pr.opp ? ` ${pr.home === false ? "@" : "vs"} ${pr.opp}` : ""}</div>
           {pr.bye ? (
             <div style={{ color: C.textMuted }} className="text-xs font-semibold py-1">BYE</div>
@@ -419,8 +422,47 @@ function WeekScroller({ weeks, current }) {
               <div className="text-[11px]" style={{ color: C.textMuted }}>FINAL <b style={{ color: pr.final != null ? C.text : C.textFaint }}>{pr.final != null ? pr.final.toFixed(1) : "—"}</b></div>
             </>
           )}
-        </div>
+        </button>
       ))}
+    </div>
+    {sel && <WeekDetail w={sel} columns={columns} />}
+    </div>
+  );
+}
+
+/** v4.20.0 (P-35): one week — opponent, projected vs actual points, and the stat lines that exist for it. */
+function WeekDetail({ w, columns }) {
+  const th = "px-1.5 py-1 text-[10px] font-semibold text-center whitespace-nowrap";
+  const td = "px-1.5 py-1 text-[11px] text-center whitespace-nowrap";
+  const diff = w.proj != null && w.final != null ? w.final - w.proj : null;
+  const cols = (columns || []).filter((c) => w.projStats?.[c.key] != null || w.stats?.[c.key] != null);
+  return (
+    <div className="mt-2 rounded-md px-3 py-2" style={{ background: C.surface, border: `1px solid ${C.border}` }} data-week-detail={w.week}>
+      <div style={{ color: C.text }} className="text-sm font-semibold">Week {w.week}{w.opp ? ` ${w.home === false ? "@" : "vs"} ${w.opp}` : ""}</div>
+      {w.bye ? (
+        <div style={{ color: C.textMuted }} className="text-xs mt-1">Bye week.</div>
+      ) : (
+        <>
+          <div className="flex gap-4 text-xs mt-1" style={{ color: C.textMuted }}>
+            <span>Projected <b style={{ color: C.text }}>{w.proj != null ? w.proj.toFixed(1) : "—"}</b></span>
+            <span>Actual <b style={{ color: w.final != null ? C.text : C.textFaint }}>{w.final != null ? w.final.toFixed(1) : "—"}</b></span>
+            {diff != null && <span style={{ color: diff >= 0 ? C.ok : C.major }}>{diff >= 0 ? "+" : ""}{diff.toFixed(1)}</span>}
+          </div>
+          {cols.length > 0 ? (
+            <div className="overflow-x-auto mt-1.5">
+              <table className="min-w-full" style={{ color: C.text, borderCollapse: "separate", borderSpacing: "2px" }}>
+                <thead><tr style={{ color: C.textFaint }}><th className={th} />{cols.map((c) => <th key={c.key} className={th}>{c.label}</th>)}</tr></thead>
+                <tbody>
+                  <tr><td className={td} style={{ color: C.textMuted }}>Proj</td>{cols.map((c) => <td key={c.key} className={td}>{w.projStats?.[c.key] ?? "—"}</td>)}</tr>
+                  <tr><td className={td} style={{ color: C.textMuted }}>Actual</td>{cols.map((c) => <td key={c.key} className={td}>{w.stats?.[c.key] ?? "—"}</td>)}</tr>
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ color: C.textFaint }} className="text-[11px] mt-1.5" data-week-nostats>No stat line is stored for this week{w.proj != null ? " — only the projected points" : ""}. The app keeps projected points, not projected stat lines; a projected line shows only where Sleeper's weekly projections still return this player.</div>
+          )}
+        </>
+      )}
     </div>
   );
 }

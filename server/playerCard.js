@@ -151,6 +151,13 @@ async function espnNews(espnId, name = null) {
 }
 
 /* ---------- game log ---------- */
+// v4.20.0 (P-35): Sleeper's projection keys for the game-log columns (Sleeper names are the usual ones; not checked against a live feed).
+const SLEEPER_KEY = { completions: "pass_cmp", attempts: "pass_att", passing_yards: "pass_yd", passing_tds: "pass_td", passing_interceptions: "pass_int", carries: "rush_att", rushing_yards: "rush_yd", rushing_tds: "rush_td", targets: "rec_tgt", receptions: "rec", receiving_yards: "rec_yd", receiving_tds: "rec_td", fg_made: "fgm", fg_att: "fga", pat_made: "xpm" };
+export function projStatLine(stats, columns = []) {
+  const out = {};
+  for (const c of columns) { const v = stats?.[SLEEPER_KEY[c.key]]; if (v != null && Number.isFinite(Number(v))) out[c.key] = Math.round(Number(v) * 10) / 10; }
+  return Object.keys(out).length ? out : null;
+}
 function statColumns(pos) {
   if (pos === "QB") return [["completions", "CMP"], ["attempts", "ATT"], ["passing_yards", "YD"], ["passing_tds", "TD"], ["passing_interceptions", "INT"], ["carries", "CAR"], ["rushing_yards", "RUSH YD"], ["rushing_tds", "RUSH TD"]];
   if (pos === "RB") return [["carries", "CAR"], ["rushing_yards", "YD"], ["rushing_tds", "TD"], ["targets", "TGT"], ["receptions", "REC"], ["receiving_yards", "REC YD"], ["receiving_tds", "REC TD"]];
@@ -421,21 +428,25 @@ export async function getPlayerCard(username, sleeperId, { leagueId = null } = {
     lastGame = { week: last.week, opp: last.opp, home: last.home, fpts: last.fpts, stats: last.stats, teamScore: g?.score ?? null, oppScore: g?.opponentScore ?? null, result: g?.score != null && g?.opponentScore != null ? (g.score > g.opponentScore ? "W" : g.score < g.opponentScore ? "L" : "T") : null };
   }
   const profile = store.profileOf(settings).key;
-  // v4.13: earlier and later weeks too — the card scrolls sideways through them
-  const projWeeks = [-4, -3, -2, -1, 0, 1, 2, 3].map((d) => currentWeek + d).filter((w) => w >= 1 && w <= 18);
+  // v4.20.0 (P-35): the whole season, weeks 1-18. Each week carries the projected points (stored, else Sleeper's weekly pool),
+  // the final, and a projected / actual stat line for the detail panel. A week's projected STAT line exists only when Sleeper's
+  // weekly pool returned this player for it (this app stores projected points, not stat lines): otherwise `projStats` is null.
+  const projWeeks = Array.from({ length: 18 }, (_, i) => i + 1);
   const projRows = store.playerProjHistory({ profile, season, playerId: id, weeks: projWeeks });
   const RANK = { V: 0, T: 1, S: 2, E: 3 };
+  const pools = await Promise.all(projWeeks.map((w) => slp.getWeekProjections(season, w, { ttlMs: DAY }).catch(() => null)));
   const projections = [];
   for (const w of projWeeks) {
     const best = projRows.filter((r) => r.week === w).sort((a, b) => (RANK[a.source] ?? 9) - (RANK[b.source] ?? 9))[0];
     let proj = best ? best.adj_proj ?? best.proj : null;
-    if (proj == null && w > currentWeek) {
-      const pool = await slp.getWeekProjections(season, w, { ttlMs: DAY }).catch(() => null);
-      const e = pool?.byId?.[id];
-      proj = e ? slp.scoreStats(e, settings) : null;
-    }
+    const e = pools[w - 1]?.byId?.[id] || null;
+    if (proj == null && e) proj = slp.scoreStats(e, settings);
     const row = logNow.rows.find((r) => r.week === w);
-    projections.push({ week: w, opp: row?.opp ?? null, home: row?.home ?? null, bye: Boolean(row?.bye), proj: r1(proj), final: row?.played ? row.fpts : null });
+    projections.push({
+      week: w, opp: row?.opp ?? null, home: row?.home ?? null, bye: Boolean(row?.bye), proj: r1(proj), final: row?.played ? row.fpts : null,
+      projStats: e ? projStatLine(e.stats, logNow.columns) : null,
+      stats: row?.played ? row.stats || null : null,
+    });
   }
 
   // Availability in your other tracked leagues
@@ -486,6 +497,7 @@ export async function getPlayerCard(username, sleeperId, { leagueId = null } = {
       games: tot?.games ?? played.length,
       lastGame,
       projections,
+      projectionColumns: logNow.columns || [], // v4.20.0 (P-35)
       trendingAdds: trend ? trend.count ?? null : null,
     },
     advanced,

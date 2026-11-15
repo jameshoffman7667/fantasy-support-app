@@ -351,3 +351,11 @@ test("P-38: IR players are drop candidates while a bench player can take the IR 
   // an IR drop without a chosen replacement makes no claim
   assert.equal(gen38({ bids: [{ id: "fa", name: "FA", pos: "RB", bid: 5 }], drops: [{ ...a1, irIn: null }], openSpots: 0 }).claims.length, 0);
 });
+
+import { projStatLine } from "../server/playerCard.js";
+test("P-35: projected stat line maps Sleeper keys to the game-log columns, nothing invented", () => {
+  const cols = [{ key: "targets", label: "TGT" }, { key: "receptions", label: "REC" }, { key: "receiving_yards", label: "YD" }, { key: "carries", label: "CAR" }];
+  assert.deepEqual(projStatLine({ rec_tgt: 8.04, rec: 5.5, rec_yd: 61.234, gp: 1 }, cols), { targets: 8, receptions: 5.5, receiving_yards: 61.2 });
+  assert.equal(projStatLine({ gp: 1 }, cols), null);
+  assert.equal(projStatLine(null, cols), null);
+});
