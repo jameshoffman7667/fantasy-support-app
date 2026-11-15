@@ -1,6 +1,7 @@
 // v4.11 — Game Day → TNF: your players who play Thursday night, in every league, plus (per league) the three lowest
 // projected starters and the three highest projected bench / IR / taxi players, leaving the Thursday players out.
 // Pure (no React).
+import { isLocked } from "./lineup.js";
 
 const ET = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", hourCycle: "h23" });
 
@@ -49,4 +50,42 @@ export const fmtProj = (x) => (num(x) == null ? "—" : num(x).toFixed(1));
 /** "A (RB, 4.2), B (FLEX, 5.0)" */
 export function listText(rows) {
   return rows.map((r) => `${r.player.name} (${r.slot}, ${fmtProj(r.player.proj)})`).join(", ");
+}
+
+/**
+ * v4.20.0 (P-40): red / green on the lists under each league. A "lowest projected starter" is RED when his projection is below
+ * a Thursday-night BENCH player's (that bench player could take his place); a "highest projected bench / IR / taxi" player is
+ * GREEN when his projection is above a Thursday-night STARTER's. Same league, projection as shown; a player whose game has
+ * started is never coloured, and a locked Thursday player is not a swap target. Returns the two lists with `tone`.
+ */
+export function tnfTones(entry, league) {
+  const locked = (p) => isLocked(p, league);
+  const tnfBench = entry.thursday.filter((r) => r.group === "bench" && !locked(r.player) && num(r.player.proj) != null);
+  const tnfStart = entry.thursday.filter((r) => r.group === "starter" && !locked(r.player) && num(r.player.proj) != null);
+  const lowStarters = entry.lowStarters.map((r) => ({ ...r, tone: !locked(r.player) && tnfBench.some((b) => num(b.player.proj) > num(r.player.proj)) ? "red" : null }));
+  const highReserve = entry.highReserve.map((r) => ({ ...r, tone: !locked(r.player) && tnfStart.some((st) => num(r.player.proj) > num(st.player.proj)) ? "green" : null }));
+  return { lowStarters, highReserve };
+}
+
+/**
+ * v4.20.0 (P-40): the tab Game Day opens on, by the Eastern-time clock. TNF from Tuesday 3:00 am until Friday 3:00 am; then the
+ * Cheer meter until Sunday after the last 4 pm games are done; then Primetime until Tuesday 3:00 am. `stage` is the server's
+ * Primetime stage ("waiting" until the last afternoon game ends, then "sunday" / "monday"); null when unknown, and then
+ * Sunday 8 pm Eastern stands in for "the 4 pm games are done".
+ */
+const ET_CLOCK = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "numeric", hourCycle: "h23" });
+export function defaultGameDayTab(now = Date.now(), stage = null) {
+  const p = Object.fromEntries(ET_CLOCK.formatToParts(new Date(now)).map((x) => [x.type, x.value]));
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday);
+  const mins = Number(p.hour) * 60 + Number(p.minute);
+  const after3 = mins >= 180;
+  if (day === 2 && after3) return "tnf"; // Tue 3 am ->
+  if (day === 3 || day === 4) return "tnf"; // Wed, Thu
+  if (day === 5 && !after3) return "tnf"; // -> Fri 3 am
+  if (day === 1 || (day === 2 && !after3)) return "primetime"; // Mon, Tue before 3 am
+  if (day === 0) { // Sunday: the Cheer meter until the afternoon games are done
+    const done = stage ? stage !== "waiting" : mins >= 20 * 60;
+    return done ? "primetime" : "cheer";
+  }
+  return "cheer"; // Fri 3 am -> Sat -> Sunday morning
 }

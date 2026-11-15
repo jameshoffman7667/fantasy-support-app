@@ -1,11 +1,14 @@
 import { scopeCheer, slotLabelsChronological } from "../gameDayCheer.js"; // v4.8, v4.16.0
 import { primetimeNeed } from "../primetimeNeed.js"; // v4.13
 import { playerView, paceToneOf, paceColor } from "../livePace.js"; // v4.13, v4.20.0 (P-48)
-import { fmtProj, listText, tnfView } from "../tnf.js"; // v4.11
+import { defaultGameDayTab, fmtProj, tnfTones, tnfView } from "../tnf.js"; // v4.11, v4.20.0 (P-40)
+import { arrangement, buildPush, customChange } from "../rosterChanges.js"; // v4.20.0 (P-40)
+import { lineupGap, pushKeys } from "../variances.js";
+import { SwapPicker } from "./RosterPage.jsx";
 import { PosBox } from "../ui/posBox.jsx";
 import * as api from "../api.js";
 import { ChevronRight, Settings2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Avatar, BootstrapScreen, ErrorScreen, Headshot, InfoNote, PrimaryButton, Select, Toggle } from "../ui/common.jsx";
 import { PlayerLink } from "../ui/playerCard.jsx";
 import { useDesktop } from "../ui/desktop.js"; // v4.18.0 (P-5)
@@ -345,10 +348,10 @@ function PrimetimeTab({ data }) {
 
 /* v4.11: TNF — your Thursday-night players in every league (position box = starting slot / flex / bench), then in plain text the
    three lowest projected starters and the three highest projected bench / IR / taxi players, Thursday players left out. */
-function TnfPlayerCard({ r, leagueId }) {
+function TnfPlayerCard({ r, leagueId, onTap = null }) {
   const p = r.player;
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-2.5 py-2 flex items-center gap-2 min-w-0" data-tnf-player={p.id ?? p.name} data-tnf-slot={r.slot}>
+    <div role={onTap ? "button" : undefined} tabIndex={onTap ? 0 : undefined} onClick={onTap || undefined} onKeyDown={onTap ? (e) => { if (e.key === "Enter") onTap(); } : undefined} style={{ background: C.surface, border: `1px solid ${C.border}`, cursor: onTap ? "pointer" : "default" }} className="rounded-md px-2.5 py-2 flex items-center gap-2 min-w-0" data-tnf-player={p.id ?? p.name} data-tnf-slot={r.slot} data-tnf-tappable={onTap ? "1" : undefined}>
       <PosBox label={r.slot} />
       <PlayerLink player={p} leagueId={leagueId} className="shrink-0 rounded-full"><Headshot player={p} size={28} /></PlayerLink>
       <div className="min-w-0 flex-1">
@@ -360,43 +363,135 @@ function TnfPlayerCard({ r, leagueId }) {
   );
 }
 
-function TnfTab({ leagues, sel }) {
+const tnfList = (rows) => rows.map((r, i) => (
+  <span key={`${r.player.id ?? r.player.name}-${i}`} style={r.tone ? { color: r.tone === "red" ? C.major : C.ok, fontWeight: 600 } : undefined} data-tnf-tone={r.tone || undefined}>
+    {i ? ", " : ""}{r.player.name} ({r.slot}, {fmtProj(r.player.proj)})
+  </span>
+));
+
+/** v4.20.0 (P-40): staged swaps (hand-made, per league) are built on the roster as it stands, one after the other. */
+function TnfTab({ leagues, sel, onRefreshLeague }) {
   const view = tnfView(leagues, sel);
+  const [staged, setStaged] = useState({}); // leagueId -> [custom change]
+  const [picker, setPicker] = useState(null); // { league, target }
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState(null);
   if (!view.length) return <div style={{ color: C.textMuted }} className="text-sm px-1 py-2" data-tnf-empty>No leagues loaded yet.</div>;
   const total = view.reduce((n, l) => n + l.thursday.length, 0);
+  const byId = new Map((leagues || []).map((l) => [l.id, l]));
+  const arrOf = (lg) => { const cs = staged[lg.id] || []; return arrangement(lg, cs, new Set(cs.map((c) => c.key))); };
+  const tapTarget = (lg, r) => {
+    if (r.group === "starter") { const index = (lg.starters || []).findIndex((s) => s.player && String(s.player.id) === String(r.player.id)); return index >= 0 ? { kind: "starter", index } : null; }
+    if (r.group === "bench") return { kind: "bench", id: r.player.id };
+    return null; // IR and taxi players can't be swapped from here
+  };
+  const stagedLeagues = Object.keys(staged).filter((id) => staged[id]?.length && byId.has(id));
+  const plans = stagedLeagues.map((id) => { const lg = byId.get(id); return { lg, push: buildPush(lg, staged[id], new Set(staged[id].map((c) => c.key))) }; });
+  const send = async () => {
+    setBusy(true);
+    const out = [];
+    for (const { lg, push } of plans) {
+      if (push.errors.length || !push.starters) { out.push({ id: lg.id, name: lg.name, ok: false, detail: push.errors[0] || "Nothing to send." }); continue; }
+      try {
+        const r = await api.pushLineup(lg.id, push.starters, { gap: lineupGap(lg), keys: pushKeys(lg, "lineup") });
+        out.push({ id: lg.id, name: lg.name, ok: r.ok, verified: r.verified, detail: r.detail });
+      } catch (e) {
+        out.push({ id: lg.id, name: lg.name, ok: false, detail: e.message });
+      }
+    }
+    setResults(out);
+    setStaged((prev) => { const n = { ...prev }; for (const o of out) if (o.ok) delete n[o.id]; return n; });
+    setBusy(false);
+    setConfirming(false);
+    for (const o of out) onRefreshLeague?.(o.id);
+  };
   return (
     <div className="space-y-3" data-tnf>
       <div style={{ color: C.textMuted }} className="text-xs px-0.5">
         {total ? `${total} of your players play Thursday night.` : "None of your players play Thursday night this week."}
-        <InfoNote label="About TNF">Thursday night = a Thursday kickoff at 7 pm Eastern or later. Each card's box shows where the player sits (his starting slot, FLEX, or BN / IR / TAXI) and his projected points. Below each league: the three lowest projected starters and the three highest projected bench / IR / taxi players, not counting the Thursday players.</InfoNote>
+        <InfoNote label="About TNF">Thursday night = a Thursday kickoff at 7 pm Eastern or later. Each card's box shows where the player sits (his starting slot, FLEX, or BN / IR / TAXI) and his projection. Tap a starter's or bench player's card to pick who to swap him with; swaps are staged, and nothing is sent until you tap Push to Sleeper at the bottom. In the lists under each league, red = a starter projected below one of your Thursday bench players; green = a bench / IR / taxi player projected above one of your Thursday starters.</InfoNote>
       </div>
-      {view.map((l) => (
-        <section key={l.id} className="space-y-1.5" data-tnf-league={l.id}>
-          <div className="flex items-center gap-1.5 px-0.5">
-            <Avatar avatar={l.avatar} name={l.name} size={18} square />
-            <span style={{ color: C.text }} className="text-sm font-semibold truncate">{l.name}</span>
+      {view.map((l) => {
+        const lg = byId.get(l.id);
+        const tones = lg ? tnfTones(l, lg) : { lowStarters: l.lowStarters, highReserve: l.highReserve };
+        const swaps = staged[l.id] || [];
+        return (
+          <section key={l.id} className="space-y-1.5" data-tnf-league={l.id}>
+            <div className="flex items-center gap-1.5 px-0.5">
+              <Avatar avatar={l.avatar} name={l.name} size={18} square />
+              <span style={{ color: C.text }} className="text-sm font-semibold truncate">{l.name}</span>
+            </div>
+            {l.thursday.length === 0 ? (
+              <div style={{ color: C.textFaint }} className="text-xs px-0.5" data-tnf-none>No Thursday-night players.</div>
+            ) : (
+              <div className="space-y-1.5">{l.thursday.map((r) => {
+                const target = lg ? tapTarget(lg, r) : null;
+                return <TnfPlayerCard key={r.player.id ?? r.player.name} r={r} leagueId={l.id} onTap={target ? () => { setResults(null); setPicker({ league: lg, target }); } : null} />;
+              })}</div>
+            )}
+            <div style={{ color: C.textMuted }} className="text-xs px-0.5 space-y-0.5" data-tnf-text>
+              <div data-tnf-low><b>Lowest projected starters:</b> {tones.lowStarters.length ? tnfList(tones.lowStarters) : "none"}</div>
+              <div data-tnf-high><b>Highest projected bench / IR / taxi:</b> {tones.highReserve.length ? tnfList(tones.highReserve) : "none"}</div>
+            </div>
+            {swaps.length > 0 && (
+              <div style={{ background: C.surface, border: `1px solid ${C.brand}66` }} className="rounded-md px-2.5 py-1.5 text-xs space-y-1" data-tnf-staged={l.id}>
+                {swaps.map((c) => (
+                  <div key={c.key} className="flex items-center justify-between gap-2">
+                    <span style={{ color: C.text }}>{c.otherSlot != null ? `${c.slot} ↔ ${c.otherSlotLabel}: ${c.toName} ↔ ${c.fromName ?? "(empty)"}` : `${c.slot}: ${c.fromName ?? "(empty)"} → ${c.toName}`}</span>
+                    <button type="button" onClick={() => setStaged((p) => ({ ...p, [l.id]: (p[l.id] || []).slice(0, (p[l.id] || []).findIndex((x) => x.key === c.key)) }))} style={{ color: C.major }} className="shrink-0" data-tnf-undo>Undo</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
+      {picker && (
+        <SwapPicker league={picker.league} arr={arrOf(picker.league)} target={picker.target} onClose={() => setPicker(null)} onPick={(opt) => {
+          const c = customChange(arrOf(picker.league), picker.target, opt);
+          if (c && c.type !== "taxi") setStaged((p) => ({ ...p, [picker.league.id]: [...(p[picker.league.id] || []).filter((x) => x.key !== c.key), c] }));
+          setPicker(null);
+        }} />
+      )}
+      <div data-tnf-push>
+        {results && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}` }} className="rounded-md px-2.5 py-2 text-xs space-y-0.5 mb-2" data-tnf-results>
+            {results.map((o) => <div key={o.id} style={{ color: o.ok ? C.ok : C.major }}>{o.name}: {o.ok ? (o.verified ? "updated and confirmed by Sleeper" : "sent") : "not sent"}{o.detail ? ` — ${o.detail}` : ""}</div>)}
           </div>
-          {l.thursday.length === 0 ? (
-            <div style={{ color: C.textFaint }} className="text-xs px-0.5" data-tnf-none>No Thursday-night players.</div>
-          ) : (
-            <div className="space-y-1.5">{l.thursday.map((r) => <TnfPlayerCard key={r.player.id ?? r.player.name} r={r} leagueId={l.id} />)}</div>
-          )}
-          <div style={{ color: C.textMuted }} className="text-xs px-0.5 space-y-0.5" data-tnf-text>
-            <div data-tnf-low><b>Lowest projected starters:</b> {l.lowStarters.length ? listText(l.lowStarters) : "none"}</div>
-            <div data-tnf-high><b>Highest projected bench / IR / taxi:</b> {l.highReserve.length ? listText(l.highReserve) : "none"}</div>
+        )}
+        {plans.length > 0 && !confirming && (
+          <PrimaryButton onClick={() => setConfirming(true)} data-tnf-push-btn>Push to Sleeper ({plans.length} league{plans.length === 1 ? "" : "s"})</PrimaryButton>
+        )}
+        {plans.length > 0 && confirming && (
+          <div style={{ background: C.surface, border: `1px solid ${C.minor}66` }} className="rounded-md px-3 py-2 space-y-1.5" data-tnf-confirm>
+            <div style={{ color: C.text }} className="text-sm font-semibold">Update these lineups on Sleeper?</div>
+            {plans.map(({ lg, push }) => (
+              <div key={lg.id} className="text-xs">
+                <div style={{ color: C.textMuted }}>{lg.name}</div>
+                {push.summary.map((t) => <div key={t} style={{ color: C.text }}>• {t}</div>)}
+                {push.errors.map((t) => <div key={t} style={{ color: C.major }}>• {t}</div>)}
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <PrimaryButton onClick={send} disabled={busy} data-tnf-confirm-yes>{busy ? "Sending…" : "Yes, update my rosters"}</PrimaryButton>
+              <button type="button" onClick={() => setConfirming(false)} disabled={busy} style={{ color: C.textMuted, border: `1px solid ${C.border}` }} className="rounded-md px-3 py-1.5 text-sm">Cancel</button>
+            </div>
           </div>
-        </section>
-      ))}
+        )}
+      </div>
     </div>
   );
 }
 
-export function GameDayScreen({ leagues = [] }) {
+export function GameDayScreen({ leagues = [], onRefreshLeague = null }) {
   const desktop = useDesktop();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [view, setView] = useState("cheer"); // v4.7: "cheer" (Cheer meter) | "primetime" | v4.11: "tnf"
+  const [view, setViewRaw] = useState(() => defaultGameDayTab()); // v4.7: "cheer" | "primetime" | v4.11: "tnf"; v4.20.0 (P-40): opens on the tab for the time of week
+  const tabTouched = useRef(false);
+  const setView = (k) => { tabTouched.current = true; setViewRaw(k); };
   const [slot, setSlot] = useState("all");
   const [cat, setCat] = useState("all");
   // v2.9: tap league cards to show only those leagues' starters (yours + your opponents'); none selected = all.
@@ -423,6 +518,8 @@ export function GameDayScreen({ leagues = [] }) {
       .then((d) => {
         setData(d);
         setError(null);
+        // v4.20.0 (P-40): the first time the data arrives, the Sunday switch uses the server's Primetime stage (until he taps a tab)
+        if (!tabTouched.current) setViewRaw(defaultGameDayTab(Date.now(), (d.leagues || []).find((x) => x.primetime)?.primetime?.stage || null));
       })
       .catch((err) => setError(err.message));
   }, []);
@@ -473,13 +570,13 @@ export function GameDayScreen({ leagues = [] }) {
       </div>
       <div className={desktop ? "flex-1 min-w-0 space-y-3" : "space-y-3"} data-gd-right>
       <div className="flex" style={{ borderBottom: `1px solid ${C.border}` }} data-gd-tabs>
-        {[["cheer", "Cheer meter"], ["primetime", "Primetime"], ["tnf", "TNF"]].map(([k, label]) => (
+        {[["tnf", "TNF"], ["cheer", "Cheer meter"], ["primetime", "Primetime"]].map(([k, label]) => (
           <button key={k} type="button" onClick={() => setView(k)} aria-current={view === k ? "page" : undefined} data-gd-tab={k} style={{ color: view === k ? C.text : C.textMuted, borderBottom: `2px solid ${view === k ? C.brand : "transparent"}` }} className="flex-1 py-2 text-sm font-medium">
             {label}
           </button>
         ))}
       </div>
-      {view === "tnf" ? <TnfTab leagues={leagues} sel={leagueSel} /> : view === "primetime" ? <PrimetimeTab data={data} /> : <>
+      {view === "tnf" ? <TnfTab leagues={leagues} sel={leagueSel} onRefreshLeague={onRefreshLeague} /> : view === "primetime" ? <PrimetimeTab data={data} /> : <>
       <div className="flex flex-wrap gap-2 items-center">
         <Select label="Game slot" value={slot} onChange={setSlot} options={[{ value: "all", label: "All games" }, ...slots.map((s) => ({ value: s, label: s }))]} />
         <div className="flex gap-1.5 pt-3.5">

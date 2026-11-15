@@ -296,3 +296,34 @@ test("P-39: a confirmed IR edit is kept up to 30 minutes while Sleeper's public 
   assert.equal(sl.ROSTER_EDIT_TTL_MS, 30 * 60 * 1000);
   sl._setNowForTests(null);
 });
+
+import { defaultGameDayTab, tnfTones } from "../client/src/tnf.js";
+test("P-40: default Game Day tab by Eastern time", () => {
+  const et = (y, mo, d, h, mi = 0) => { // an Eastern wall time in November 2026 (EST, UTC-5)
+    return Date.UTC(y, mo - 1, d, h + 5, mi);
+  };
+  // 2026-11-17 is a Tuesday
+  assert.equal(defaultGameDayTab(et(2026, 11, 17, 2, 59)), "primetime"); // Tue before 3 am
+  assert.equal(defaultGameDayTab(et(2026, 11, 17, 3, 0)), "tnf");
+  assert.equal(defaultGameDayTab(et(2026, 11, 19, 21)), "tnf"); // Thursday night
+  assert.equal(defaultGameDayTab(et(2026, 11, 20, 2, 59)), "tnf"); // Fri before 3 am
+  assert.equal(defaultGameDayTab(et(2026, 11, 20, 3, 0)), "cheer");
+  assert.equal(defaultGameDayTab(et(2026, 11, 21, 12)), "cheer"); // Saturday
+  assert.equal(defaultGameDayTab(et(2026, 11, 22, 13), "waiting"), "cheer"); // Sunday afternoon
+  assert.equal(defaultGameDayTab(et(2026, 11, 22, 19), "sunday"), "primetime"); // 4 pm games done
+  assert.equal(defaultGameDayTab(et(2026, 11, 22, 19), null), "cheer"); // no stage: clock fallback 8 pm
+  assert.equal(defaultGameDayTab(et(2026, 11, 22, 20, 5), null), "primetime");
+  assert.equal(defaultGameDayTab(et(2026, 11, 23, 12)), "primetime"); // Monday
+});
+test("P-40: TNF red/green comparisons, locked players excluded", () => {
+  const future = Date.now() + 3600e3, past = Date.now() - 3600e3;
+  const P = (id, proj, extra = {}) => ({ id, name: id, proj, kickoff: future, ...extra });
+  const entry = {
+    thursday: [{ player: P("tb", 9), slot: "BN", group: "bench" }, { player: P("ts", 12), slot: "WR", group: "starter" }],
+    lowStarters: [{ player: P("lo", 6), slot: "RB", group: "starter" }, { player: P("hi", 15), slot: "TE", group: "starter" }, { player: P("lk", 2, { kickoff: past }), slot: "QB", group: "starter" }],
+    highReserve: [{ player: P("gr", 14), slot: "BN", group: "bench" }, { player: P("lw", 8), slot: "BN", group: "bench" }],
+  };
+  const t = tnfTones(entry, {});
+  assert.deepEqual(t.lowStarters.map((r) => r.tone), ["red", null, null]); // 6 < 9 red; 15 not; locked never
+  assert.deepEqual(t.highReserve.map((r) => r.tone), ["green", null]); // 14 > 12 green; 8 not
+});

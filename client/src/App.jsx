@@ -772,7 +772,7 @@ export default function App() {
       <Suspense fallback={<PageLoading />}>
       {view.screen === "analytics" && boxed("max-w-[900px] mx-auto", <AnalyticsScreen authUser={authUser} leagues={computed} onDvpChange={() => setDvpVersion((v) => v + 1)} />)}
       {view.screen === "ticker" && authUser?.role === "ticker" && boxed("max-w-lg mx-auto", <TickerSyncScreen authUser={authUser} onLogout={handleLogout} />)}
-      {view.screen === "gameday" && <GameDayScreen leagues={computed} />}
+      {view.screen === "gameday" && <GameDayScreen leagues={computed} onRefreshLeague={refreshOne} />}
       {view.screen === "pickem" && boxed("max-w-[1100px] mx-auto", <PickemScreen onChangedCount={setPickemChanged} />)}
       {view.screen === "commish" && boxed("max-w-[900px] mx-auto", <CommishScreen key={view.commishLeagueId || "all"} initialLeagueId={view.commishLeagueId || null} onSummaryChange={loadCommishSummary} />)}
       {view.screen === "account" && boxed("max-w-lg mx-auto", <AccountScreen authUser={authUser} onOpenAdmin={() => navigate({ screen: "admin" })} onLogout={handleLogout} />)}

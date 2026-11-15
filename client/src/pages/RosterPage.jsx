@@ -1068,7 +1068,7 @@ function ProposedLineup({ league, changes, checked, lockedKeys = new Set(), onAd
 }
 
 /** v4.4: the swap list for one position box — everyone who can trade places with that player, best projection first. */
-function SwapPicker({ league, arr, target, onClose, onPick }) {
+export function SwapPicker({ league, arr, target, onClose, onPick }) {
   const info = useMemo(() => swapOptions(league, arr, target), [league, arr, target]);
   const group = (o) => (o.group === "starter" ? `Starting${o.otherSlot != null ? ` · ${arr.starters[o.otherSlot].slot}` : o.slotLabel ? ` · ${o.slotLabel}` : ""}` : GROUP_LABEL[o.group] || o.group);
   return (
